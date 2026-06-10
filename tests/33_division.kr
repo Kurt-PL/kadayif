@@ -1,0 +1,34 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    // ui4 with the sign bit set: sdiv would read it as negative (§6.4.1).
+    let u: ui4 = 2147483650;
+    airside { posix::printf("ud=%u um=%u\n\0".ptr, u / 3, u % 3); }      // 715827883 1
+
+    // ui8 with the sign bit set.
+    let h: si8 = 9223372036854775807;
+    let u8: ui8 = (h as ui8) + 1;                                        // 2^63
+    airside { posix::printf("u8d=%llu u8m=%llu\n\0".ptr, u8 / 7, u8 % 7); } // 1317624576693539401 1
+
+    // Narrow signed operands must be sign-normalised before sdiv.
+    let s: si1 = -10;
+    let t: si1 = 3;
+    airside { posix::printf("s1d=%d s1m=%d\n\0".ptr, s / t, s % t); }    // -3 -1
+
+    // Signed wrap case: MIN / -1 == MIN, MIN % -1 == 0 (§6.4.1).
+    let mn: si1 = -128;
+    let m1: si1 = -1;
+    airside { posix::printf("wrap=%d wm=%d\n\0".ptr, mn / m1, mn % m1); } // -128 0
+
+    // Division by zero: a / 0 == 0, a % 0 == a (§6.4.1).
+    let a: si4 = 42;
+    let z: si4 = 0;
+    airside { posix::printf("dz=%d mz=%d\n\0".ptr, a / z, a % z); }      // 0 42
+
+    // Narrow unsigned operands carry garbage above the type width after
+    // wrapping arithmetic; division must mask first: (250+10) mod 256 = 4.
+    let b: ui1 = 250;
+    let c: ui1 = b + 10;
+    airside { posix::printf("n1=%u\n\0".ptr, c / 3); }                   // 1
+    return 0;
+}

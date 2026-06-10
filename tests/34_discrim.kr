@@ -1,0 +1,36 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+enum offset { Neg = -19700101, Zero = 0, Pos = 7 }      // -> si4 discriminant
+enum tiny { A = -3, B = 5 }                              // -> si1 discriminant
+enum forced { X, Y } with discrim(ui4)                   // forced to 4 cells
+enum solo { Only }                                       // void discriminant
+
+fn main() -> ui1 {
+    let o: offset = offset::Neg;
+    let d: si4 = o as ?;
+    airside { posix::printf("d=%d\n\0".ptr, d); }                  // -19700101
+
+    let t: tiny = tiny::A;
+    let td: si1 = t as ?;
+    let tw: si4 = td as si4;
+    airside { posix::printf("td=%d\n\0".ptr, tw); }                // -3
+
+    let which: si4 = match t {
+        tiny::A = 1,
+        tiny::B = 2,
+        #wild#  = 0,
+    };
+    airside { posix::printf("which=%d\n\0".ptr, which); }          // 1
+
+    let f: forced = forced::Y;
+    let fd: ui4 = f as ?;
+    airside { posix::printf("fd=%u\n\0".ptr, fd); }                // 1
+
+    let s: solo = solo::Only;
+    let sm: si4 = match s {
+        solo::Only = 9,
+        #wild#     = 0,
+    };
+    airside { posix::printf("sm=%d\n\0".ptr, sm); }                // 9
+    return 0;
+}

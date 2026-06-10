@@ -1,0 +1,25 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    // §3.4.3 bool literals via the new `true`/`false` keywords.
+    let t: bool = true;
+    let f: bool = false;
+    airside { posix::printf("t=%d f=%d\n\0".ptr, t, f); }   // 1 0
+
+    // §7.5.2 `loop { … }` is `while true { … }`.
+    mut i: si4 = 0;
+    loop {
+        i = i + 1;
+        if i == 3 { break; }
+    }
+    airside { posix::printf("loop i=%d\n\0".ptr, i); }       // 3
+
+    // §7.7 `break expr;` — value carried (discarded for now).
+    mut j: si4 = 0;
+    while j < 100 {
+        j = j + 1;
+        if j == 5 { break j; }
+    }
+    airside { posix::printf("break-val j=%d\n\0".ptr, j); }  // 5
+    return 0;
+}

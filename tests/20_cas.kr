@@ -1,0 +1,34 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    mut slot: ui4 = 5;
+    airside {
+        // §8.7.1 eq-CAS success: 5 == 5 -> swap to 9, Pass{5}
+        let r1: verdict.<ui4, ui4> = &atomic slot >.< 5 <- 9;
+        if r1 -> old | act {
+            posix::printf("cas1 ok old=%u now=%u\n\0".ptr,
+                          old, *(&atomic slot));
+        } else {
+            posix::printf("cas1 fail act=%u\n\0".ptr, act);
+        }
+
+        // §8.7.1 eq-CAS failure: slot=9, expected 5 -> Fail{9}
+        let r2: verdict.<ui4, ui4> = &guard slot >.< 5 <- 77;
+        if r2 -> old2 | act2 {
+            posix::printf("cas2 ok old=%u\n\0".ptr, old2);
+        } else {
+            posix::printf("cas2 fail act=%u now=%u\n\0".ptr,
+                          act2, *(&guard slot));
+        }
+
+        // §8.7.2 ne-CAS success: slot=9 != 0 -> swap to 1, Pass{9}
+        let r3: verdict.<ui4, ui4> = &guard slot >!< 0 <- 1;
+        if r3 -> old3 | act3 {
+            posix::printf("cas3 ok old=%u now=%u\n\0".ptr,
+                          old3, *(&guard slot));
+        } else {
+            posix::printf("cas3 fail act=%u\n\0".ptr, act3);
+        }
+    }
+    return 0;
+}

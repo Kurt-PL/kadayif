@@ -1,0 +1,51 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn airss(b: bool, lbl: &raw ui1) -> void {
+    airside { posix::printf("%s = %d\n\0".ptr, lbl, b); }
+}
+
+fn main() -> ui1 {
+    let zero: fe11m52 = 0.0;
+    let one:  fe11m52 = 1.0;
+    let two:  fe11m52 = 2.0;
+    let nan:  fe11m52 = zero / zero;
+    let inf:  fe11m52 = one / zero;
+    let ninf: fe11m52 = -one / zero;
+    let nnan: fe11m52 = -nan;
+    let nzero: fe11m52 = -zero;
+
+    // §4.3.3: ordered comparisons follow IEEE; ±0 compare equal.
+    airss(one < two,     "1<2\0".ptr);         // 1
+    airss(one == one,    "1==1\0".ptr);         // 1
+    airss(nzero == zero, "-0==+0\0".ptr);       // 1
+
+    // §4.3.3 NaN deviations from IEEE:
+    //   == reflexive over NaN; != false when both NaN.
+    airss(nan == nan,    "nan==nan\0".ptr);     // 1
+    airss(nan != nan,    "nan!=nan\0".ptr);     // 0
+    airss(nnan == nan,   "-nan==+nan\0".ptr);   // 1   (sign ignored)
+    //   exactly one NaN: == false, != true.
+    airss(nan == one,    "nan==1\0".ptr);       // 0
+    airss(nan != one,    "nan!=1\0".ptr);       // 1
+
+    // §4.3.3 relational: < and > are false on any NaN; <= and >= are
+    // false on exactly one NaN but TRUE when both operands are NaN.
+    airss(nan < nan,     "nan<nan\0".ptr);      // 0
+    airss(nan <= nan,    "nan<=nan\0".ptr);     // 1
+    airss(nan >= nan,    "nan>=nan\0".ptr);     // 1
+    airss(nan < one,     "nan<1\0".ptr);        // 0
+    airss(nan <= one,    "nan<=1\0".ptr);       // 0
+    airss(nan > inf,     "nan>inf\0".ptr);      // 0
+    airss(inf > one,     "inf>1\0".ptr);        // 1
+    airss(ninf < one,    "-inf<1\0".ptr);       // 1
+
+    let r1: fe11m52 = 5.5 % 2.0;                // -0.5 (IEEE remainder)
+    let r2: fe11m52 = 7.0 % 3.0;                //  1.0
+    airside { posix::printf("5.5%%2=%.2f 7%%3=%.2f\n\0".ptr, r1, r2); }
+
+    // §6.8.4 float -> int: NaN -> 0 (regardless of sign); ±Inf saturate.
+    airside { posix::printf("nan=%d -nan=%d nanu=%u inf=%d -inf=%d\n\0".ptr,
+                            nan as si4, nnan as si4, nan as ui4,
+                            inf as si4, ninf as si4); }
+    return 0;
+}

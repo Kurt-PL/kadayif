@@ -1,0 +1,48 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §4.6: &[T] slice parameter — fat ref (ptr + len). Element access is
+// `*(s.ptr + i)` (no `[]` operator in Kurt); `.len` is the runtime extent.
+fn sum(s: &[si4]) -> si4 {
+    mut t: si4 = 0;
+    mut i: uaddr = 0;
+    airside {
+        let base: &raw si4 = s.ptr;
+        while i < s.len {
+            t += *(base + i);
+            i += 1;
+        }
+    }
+    return t;
+}
+
+fn nth(s: &[si4], i: uaddr) -> si4 {
+    airside { return *(s.ptr + i); }
+}
+
+fn main() -> ui1 {
+    mut a: [si4; 5] = [10, 20, 30, 40, 50];
+
+    // implicit &[si4; 5] -> &[si4] coercion at the call site
+    airside { posix::printf("sum=%d\n\0".ptr, sum(&a)); }   // 150
+
+    // §4.6 let-binding coercion + .ptr/.len materialised view
+    let s: &[si4] = &a;
+    airside {
+        posix::printf("len=%llu first=%d nth3=%d\n\0".ptr,
+                      s.len, *(s.ptr), nth(s, 3));           // 5, 10, 40
+    }
+
+    // store through the slice's ptr writes to the underlying array
+    let t: &[si4] = &a;
+    mut i: uaddr = 0;
+    airside {
+        let w: &raw mut si4 = t.ptr as! &raw mut si4;
+        while i < t.len {
+            *(w + i) = *(w + i) + 1;
+            i += 1;
+        }
+    }
+    airside { posix::printf("sum2=%d a4=%d\n\0".ptr,
+                            sum(&a), *(a.ptr + 4)); }        // 155, 51
+    return 0;
+}

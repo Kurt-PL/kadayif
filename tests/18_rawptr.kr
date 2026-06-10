@@ -1,0 +1,32 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+struct pair { a: ui4, b: ui4 }
+
+fn main() -> ui1 {
+    // §8.6.4 raw reference arithmetic, ui1 referent (cell scale 1)
+    let s: &raw ui1 = "ABCDEF\0".ptr;
+    airside {
+        let p2: &raw ui1 = s + 2;            // -> 'C'
+        let back: &raw ui1 = p2 - 1;         // -> 'B'
+        posix::printf("c2=%c back=%c\n\0".ptr, *p2, *back);
+    }
+
+    // typed scaling: &raw ui4 + 1 advances ui4@size cells
+    mut pr: pair = pair { a = 111, b = 222 };
+    airside {
+        let pa: &raw ui4 = &raw pr.a;
+        let pb: &raw ui4 = pa + 1;           // lands on field b
+        posix::printf("a=%u b=%u\n\0".ptr, *pa, *pb);
+    }
+
+    // store through &raw mut (§8.1.2) + mut cursor compound arithmetic
+    mut x: ui4 = 5;
+    airside {
+        let pm: &raw mut ui4 = &raw mut x;
+        *pm = 42;
+        mut cur: &raw ui1 = s;
+        cur += 3;                            // -> 'D'
+        posix::printf("x=%u c3=%c\n\0".ptr, x, *cur);
+    }
+    return 0;
+}

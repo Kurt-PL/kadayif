@@ -1,0 +1,26 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    // §7.5.3: continue jumps to the then block; break skips it.
+    mut i: si4 = 0;
+    mut used: si4 = 0;
+    mut skipped: si4 = 0;
+    while i < 10 {
+        if i == 5 { skipped += 1; continue; }
+        used += 1;
+    } then {
+        i += 1;
+    }
+    airside { posix::printf("i=%d used=%d skipped=%d\n\0".ptr, i, used, skipped); } // 10 9 1
+
+    mut j: si4 = 0;
+    mut steps: si4 = 0;
+    while true {
+        if j >= 3 { break; }
+        j += 1;
+    } then {
+        steps += 1;
+    }
+    airside { posix::printf("j=%d steps=%d\n\0".ptr, j, steps); } // 3 3
+    return 0;
+}

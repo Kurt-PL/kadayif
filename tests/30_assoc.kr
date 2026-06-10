@@ -1,0 +1,40 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.3.2 associated constants in a trait
+trait Bounded {
+    const MIN: self_t;
+    const MAX: self_t;
+    fn cmp(&self, o: &self_t) -> si4;
+}
+
+struct lvl { v: si4 }
+
+impl lvl as Bounded {
+    const MIN: lvl = lvl { v = 0 };
+    const MAX: lvl = lvl { v = 100 };
+    fn cmp(&self, o: &lvl) -> si4 { return self.v - o.v; }
+}
+
+impl si4 as Bounded {
+    const MIN: si4 = -128;
+    const MAX: si4 = 127;
+    fn cmp(&self, o: &si4) -> si4 { return *self - *o; }
+}
+
+// §9.3.2: generic clamp reads (T as Bounded)::MIN/MAX — here `T::NAME`
+fn clamp_hi.<T: Bounded>(v: T) -> si4 {
+    let hi: si4 = T::MAX;
+    return if v.cmp(&hi) > 0 then hi else 999;
+}
+
+fn main() -> ui1 {
+    // concrete associated-const access `Type::NAME`
+    let lo: si4 = si4::MIN;
+    let hi: si4 = si4::MAX;
+    airside { posix::printf("lo=%d hi=%d\n\0".ptr, lo, hi); }   // -128 127
+
+    // through a generic bound, monomorphised per type
+    airside { posix::printf("c1=%d\n\0".ptr, clamp_hi.<si4>(200)); } // 127
+    airside { posix::printf("c2=%d\n\0".ptr, clamp_hi.<si4>(5)); }   // 999
+    return 0;
+}

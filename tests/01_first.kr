@@ -1,0 +1,3 @@
+fn main() -> ui1 {
+    return 42;
+}

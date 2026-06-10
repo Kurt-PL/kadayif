@@ -1,0 +1,21 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    let pi: fe11m52 = 3.14159265358979;
+    let e:  fe11m52 = 2.71828182845905;
+    airside { posix::printf("pi=%.5f e=%.5f\n\0".ptr, pi, e); }
+
+    let sum: fe11m52 = pi + e;
+    let pro: fe11m52 = pi * e;
+    let quo: fe11m52 = pi / e;
+    airside { posix::printf("sum=%.5f pro=%.5f quo=%.5f\n\0".ptr,
+                            sum, pro, quo); }
+
+    let half: fe11m52 = 1 / 2.0;                  // int literal in float ctx
+    airside { posix::printf("half=%.3f\n\0".ptr, half); }
+
+    let x: f32 = 1.5;
+    let y: f32 = 2.25;
+    airside { posix::printf("f32 z=%.4f\n\0".ptr, x * y); }
+    return 0;
+}

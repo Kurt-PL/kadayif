@@ -1,0 +1,28 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn add1(m: verdict.<si4, si4>) -> verdict.<si4, si4> {
+    let v: si4 = m?;                 // success: v = inner; fail: return m
+    let r: verdict.<si4, si4> = verdict::Pass { v + 1 };
+    return r;
+}
+
+fn main() -> ui1 {
+    let p: verdict.<si4, si4> = verdict::Pass { 41 };
+    let f: verdict.<si4, si4> = verdict::Fail { 7 };
+
+    let rp: verdict.<si4, si4> = add1(p);    // succeeds -> Pass { 42 }
+    let rf: verdict.<si4, si4> = add1(f);    // ? propagates -> Fail { 7 }
+
+    let vp <- rp else _ {
+        airside { posix::printf("rp unexpectedly failed\n\0".ptr); }
+        return 1;
+    };
+    airside { posix::printf("rp -> %d\n\0".ptr, vp); }       // 42
+
+    let _vf <- rf else e {
+        airside { posix::printf("rf -> failure %d\n\0".ptr, e); }  // 7
+        return 0;
+    };
+    airside { posix::printf("rf unexpectedly succeeded\n\0".ptr); }
+    return 1;
+}

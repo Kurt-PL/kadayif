@@ -1,0 +1,17 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+fn main() -> ui1 {
+    let ok:  verdict.<si4, si4> = verdict::Pass { 42 };
+    let bad: verdict.<si4, si4> = verdict::Fail { 7 };
+
+    if ok -> v | e {
+        airside { posix::printf("ok -> success: %d\n\0".ptr, v); }
+    } else {
+        airside { posix::printf("ok -> failure: %d\n\0".ptr, e); }
+    }
+    if bad -> v | e {
+        airside { posix::printf("bad -> success: %d\n\0".ptr, v); }
+    } else {
+        airside { posix::printf("bad -> failure: %d\n\0".ptr, e); }
+    }
+    return 0;
+}

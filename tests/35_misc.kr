@@ -1,0 +1,26 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+struct point { x: si4, y: si8 }
+type myint = si4;
+type cstr = &raw ui1;
+
+fn main() -> ui1 {
+    // §6.12.1 layout intrinsics (xlatime constants).
+    airside { posix::printf("sz=%lu al=%lu off=%lu\n\0".ptr,
+        point@size, point@align, point@offset(y)); }            // 16 8 8
+    airside { posix::printf("i=%lu f=%lu\n\0".ptr,
+        si4@size, fe11m52@align); }                              // 4 8
+
+    // §3.5.4 character literals (type ui1).
+    let c: ui1 = 'A';
+    let n: ui1 = '\n';
+    let z: ui1 = '\0';
+    airside { posix::printf("c=%u n=%u z=%u\n\0".ptr, c, n, z); } // 65 10 0
+
+    // §5.8 type aliases (substituted at use sites).
+    let m: myint = -7;
+    airside { posix::printf("m=%d\n\0".ptr, m); }                // -7
+    let s: cstr = "X\0".ptr;
+    airside { posix::printf("s=%c\n\0".ptr, *s); }               // X
+    return 0;
+}

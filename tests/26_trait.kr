@@ -1,0 +1,50 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.3 trait with an abstract method + a default method (§9.3.4)
+trait Ord {
+    fn cmp(&self, o: &self_t) -> si4;
+    fn min_with(&self, o: &self_t) -> si4 {
+        // default body invokes the abstract method on self
+        return if self.cmp(o) < 0 then self.cmp(o) else 0;
+    }
+}
+
+struct point { x: si4, y: si4 }
+
+// §9.4 impl Type as Trait — methods lower to point$cmp
+impl point as Ord {
+    fn cmp(&self, o: &point) -> si4 {
+        return (self.x + self.y) - (o.x + o.y);
+    }
+}
+
+impl si4 as Ord {
+    fn cmp(&self, o: &si4) -> si4 { return *self - *o; }
+}
+
+// §5.9 + §9.3: T: Ord bound licenses the method call; monomorphised
+fn smaller.<T: Ord>(a: T, b: T) -> si4 {
+    return a.cmp(&b);
+}
+
+fn main() -> ui1 {
+    let p: point = point { x = 1, y = 2 };  // sum 3
+    let q: point = point { x = 4, y = 1 };  // sum 5
+    // static dispatch through a generic bound -> point$cmp
+    airside { posix::printf("pc=%d\n\0".ptr, smaller.<point>(p, q)); } // -2
+
+    // same template, distinct instance -> si4$cmp
+    airside { posix::printf("ic=%d\n\0".ptr, smaller.<si4>(8, 3)); }   // 5
+
+    // direct method call (inherent-style dispatch on impl-as-trait)
+    airside { posix::printf("dc=%d\n\0".ptr, p.cmp(&q)); }            // -2
+
+    // §9.3.4 default method: point/si4 omit min_with, so the trait's
+    // default body (calling the abstract cmp) is synthesised per type
+    airside { posix::printf("dm=%d\n\0".ptr, p.min_with(&q)); }       // -2
+    airside { posix::printf("im=%d\n\0".ptr, smaller.<si4>(2, 9)); }  // -7
+    let two: si4 = 2;
+    let nine: si4 = 9;
+    airside { posix::printf("sm=%d\n\0".ptr, two.min_with(&nine)); }  // -7
+    return 0;
+}

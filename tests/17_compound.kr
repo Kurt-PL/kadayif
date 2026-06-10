@@ -1,0 +1,31 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    // wrapping arithmetic (§6.7)
+    mut x: si4 = 10;
+    x += 5;                              // 15
+    x -= 3;                              // 12
+    x *= 2;                              // 24
+    x /= 4;                              // 6
+    x %= 4;                              // 2
+    airside { posix::printf("x=%d\n\0".ptr, x); }
+
+    // saturating (§6.7.2: `+|=` — saturating operator + '=')
+    mut s: si4 = 2147483647;
+    s +|= 100;                            // MAX (clamped)
+    airside { posix::printf("s=%d\n\0".ptr, s); }
+
+    mut u: ui4 = 5;
+    u -|= 10;                             // 0 (unsigned underflow)
+    airside { posix::printf("u=%u\n\0".ptr, u); }
+
+    // bitwise
+    mut flags: ui4 = 0xFF00;
+    flags &= 0x0F0F;                     // 0x0F00
+    flags |= 0x000F;                     // 0x0F0F
+    flags ^= 0xFFFF;                     // 0xF0F0
+    flags <<= 4;                         // 0xF0F00
+    flags >>= 8;                         // 0xF0F
+    airside { posix::printf("flags=%x\n\0".ptr, flags); }
+    return 0;
+}

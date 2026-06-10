@@ -1,0 +1,28 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    // int -> float (§6.8.3)
+    let n: si4 = 7;
+    let f: fe11m52 = n as fe11m52;
+    airside { posix::printf("i2f=%.2f\n\0".ptr, f); }
+
+    // float -> int truncate toward zero (§6.8.4)
+    airside { posix::printf("f2i=%d f2in=%d\n\0".ptr,
+                            3.99 as si4, -3.99 as si4); }            // 3 -3
+
+    // saturation
+    airside { posix::printf("sat=%d\n\0".ptr, 1.0e20 as si4); }      // MAX
+
+    // f64 -> f32 -> f64
+    let d: fe11m52 = 3.14159265358979;
+    let s: f32 = d as f32;
+    let d2: fe11m52 = s as fe11m52;
+    airside { posix::printf("rt=%.5f\n\0".ptr, d2); }                // 3.14159
+
+    // as! reinterpret: 1.0 -> 0x3FF0000000000000
+    let bits: uaddr = 1.0 as! uaddr;
+    airside { posix::printf("bits=%llx\n\0".ptr, bits); }
+    let back: fe11m52 = bits as! fe11m52;
+    airside { posix::printf("back=%.1f\n\0".ptr, back); }
+    return 0;
+}

@@ -1,0 +1,21 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+const MAX: si4 = 1024;
+const HALF: si4 = MAX / 2;
+static base: si4 = 100;
+static mut counter: uaddr = 0;
+
+fn bump() -> void {
+    airside { counter += 3; }
+}
+
+fn main() -> ui1 {
+    airside { posix::printf("max=%d half=%d\n\0".ptr, MAX, HALF); }
+    airside { posix::printf("base=%d\n\0".ptr, base); }
+    bump();
+    bump();
+    airside { posix::printf("cnt=%lu\n\0".ptr, counter); }
+    counter = 9;
+    airside { posix::printf("cnt2=%lu\n\0".ptr, counter); }
+    return 0;
+}

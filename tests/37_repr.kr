@@ -1,0 +1,20 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+struct natural { a: ui1, b: si4, c: ui1 }                 // 4+4+1 -> pad -> 12
+struct squeezed { a: ui1, b: si4, c: ui1 } with repr(packed)   // 6, align 1
+struct spaced { a: ui1 } with align(16)                   // 16, align 16
+
+fn main() -> ui1 {
+    airside { posix::printf("n=%lu/%lu p=%lu/%lu s=%lu/%lu\n\0".ptr,
+        natural@size, natural@align,
+        squeezed@size, squeezed@align,
+        spaced@size, spaced@align); }                     // 12/4 6/1 16/16
+    airside { posix::printf("off b=%lu c=%lu pb=%lu pc=%lu\n\0".ptr,
+        natural@offset(b), natural@offset(c),
+        squeezed@offset(b), squeezed@offset(c)); }        // 4 8 1 5
+
+    // Packed field access round-trip (misaligned b at offset 1).
+    let s: squeezed = squeezed { a = 7, b = 305419896, c = 9 };
+    airside { posix::printf("a=%u b=%d c=%u\n\0".ptr, s.a, s.b, s.c); }
+    return 0;
+}

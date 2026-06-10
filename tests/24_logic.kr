@@ -1,0 +1,37 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+enum toggle { On, Off = #wild# } with contract;
+
+fn truthy(v: bool) -> si4 { return if v then 1 else 0; }
+
+fn main() -> ui1 {
+    // §7.2.1 polarity inversion on bool (self-inverse)
+    let t: bool = true;
+    let f: bool = !t;
+    airside { posix::printf("f=%d nn=%d\n\0".ptr,
+                            truthy(f), truthy(!!t)); }       // f=0 nn=1
+
+    // §7.2.2 short-circuit: lhs decides the result; rhs is not evaluated
+    let sc: bool = false && true;                           // false
+    let so: bool = true || false;                           // true
+    airside { posix::printf("sc=%d so=%d\n\0".ptr,
+                            truthy(sc), truthy(so)); }       // 0 1
+
+    // chained comparisons through && / || / ^
+    let x: si4 = 3;
+    let both: bool = x > 1 && x < 5;                         // true
+    let either: bool = x < 1 || x == 3;                      // true
+    let one: bool = (x > 1) ^ (x > 2);                       // t^t = false
+    airside { posix::printf("b=%d e=%d o=%d\n\0".ptr,
+                            truthy(both), truthy(either), truthy(one)); }
+
+    // user contract enum: truthiness + inversion + mixing with bool
+    let tg: toggle = toggle::On;
+    let tf: toggle = !tg;                                    // Off
+    let m: bool = tg && t;                                   // On && true
+    let m2: bool = tf || f;                                  // Off || false
+    let mx: bool = tg ^ tf;                                  // On ^ Off
+    airside { posix::printf("m=%d m2=%d mx=%d\n\0".ptr,
+                            truthy(m), truthy(m2), truthy(mx)); } // 1 0 1
+    return 0;
+}

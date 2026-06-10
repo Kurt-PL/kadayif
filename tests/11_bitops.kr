@@ -1,0 +1,23 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    let a: ui4 = 0xFF00FF00;
+    let b: ui4 = 0x00FFFF00;
+    airside { posix::printf("and=%x or=%x xor=%x not=%x\n\0".ptr,
+                            a & b, a | b, a ^ b, !a); }
+    // 0000FF00 FFFFFF00 FFFF0000 00FF00FF
+
+    let x: si4 = -1;
+    airside { posix::printf("snot=%d sar=%d\n\0".ptr, !x, x >> 4); } // 0 -1
+
+    let y: ui1 = 0x80;
+    airside { posix::printf("shl=%u shr=%u\n\0".ptr,
+                            y << 1, y >> 1); }                        // 0 64
+
+    // count >= W : ui4 W=32
+    let z: ui4 = 1;
+    airside { posix::printf("z32=%u z100=%u\n\0".ptr, z << 32, z << 100); } // 0 0
+    let neg: si4 = -1;
+    airside { posix::printf("n32=%d\n\0".ptr, neg >> 32); }           // -1
+    return 0;
+}

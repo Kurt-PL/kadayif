@@ -1,0 +1,33 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+trait Show {
+    fn val(&self) -> si4;
+}
+
+struct point { x: si4, y: si4 }
+
+impl point as Show { fn val(&self) -> si4 { return self.x + self.y; } }
+impl si4   as Show { fn val(&self) -> si4 { return *self; } }
+
+fn main() -> ui1 {
+    let p: point = point { x = 3, y = 4 };   // val = 7
+    let n: si4 = 10;
+
+    // §9.5 heterogeneous collection: [&dyn Show; 2] holds 16-byte fat
+    // refs to DIFFERENT concrete types (point and si4) in one array
+    let items: [&dyn Show; 2] = [&p, &n];
+
+    // iterate with raw-pointer walk (Kurt has no `[]`), dispatch each
+    mut i: uaddr = 0;
+    mut total: si4 = 0;
+    airside {
+        let base: &raw &dyn Show = items.ptr;
+        while i < items.len {
+            let d: &dyn Show = *(base + i);   // load one fat ref
+            total += d.val();                 // dynamic dispatch per element
+            i += 1;
+        }
+    }
+    airside { posix::printf("total=%d\n\0".ptr, total); }   // 7 + 10 = 17
+    return 0;
+}

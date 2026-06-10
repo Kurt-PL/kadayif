@@ -1,0 +1,22 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+enum colour { Red, Green, Blue }
+
+fn show(c: colour) -> void {
+    let d: ui1 = c as ui1;
+    // match returns the name pointer; printf happens in airside outside.
+    let name: &raw ui1 = match c {
+        colour::Red   = "red\0".ptr,
+        colour::Green = "green\0".ptr,
+        colour::Blue  = "blue\0".ptr,
+        #wild#        = "?\0".ptr,
+    };
+    airside { posix::printf("colour %d = %s\n\0".ptr, d, name); }
+}
+
+fn main() -> ui1 {
+    show(colour::Red);
+    show(colour::Green);
+    show(colour::Blue);
+    return 0;
+}

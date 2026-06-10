@@ -1,0 +1,20 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    mut c: ui4 = 0;
+    airside {
+        *(&atomic c) = 5;            // unordered atomic store (§8.5.2)
+        *(&atomic c) += 7;           // atomic fetch-add -> 12
+        @volatile.start
+        *(&guard c) -= 2;            // fully ordered fetch-sub -> 10
+        @volatile.end
+        @guard.start
+        *(&atomic c) |= 32;          // 10 | 32 = 42
+        @guard.end
+        @guard
+        let v: ui4 = *(&guard c);    // load-acquire
+        let u: ui4 = *(&atomic c);   // plain (single-copy) atomic load
+        posix::printf("v=%u u=%u\n\0".ptr, v, u);
+    }
+    return 0;
+}

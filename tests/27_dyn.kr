@@ -1,0 +1,43 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.5 trait object: a trait with two methods
+trait Show {
+    fn val(&self) -> si4;
+    fn scaled(&self, k: si4) -> si4;
+}
+
+struct point { x: si4, y: si4 }
+
+impl point as Show {
+    fn val(&self) -> si4 { return self.x + self.y; }
+    fn scaled(&self, k: si4) -> si4 { return (self.x + self.y) * k; }
+}
+
+impl si4 as Show {
+    fn val(&self) -> si4 { return *self; }
+    fn scaled(&self, k: si4) -> si4 { return *self * k; }
+}
+
+// §9.5: &dyn Show param — fat ref (value ptr + dispatch table),
+// dispatched indirectly through the table at a fixed method offset
+fn show(d: &dyn Show) -> si4 {
+    return d.val();
+}
+
+fn show_scaled(d: &dyn Show, k: si4) -> si4 {
+    return d.scaled(k);  // field 4 (3 + method index 1)
+}
+
+fn main() -> ui1 {
+    let p: point = point { x = 3, y = 4 };  // val = 7
+    let n: si4 = 10;
+
+    // implicit &point -> &dyn Show / &si4 -> &dyn Show at the call site
+    airside { posix::printf("pv=%d\n\0".ptr, show(&p)); }          // 7
+    airside { posix::printf("nv=%d\n\0".ptr, show(&n)); }          // 10
+
+    // dynamic dispatch with an extra scalar argument
+    airside { posix::printf("ps=%d\n\0".ptr, show_scaled(&p, 3)); } // 21
+    airside { posix::printf("ns=%d\n\0".ptr, show_scaled(&n, 5)); } // 50
+    return 0;
+}

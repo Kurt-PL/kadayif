@@ -1,0 +1,40 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+struct vec3 { x: si4, y: si4, z: si4 }          // 12B -> two registers
+struct mat2 { a: ui8, b: ui8, c: ui8, d: ui8 }  // 32B -> indirect (sret)
+
+fn sum3(v: vec3) -> si4 {
+    return v.x + v.y + v.z;
+}
+
+fn mk3(a: si4) -> vec3 {
+    let v: vec3 = vec3 { x = a, y = a + 1, z = a + 2 };
+    return v;
+}
+
+fn trace(m: mat2) -> ui8 {
+    return m.a + m.d;
+}
+
+fn mkmat(s: ui8) -> mat2 {
+    let m: mat2 = mat2 { a = s, b = s * 2, c = s * 3, d = s * 4 };
+    return m;
+}
+
+fn main() -> ui1 {
+    // 12B aggregate: x0+x1 arg / x0+x1 return
+    let v: vec3 = mk3(10);                                       // {10,11,12}
+    airside { posix::printf("sum=%d\n\0".ptr, sum3(v)); }        // 33
+
+    // §8.8.1 copy init
+    let w: vec3 = v;
+    airside { posix::printf("wsum=%d\n\0".ptr, sum3(w)); }       // 33
+
+    // 32B aggregate: sret return / caller-copy + pointer arg
+    let m: mat2 = mkmat(7);                                      // {7,14,21,28}
+    airside { posix::printf("tr=%llu\n\0".ptr, trace(m)); }      // 35
+
+    // chained: a two-register call result fed straight into an arg
+    airside { posix::printf("chain=%d\n\0".ptr, sum3(mk3(1))); } // 6
+    return 0;
+}

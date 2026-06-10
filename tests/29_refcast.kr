@@ -1,0 +1,28 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    mut x: si4 = 77;
+
+    airside {
+        // §8.1.3 descending sigil chain (landside): $ -> &mut -> & -> &raw -> uaddr
+        let xref:  $si4      = $x;
+        let smut:  &mut si4  = xref as &mut si4;     // $ -> &mut
+        let shrd:  &si4      = smut as &si4;         // &mut -> &
+        let raw:   &raw si4  = shrd as &raw si4;     // & -> &raw
+        let addr:  uaddr     = raw as uaddr;         // &raw -> uaddr
+        let skip:  uaddr     = xref as uaddr;        // skip multiple steps
+
+        // ascending: uaddr -> &raw (landside), then &raw -> &mut (airside)
+        let back:  &raw si4     = addr as &raw si4;  // uaddr -> &raw
+        let wr:    &raw mut si4 = back as &raw mut si4; // raw modifier add (airside)
+        *wr = 99;
+
+        // modifier axis: volatile added then removed, freely
+        let volr:  &volatile si4 = shrd as &volatile si4;
+        let plain: &si4          = volr as &si4;
+
+        posix::printf("x=%d addr_eq=%d skip_eq=%d\n\0".ptr,
+                      x, addr == skip, addr == skip);   // 99, 1, 1
+    }
+    return 0;
+}

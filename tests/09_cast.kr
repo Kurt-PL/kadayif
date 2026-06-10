@@ -1,0 +1,23 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    let big: si4 = 300;
+    let small: ui1 = big as ui1;                       // 300 mod 256 = 44
+    airside { posix::printf("small=%d\n\0".ptr, small); }
+
+    let s: ui1 = 200;
+    let w: si4 = s as si4;                              // zext
+    airside { posix::printf("w=%d\n\0".ptr, w); }
+
+    // sign extension via reinterpret
+    let b: ui1 = 200;                                   // 0xC8
+    let sb: si1 = b as si1;                             // bit reinterpret -> -56
+    let r: si4 = sb as si4;                             // sxtb -> -56
+    airside { posix::printf("r=%d\n\0".ptr, r); }
+
+    // enum -> discriminant
+    let ok: verdict.<si4, si4> = verdict::Pass { 42 };
+    let d: ui1 = ok as ?;                               // disc of Pass = 1
+    airside { posix::printf("disc=%d\n\0".ptr, d); }
+    return 0;
+}

@@ -1,0 +1,25 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    let a: si4 = 42;
+    airside { posix::printf("neg=%d\n\0".ptr, -a); }              // -42
+    airside { posix::printf("nlit=%d\n\0".ptr, -7); }              // -7
+
+    let big: si4 = 2147483647;
+    airside { posix::printf("satadd=%d\n\0".ptr, big +| 100); }   // MAX
+    let lo: si4 = -2147483648;
+    airside { posix::printf("satsub=%d\n\0".ptr, lo -| 1); }      // MIN
+
+    let u: ui4 = 3;
+    airside { posix::printf("usatsub=%u\n\0".ptr, u -| 10); }     // 0
+
+    let m: si4 = 100000;
+    airside { posix::printf("satmul=%d\n\0".ptr, m *| 100000); }  // MAX
+
+    // 8-byte
+    let big8: saddr = 9223372036854775807;
+    airside { posix::printf("s_add=%lld\n\0".ptr, big8 +| 5); }   // MAX
+    let m8: saddr = 4000000000;
+    airside { posix::printf("s_mul=%lld\n\0".ptr, m8 *| 4000000000); }
+    return 0;
+}

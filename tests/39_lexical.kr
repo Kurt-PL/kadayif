@@ -1,0 +1,27 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §3.4.2 raw identifiers: keywords in identifier positions.
+fn i#match(x: si4) -> si4 { return x + 1; }
+
+fn main() -> ui1 {
+    // §3.5.8 digit separators in every radix.
+    let m: si4 = 1_000_000;
+    let h: ui4 = 0xDEAD_BEEF;
+    let b: ui2 = 0b1111_0000_1010;
+    airside { posix::printf("m=%d h=%u b=%u\n\0".ptr, m, h, b); } // 1000000 3735928559 3850
+
+    // §3.5.7 \xHH and named escapes.
+    let x: ui1 = '\x41';
+    let bell: ui1 = '\a';
+    airside { posix::printf("x=%u bell=%u s=%s\n\0".ptr, x, bell, "\x4B\x21\0".ptr); } // 65 7 K!
+
+    // §4.2.1 cellbits.
+    airside { posix::printf("cb=%lu ce=%lu cx=%lu\n\0".ptr,
+        cellbits, cellbits::exec, cellbits::xlat); }      // 8 8 8
+
+    // raw identifier call + same-identifier equivalence (i#m == m).
+    let r: si4 = i#match(41);
+    let i#plain: si4 = 5;
+    airside { posix::printf("r=%d p=%d\n\0".ptr, r, plain); } // 42 5
+    return 0;
+}

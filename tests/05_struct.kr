@@ -1,0 +1,12 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+struct point { x: si4, y: si4 }
+
+fn main() -> ui1 {
+    let p: point = point { x = 3, y = 4 };
+    let q: point = point { x = 10, y = 20 };
+    airside { posix::printf("p = (%d, %d)\n\0".ptr, p.x, p.y); }
+    airside { posix::printf("q = (%d, %d)\n\0".ptr, q.x, q.y); }
+    airside { posix::printf("p.x + q.y = %d\n\0".ptr, p.x + q.y); }
+    return 0;
+}

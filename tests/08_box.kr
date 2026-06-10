@@ -1,0 +1,14 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+struct Box.<T> { v: T }
+
+fn main() -> ui1 {
+    let b: Box.<si4> = Box.<si4> { v = 42 };
+    airside { posix::printf("box = %d\n\0".ptr, b.v); }
+
+    // distinct monomorphisations: Box.<ui1> has size 1, Box.<saddr> size 8
+    let u: Box.<ui1>   = Box.<ui1>   { v = 7 };
+    let w: Box.<saddr> = Box.<saddr> { v = 1000000 };
+    airside { posix::printf("u=%d w=%lld\n\0".ptr, u.v, w.v); }
+    return 0;
+}

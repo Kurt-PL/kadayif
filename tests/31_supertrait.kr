@@ -1,0 +1,42 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.3.3: Named requires its implementors to also be Coded (supertrait)
+trait Coded {
+    fn code(&self) -> si4;
+}
+
+trait Named with { self_t: Coded } {
+    fn tag(&self) -> si4;
+    fn tag2(&self) -> si4;
+}
+
+struct item { id: si4 }
+
+impl item as Coded {
+    fn code(&self) -> si4 { return self.id * 1000; }
+}
+
+impl item as Named {
+    fn tag(&self) -> si4 { return self.id + 1; }
+    fn tag2(&self) -> si4 { return self.id + 2; }
+}
+
+// §9.6.2: dispatch through &dyn Named — Named's methods sit at field
+// 3 + S + k (S = 1 supertrait), past the Zone-B Coded table reference.
+fn show(d: &dyn Named) -> si4 {
+    return d.tag();        // field 4 (3 + 1 supertrait + method 0)
+}
+
+fn show2(d: &dyn Named) -> si4 {
+    return d.tag2();       // field 5
+}
+
+fn main() -> ui1 {
+    let it: item = item { id = 7 };
+    // static dispatch still works through both traits
+    airside { posix::printf("code=%d tag=%d\n\0".ptr, it.code(), it.tag()); } // 7000 8
+
+    // dynamic dispatch with the supertrait field-offset shift
+    airside { posix::printf("dt=%d dt2=%d\n\0".ptr, show(&it), show2(&it)); } // 8 9
+    return 0;
+}

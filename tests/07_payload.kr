@@ -1,0 +1,27 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// Tuple-variant payload (§5.6): positional fields, accessed by .0/.1
+enum shape {
+    Circle { si4 },             // radius
+    Rect   { si4, si4 },        // width, height
+}
+
+fn main() -> ui1 {
+    // Aggregate-by-value passing across fn calls is not yet implemented
+    // (Apple AAPCS64 aggregate ABI deferred), so the match is inlined.
+    let c: shape = shape::Circle { 5 };
+    let r: shape = shape::Rect   { 3, 4 };
+    let ac: si4 = match c {
+        shape::Circle { rad } = 3 * rad * rad,    // pi ~ 3
+        shape::Rect   { w, h } = w * h,
+        #wild#                = 0,
+    };
+    let ar: si4 = match r {
+        shape::Circle { rad } = 3 * rad * rad,
+        shape::Rect   { w, h } = w * h,
+        #wild#                = 0,
+    };
+    airside { posix::printf("circle(5) area ~= %d\n\0".ptr, ac); }
+    airside { posix::printf("rect(3,4) area = %d\n\0".ptr, ar); }
+    return 0;
+}

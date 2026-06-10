@@ -1,0 +1,23 @@
+with "config/kadaif_config.gpr";
+project Kadaif is
+
+   for Source_Dirs use ("src/", "src/lexer", "src/parser", "src/sema", "src/codegen", "src/common", "config/");
+   for Object_Dir use "obj/" & Kadaif_Config.Build_Profile;
+   for Create_Missing_Dirs use "True";
+   for Exec_Dir use "bin";
+   for Main use ("main.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use
+        ("-gnat2012", "-Og", "-g", "-gnatwa", "-gnatw.X", "-gnatVa", "-gnatW8");
+   end Compiler;
+
+   package Binder is
+      for Switches ("Ada") use ("-Es"); --  Symbolic traceback
+   end Binder;
+
+   package Install is
+      for Artifacts (".") use ("share");
+   end Install;
+
+end Kadaif;

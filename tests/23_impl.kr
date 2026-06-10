@@ -1,0 +1,32 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+struct vec2 { x: si4, y: si4 }
+
+impl vec2 {
+    // §9.2 &self: shared receiver, auto-deref field loads
+    fn dot(&self, o: vec2) -> si4 {
+        return self.x * o.x + self.y * o.y;
+    }
+    // $self: exclusive receiver, stores through the reference
+    fn scale($self, k: si4) {
+        self.x = self.x * k;
+        self.y = self.y * k;
+    }
+    fn sum(&self) -> si4 {
+        return self.x + self.y;
+    }
+}
+
+fn main() -> ui1 {
+    mut v: vec2 = vec2 { x = 3, y = 4 };
+    let w: vec2 = vec2 { x = 1, y = 2 };
+
+    // §6.2.3 method invocation + §6.2.6 auto-referencing (&v)
+    airside { posix::printf("dot=%d\n\0".ptr, v.dot(w)); }       // 3+8 = 11
+
+    // $self mutation visible to the caller
+    v.scale(10);
+    airside { posix::printf("sx=%d sy=%d\n\0".ptr, v.x, v.y); }  // 30 40
+    airside { posix::printf("sum=%d\n\0".ptr, v.sum()); }        // 70
+    return 0;
+}

@@ -1,0 +1,25 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn main() -> ui1 {
+    let p: .{si4, si4} = .{ 3, 4 };
+    airside { posix::printf("p = (%d, %d)\n\0".ptr, p.0, p.1); }    // (3, 4)
+
+    let .{ a, b } = .{ 10, 20 };
+    airside { posix::printf("a=%d b=%d\n\0".ptr, a, b); }            // 10 20
+
+    // widening: ui4 0xFFFFFFFF +@ 2 -> low=1, high=1 (carry)
+    let s: ui4 = 4294967295;
+    let .{ low, high } = s +@ 2;
+    airside { posix::printf("wadd low=%u high=%u\n\0".ptr, low, high); }
+
+    // widening mul (spec §6.4.3 example): 0x10000 *@ 0x10000 -> lo=0, hi=1
+    let m: ui4 = 65536;
+    let .{ lo, hi } = m *@ 65536;
+    airside { posix::printf("wmul lo=%u hi=%u\n\0".ptr, lo, hi); }
+
+    // 8-byte
+    let u: uaddr = 4294967296;          // 2^32
+    let .{ ul, uh } = u *@ 4294967296;  // 2^64 -> lo=0, hi=1
+    airside { posix::printf("u_wmul lo=%llu hi=%llu\n\0".ptr, ul, uh); }
+    return 0;
+}

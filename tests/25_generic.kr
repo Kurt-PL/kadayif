@@ -1,0 +1,28 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.9 bounded template: numeric licenses comparison
+fn max.<T: numeric>(a: T, b: T) -> T {
+    return if a > b then a else b;
+}
+
+// unconstrained T: an opaque layout — assignment/passing/return only
+fn first.<T>(a: T, b: T) -> T {
+    return a;
+}
+
+// nested generic invocation inside a template (re-instantiated per T)
+fn twice_max.<T: numeric>(x: T) -> T {
+    return max.<T>(x + x, x);
+}
+
+fn main() -> ui1 {
+    let m: si4 = max.<si4>(3, 7);          // 7
+    let n: si4 = max.<si4>(9, 2);          // 9 (same instance reused)
+    let u: ui8 = max.<ui8>(10, 4);         // 10 (distinct instance)
+    let f: si4 = first.<si4>(5, 6);        // 5
+    let d: si4 = twice_max.<si4>(21);      // max(42, 21) = 42
+    airside {
+        posix::printf("m=%d n=%d u=%llu f=%d d=%d\n\0".ptr, m, n, u, f, d);
+    }
+    return 0;
+}
