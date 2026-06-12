@@ -4,7 +4,11 @@ struct Box.<T> { v: T }
 
 fn main() -> ui1 {
     let b: Box.<si4> = Box.<si4> { v = 42 };
-    airside { posix::printf("box = %d\n\0".ptr, b.v); }
+    let inner: Box.<si4> = Box.<si4> { v = 42 };
+    let nested: Box.<Box.<si4>> = Box.<Box.<si4>> { v = inner };
+    let inner_ref: &Box.<si4> = &nested.v;
+    let val: si4 = inner_ref.v;
+    airside { posix::printf("box = %d nested = %d\n\0".ptr, b.v, val); }
 
     // distinct monomorphisations: Box.<ui1> has size 1, Box.<saddr> size 8
     let u: Box.<ui1>   = Box.<ui1>   { v = 7 };

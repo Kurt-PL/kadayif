@@ -116,6 +116,11 @@ package body Kurt.Sema is
       end;
    end Is_Integer_Type;
 
+   function Is_Void_Type (T : Type_Access) return Boolean is
+   begin
+      return T /= null and then T.Kind = T_Named and then SU.To_String (T.Name) = "void";
+   end Is_Void_Type;
+
    function Is_Float_Type (T : Type_Access) return Boolean is
    begin
       if T = null or else T.Kind /= T_Named then
@@ -645,8 +650,11 @@ package body Kurt.Sema is
                return E.Sem_Ty;
 
             when E_String_Lit =>
-               --  Slice &[ui1]; only `.ptr` is consumed downstream.
-               E.Sem_Ty := Mk_Named ("&[ui1]");
+               --  Slice &[ui1] fat reference.
+               E.Sem_Ty := Mk_Ref (R_Shared, False, RS_None,
+                                   new AST_Type'(Kind => T_Array,
+                                                 Elem => Mk_Named ("ui1"),
+                                                 Len  => 0));
                return E.Sem_Ty;
 
             when E_Path =>
@@ -755,6 +763,9 @@ package body Kurt.Sema is
                     (if Is_Ref (RT) then RT.Target else RT);
                   FN  : constant String := SU.To_String (E.F_Name);
                begin
+                  if FN = "?" then
+                     Error ("access to padding field '?' is prohibited (spec 5.5.2)");
+                  end if;
                   if FN = "ptr" then
                      --  Fat-pointer view (§4.6.1): `.ptr` is &raw elem.
                      if E.F_Recv.Kind = E_String_Lit then
@@ -1899,25 +1910,41 @@ package body Kurt.Sema is
                --  constants. The operand shall be a known sized type;
                --  `@offset` additionally requires a struct field.
                declare
-                  TN : constant String := SU.To_String (E.TI_Ty.Name);
-                  Known : constant Boolean :=
-                    Is_Integer_Type (E.TI_Ty)
-                    or else Is_Float_Type (E.TI_Ty)
-                    or else TN = "bool"
-                    or else Kurt.Layout.Is_Struct (TN)
-                    or else Kurt.Layout.Is_Enum (TN);
+                  Known : Boolean := False;
                begin
+                  if E.TI_Ty.Kind in T_Ref | T_Tuple | T_Array then
+                     Known := True;
+                  elsif E.TI_Ty.Kind = T_Named then
+                     declare
+                        TN : constant String := SU.To_String (E.TI_Ty.Name);
+                     begin
+                        Known :=
+                          Is_Integer_Type (E.TI_Ty)
+                          or else Is_Float_Type (E.TI_Ty)
+                          or else TN = "bool"
+                          or else Kurt.Layout.Is_Struct (TN)
+                          or else Kurt.Layout.Is_Enum (TN);
+                     end;
+                  end if;
+
                   if not Known then
-                     Error ("type intrinsic on unknown type '" & TN
-                            & "' (spec 6.12)");
+                     declare
+                        TypeNameStr : constant String :=
+                          (if E.TI_Ty.Kind = T_Named then SU.To_String (E.TI_Ty.Name)
+                           else "anonymous type");
+                     begin
+                        Error ("type intrinsic on unknown type '" & TypeNameStr
+                               & "' (spec 6.12)");
+                     end;
                   elsif E.TI_Op = TI_Offset then
-                     if not Kurt.Layout.Is_Struct (TN) then
+                     if E.TI_Ty.Kind /= T_Named or else not Kurt.Layout.Is_Struct (SU.To_String (E.TI_Ty.Name)) then
                         Error ("`@offset` requires a struct type, got '"
-                               & TN & "' (spec 6.12.1)");
+                               & (if E.TI_Ty.Kind = T_Named then SU.To_String (E.TI_Ty.Name) else "anonymous type")
+                               & "' (spec 6.12.1)");
                      elsif Kurt.Layout.Field_Type
-                             (TN, SU.To_String (E.TI_Field)) = null
+                             (SU.To_String (E.TI_Ty.Name), SU.To_String (E.TI_Field)) = null
                      then
-                        Error ("struct '" & TN & "' has no field '"
+                        Error ("struct '" & SU.To_String (E.TI_Ty.Name) & "' has no field '"
                                & SU.To_String (E.TI_Field)
                                & "' (spec 6.12.1)");
                      end if;
@@ -2247,9 +2274,23 @@ package body Kurt.Sema is
             EN : constant String := SU.To_String (D.Name);
          begin
             if D.Discrim_Ty /= null then
-               if not Is_Integer_Type (D.Discrim_Ty) then
+               if Is_Void_Type (D.Discrim_Ty) then
+                  declare
+                     Has_Wild_Canon : Boolean := False;
+                  begin
+                     for J in D.Variants.First_Index .. D.Variants.Last_Index loop
+                        if D.Variants.Element (J).Wild_Canon then
+                           Has_Wild_Canon := True;
+                        end if;
+                     end loop;
+                     if Natural (D.Variants.Length) > 1 or else Has_Wild_Canon then
+                        Error ("enum '" & EN & "': `with discrim(void)` requires "
+                               & "at most one variant and no #wild#(V) canonical value (spec 4.11.3)");
+                     end if;
+                  end;
+               elsif not Is_Integer_Type (D.Discrim_Ty) then
                   Error ("enum '" & EN & "': `with discrim(T)` requires "
-                         & "an integer type, got '"
+                         & "an integer type or void, got '"
                          & Image (D.Discrim_Ty) & "' (spec 4.11.3)");
                else
                   declare

@@ -10,7 +10,6 @@ fn main() -> ui1 {
         point@size, point@align, point@offset(y)); }            // 16 8 8
     airside { posix::printf("i=%lu f=%lu\n\0".ptr,
         si4@size, fe11m52@align); }                              // 4 8
-
     // §3.5.4 character literals (type ui1).
     let c: ui1 = 'A';
     let n: ui1 = '\n';

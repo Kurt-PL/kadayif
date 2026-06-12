@@ -16,11 +16,13 @@ package body Kurt.Parser is
    package Alias_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Alias_Entry);
 
+   package Token_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Kurt.Lexer.Token);
+
    type Cursor is record
       Lex  : access Kurt.Lexer.Lexer;
       Cur  : Kurt.Lexer.Token;
-      Nxt  : Kurt.Lexer.Token;        --  1-token lookahead beyond Cur
-      Have_Nxt : Boolean := False;
+      Lookahead : Token_Vectors.Vector;
       --  When set, a `path {` is NOT read as a struct literal — used
       --  while parsing if/while conditions, where `{` opens the body.
       --  (Same disambiguation Rust applies.)
@@ -30,9 +32,9 @@ package body Kurt.Parser is
 
    procedure Advance (C : in out Cursor) is
    begin
-      if C.Have_Nxt then
-         C.Cur := C.Nxt;
-         C.Have_Nxt := False;
+      if not C.Lookahead.Is_Empty then
+         C.Cur := C.Lookahead.First_Element;
+         C.Lookahead.Delete_First;
       else
          C.Cur := Next_Token (C.Lex.all);
       end if;
@@ -41,12 +43,28 @@ package body Kurt.Parser is
    --  Token after C.Cur (without consuming it).
    function Peek_Tok (C : in out Cursor) return Kurt.Lexer.Token is
    begin
-      if not C.Have_Nxt then
-         C.Nxt := Next_Token (C.Lex.all);
-         C.Have_Nxt := True;
+      if C.Lookahead.Is_Empty then
+         C.Lookahead.Append (Next_Token (C.Lex.all));
       end if;
-      return C.Nxt;
+      return C.Lookahead.First_Element;
    end Peek_Tok;
+
+   procedure Split_Shr_If_Present (C : in out Cursor) is
+   begin
+      if C.Cur.Kind = Op_Shr then
+         C.Cur.Kind := Op_Gt;
+         C.Cur.Lexeme := SU.To_Unbounded_String (">");
+         declare
+            Tok : Kurt.Lexer.Token;
+         begin
+            Tok.Kind := Op_Gt;
+            Tok.Lexeme := SU.To_Unbounded_String (">");
+            Tok.Line := C.Cur.Line;
+            Tok.Col := C.Cur.Col + 1;
+            C.Lookahead.Prepend (Tok);
+         end;
+      end if;
+   end Split_Shr_If_Present;
 
    function Image (K : Token_Kind) return String is (Token_Kind'Image (K));
 
@@ -55,6 +73,9 @@ package body Kurt.Parser is
 
    procedure Expect (C : in out Cursor; K : Token_Kind; What : String) is
    begin
+      if K = Op_Gt then
+         Split_Shr_If_Present (C);
+      end if;
       if C.Cur.Kind /= K then
          raise Syntax_Error with
            "expected " & What & " (" & Image (K) & "), got "
@@ -219,11 +240,13 @@ package body Kurt.Parser is
          if C.Cur.Kind = Punct_Dot then
             Advance (C);
             Expect (C, Op_Lt, "'<' after '.' in generic arguments");
+            Split_Shr_If_Present (C);
             if C.Cur.Kind /= Op_Gt then
                loop
                   Node.Args.Append (Parse_Type (C));
                   exit when C.Cur.Kind /= Punct_Comma;
                   Advance (C);
+                  Split_Shr_If_Present (C);
                   exit when C.Cur.Kind = Op_Gt;
                end loop;
             end if;
@@ -259,6 +282,7 @@ package body Kurt.Parser is
       end if;
       Advance (C);
       Expect (C, Op_Lt, "'<' after '.' in generic clause");
+      Split_Shr_If_Present (C);
       if C.Cur.Kind /= Op_Gt then
          loop
             declare
@@ -277,6 +301,7 @@ package body Kurt.Parser is
             end;
             exit when C.Cur.Kind /= Punct_Comma;
             Advance (C);
+            Split_Shr_If_Present (C);
             exit when C.Cur.Kind = Op_Gt;
          end loop;
       end if;
@@ -293,11 +318,13 @@ package body Kurt.Parser is
       end if;
       Advance (C);
       Expect (C, Op_Lt, "'<' after '.' in generic clause");
+      Split_Shr_If_Present (C);
       if C.Cur.Kind /= Op_Gt then
          loop
             Params.Append (Take_Ident (C, "generic parameter"));
             exit when C.Cur.Kind /= Punct_Comma;
             Advance (C);
+            Split_Shr_If_Present (C);
             exit when C.Cur.Kind = Op_Gt;
          end loop;
       end if;
@@ -561,11 +588,13 @@ package body Kurt.Parser is
             then
                Advance (C);   --  '.'
                Advance (C);   --  '<'
+               Split_Shr_If_Present (C);
                if C.Cur.Kind /= Op_Gt then
                   loop
                      E.P_Type_Args.Append (Parse_Type (C));
                      exit when C.Cur.Kind /= Punct_Comma;
                      Advance (C);
+                     Split_Shr_If_Present (C);
                      exit when C.Cur.Kind = Op_Gt;
                   end loop;
                end if;
@@ -1664,7 +1693,12 @@ package body Kurt.Parser is
                while C.Cur.Kind in Kw_Pub | Kw_Mut | Kw_Airside loop
                   Advance (C);
                end loop;
-               Fld.Name := Take_Ident (C, "field name");
+                if C.Cur.Kind = Op_Question then
+                   Fld.Name := SU.To_Unbounded_String ("?");
+                   Advance (C);
+                else
+                   Fld.Name := Take_Ident (C, "field name");
+                end if;
                Expect (C, Punct_Colon, "':'");
                Fld.Ty := Parse_Type (C);
                D.Fields.Append (Fld);
@@ -1802,8 +1836,12 @@ package body Kurt.Parser is
                               Fld : Struct_Field;
                            begin
                               if Is_Struct_Variant then
-                                 Fld.Name := Take_Ident
-                                   (C, "payload field name");
+                                 if C.Cur.Kind = Op_Question then
+                                    Fld.Name := SU.To_Unbounded_String ("?");
+                                    Advance (C);
+                                 else
+                                    Fld.Name := Take_Ident (C, "payload field name");
+                                 end if;
                                  Expect (C, Punct_Colon, "':'");
                                  Fld.Ty := Parse_Type (C);
                               else

@@ -1,0 +1,30 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+struct test_pad {
+    magic: ui4,
+    ?: ui4,
+    version: ui2
+}
+
+fn main() -> ui1 {
+    // §5.5.2 ? fields: zero-initialized and inaccessible.
+    let s: test_pad = test_pad { magic = 0xDEADBEEF, version = 0x1234 };
+
+    // Verify sizes and offsets
+    let sz: uaddr = test_pad@size;
+    let magic_off: uaddr = test_pad@offset(magic);
+    let version_off: uaddr = test_pad@offset(version);
+    
+    // We cannot access s.? directly (which causes a translation failure).
+    // Instead, we inspect the padding memory at offset 4 via raw pointer arithmetic.
+    let s_ptr: &raw test_pad = &raw s;
+    let pad_ptr: &raw ui4 = (s_ptr as uaddr + 4) as &raw ui4;
+    let pad_val: ui4 = *pad_ptr;
+
+    airside {
+        posix::printf("sz=%lu magic=%lu version=%lu pad=%X\n\0".ptr,
+            sz, magic_off, version_off, pad_val);
+    } // sz=12 magic=0 version=8 pad=0
+
+    return 0;
+}

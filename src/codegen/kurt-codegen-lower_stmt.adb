@@ -24,6 +24,30 @@ is
       end if;  --  Sz = 0 (void): nothing to store
    end Store_Sized;
 
+   procedure Zero_Fill (Off : Natural; Sz : Natural) is
+      Curr : Natural := Off;
+      Rem_Sz : Natural := Sz;
+   begin
+      while Rem_Sz >= 8 loop
+         IO.Put_Line (F, "    str     xzr, [x29, #" & Img (Curr) & "]");
+         Curr := Curr + 8;
+         Rem_Sz := Rem_Sz - 8;
+      end loop;
+      if Rem_Sz >= 4 then
+         IO.Put_Line (F, "    str     wzr, [x29, #" & Img (Curr) & "]");
+         Curr := Curr + 4;
+         Rem_Sz := Rem_Sz - 4;
+      end if;
+      if Rem_Sz >= 2 then
+         IO.Put_Line (F, "    strh    wzr, [x29, #" & Img (Curr) & "]");
+         Curr := Curr + 2;
+         Rem_Sz := Rem_Sz - 2;
+      end if;
+      if Rem_Sz >= 1 then
+         IO.Put_Line (F, "    strb    wzr, [x29, #" & Img (Curr) & "]");
+      end if;
+   end Zero_Fill;
+
    --  §6.4.3 widening `a +@ b` / `a *@ b`: materialise the .{low, high}
    --  tuple at Off+0 (low) and Off+W (high). Operand type T is W bytes.
    procedure Lower_Widening
@@ -205,6 +229,19 @@ begin
                        Long_Long_Integer (S.L_Init.SC_Len), True);
                      IO.Put_Line (F, "    str     x9, [x29, #"
                                      & Img (Off + 8) & "]");
+                  elsif S.L_Init.Kind = E_String_Lit then
+                     declare
+                        Label : constant String := "Lstr" & Img (ST.Next_Str_Idx);
+                     begin
+                        ST.Next_Str_Idx := ST.Next_Str_Idx + 1;
+                        IO.Put_Line (F, "    adrp    x9, " & Label & "@PAGE");
+                        IO.Put_Line (F, "    add     x9, x9, " & Label & "@PAGEOFF");
+                        IO.Put_Line (F, "    str     x9, [x29, #" & Img (Off) & "]");
+                        Lower_Imm (F, 9,
+                          Long_Long_Integer (SU.Length (S.L_Init.Str_Bytes)), True);
+                        IO.Put_Line (F, "    str     x9, [x29, #"
+                                        & Img (Off + 8) & "]");
+                     end;
                   elsif S.L_Init.Kind = E_Path
                     and then Natural (S.L_Init.Segments.Length) = 1
                     and then Find_Binding
@@ -242,6 +279,7 @@ begin
                   if S.L_Init = null then
                      null;  --  mut without initialiser
                   elsif S.L_Init.Kind = E_Struct_Lit then
+                     Zero_Fill (Off, Sizeof (Ty));
                      declare
                         --  Concrete struct name (post-monomorphisation)
                         --  from the inferred type, falling back to the
@@ -266,9 +304,10 @@ begin
                            end;
                         end loop;
                      end;
-                  elsif S.L_Init.Kind = E_Variant_New then
-                     --  Discriminant at the slot start, then payload.
-                     declare
+                   elsif S.L_Init.Kind = E_Variant_New then
+                      Zero_Fill (Off, Sizeof (Ty));
+                      --  Discriminant at the slot start, then payload.
+                      declare
                         EN : constant String :=
                           (if S.L_Init.Sem_Ty /= null
                            then SU.To_String (S.L_Init.Sem_Ty.Name)

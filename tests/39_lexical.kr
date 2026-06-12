@@ -4,6 +4,16 @@
 fn i#match(x: si4) -> si4 { return x + 1; }
 
 fn main() -> ui1 {
+    // §3.5.6 raw string literals
+    let raw1 = r"C:\path\to\file";
+    let raw2 = r#"{"key": "value"}"#;
+    let raw3 = r##"nested "quotes" and # hashes"##;
+    airside {
+        posix::printf("raw1=%.*s\n\0".ptr, raw1.len as si4, raw1.ptr);
+        posix::printf("raw2=%.*s\n\0".ptr, raw2.len as si4, raw2.ptr);
+        posix::printf("raw3=%.*s\n\0".ptr, raw3.len as si4, raw3.ptr);
+    }
+
     // §3.5.8 digit separators in every radix.
     let m: si4 = 1_000_000;
     let h: ui4 = 0xDEAD_BEEF;
