@@ -1,4 +1,4 @@
---  Kadaif L0 bootstrap codegen.
+--  Kadayif L0 bootstrap codegen.
 --
 --  Target: arm64 Apple Darwin (Mach-O).
 --  Strategy: brain-dead 1:1 lowering, zero optimisation, zero register

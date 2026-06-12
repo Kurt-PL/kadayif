@@ -1,10 +1,10 @@
---  Kadaif bootstrap lexer.
+--  Kadayif bootstrap lexer.
 --  Scope: enough to tokenise first.kr and hello.kr.
 --
 --  Spec references §3.2, §3.3, §3.4.1, §3.4.5, §3.4.7, §3.5, §3.6.
 --  The full lexer (raw strings, i# prefix, all keywords/operators,
 --  every @-directive, digit separators, multi-radix literals, etc.)
---  is deferred. See kadaif/design.md §2.
+--  is deferred. See kadayif/design.md §2.
 
 with Ada.Strings.Unbounded;
 

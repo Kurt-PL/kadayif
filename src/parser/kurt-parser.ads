@@ -1,4 +1,4 @@
---  Kadaif bootstrap parser.
+--  Kadayif bootstrap parser.
 --
 --  Coverage: first.kr and hello.kr.
 --    * top-level fn definition with parameter list and a body of return /

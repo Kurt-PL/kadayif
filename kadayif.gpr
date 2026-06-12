@@ -1,8 +1,8 @@
-with "config/kadaif_config.gpr";
-project Kadaif is
+with "config/kadayif_config.gpr";
+project Kadayif is
 
    for Source_Dirs use ("src/", "src/lexer", "src/parser", "src/sema", "src/codegen", "src/common", "config/");
-   for Object_Dir use "obj/" & Kadaif_Config.Build_Profile;
+   for Object_Dir use "obj/" & Kadayif_Config.Build_Profile;
    for Create_Missing_Dirs use "True";
    for Exec_Dir use "bin";
    for Main use ("main.adb");
@@ -20,4 +20,4 @@ project Kadaif is
       for Artifacts (".") use ("share");
    end Install;
 
-end Kadaif;
+end Kadayif;

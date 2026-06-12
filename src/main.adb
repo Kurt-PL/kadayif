@@ -20,7 +20,7 @@ procedure Main is
    procedure Usage is
    begin
       IO.Put_Line (IO.Standard_Error,
-        "usage: kadaif <input.kr> [-o <output.s>]");
+        "usage: kadayif <input.kr> [-o <output.s>]");
       IO.Put_Line (IO.Standard_Error,
         "  L0 bootstrap: accepts only `fn NAME() -> ui1 { return N; }`.");
    end Usage;
@@ -90,7 +90,7 @@ begin
                In_Path := To_Unbounded_String (A);
             else
                IO.Put_Line (IO.Standard_Error,
-                 "kadaif: unexpected extra argument: " & A);
+                 "kadayif: unexpected extra argument: " & A);
                Usage;
                CLI.Set_Exit_Status (2);
                return;
@@ -108,7 +108,7 @@ begin
 
    if not Ada.Directories.Exists (To_String (In_Path)) then
       IO.Put_Line (IO.Standard_Error,
-        "kadaif: input file not found: " & To_String (In_Path));
+        "kadayif: input file not found: " & To_String (In_Path));
       CLI.Set_Exit_Status (1);
       return;
    end if;
@@ -153,7 +153,7 @@ begin
          Kurt.Sema.Check (Unit, Errors);
          if Errors > 0 then
             IO.Put_Line (IO.Standard_Error,
-              "kadaif: aborting after"
+              "kadayif: aborting after"
               & Natural'Image (Errors) & " type error(s)");
             CLI.Set_Exit_Status (1);
             return;
@@ -161,23 +161,23 @@ begin
       end;
 
       Kurt.Codegen.Emit (Unit, To_String (Out_Path));
-      IO.Put_Line ("kadaif: wrote " & To_String (Out_Path));
+      IO.Put_Line ("kadayif: wrote " & To_String (Out_Path));
    end;
 
 exception
    when E : Kurt.Lexer.Translation_Failure =>
       IO.Put_Line (IO.Standard_Error,
-        "kadaif: translation failure: "
+        "kadayif: translation failure: "
         & Ada.Exceptions.Exception_Message (E));
       CLI.Set_Exit_Status (1);
    when E : Kurt.Parser.Syntax_Error =>
       IO.Put_Line (IO.Standard_Error,
-        "kadaif: syntax error: "
+        "kadayif: syntax error: "
         & Ada.Exceptions.Exception_Message (E));
       CLI.Set_Exit_Status (1);
    when E : others =>
       IO.Put_Line (IO.Standard_Error,
-        "kadaif: internal error: "
+        "kadayif: internal error: "
         & Ada.Exceptions.Exception_Information (E));
       CLI.Set_Exit_Status (3);
 end Main;

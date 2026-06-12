@@ -348,7 +348,7 @@ package body Kurt.Sema is
       procedure Error (Msg : String) is
       begin
          Errors := Errors + 1;
-         IO.Put_Line (IO.Standard_Error, "kadaif: type error: " & Msg);
+         IO.Put_Line (IO.Standard_Error, "kadayif: type error: " & Msg);
       end Error;
 
       function Find_Sig (Name : String; Found : out Sig) return Boolean is

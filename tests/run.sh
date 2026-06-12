@@ -4,7 +4,7 @@
 
 set -u
 HERE=${0:A:h}
-KADAIF=$HERE/../bin/main
+KADAYIF=$HERE/../bin/main
 SDK=$(xcrun --show-sdk-path)
 TMP=$(mktemp -d)
 trap "rm -rf $TMP" EXIT
@@ -12,7 +12,7 @@ trap "rm -rf $TMP" EXIT
 pass=0; fail=0
 for f in $HERE/*.kr; do
   name=${f:t:r}
-  if $KADAIF "$f" -o "$TMP/$name.s" >/dev/null 2>&1 \
+  if $KADAYIF "$f" -o "$TMP/$name.s" >/dev/null 2>&1 \
      && as -arch arm64 "$TMP/$name.s" -o "$TMP/$name.o" 2>/dev/null \
      && ld "$TMP/$name.o" -lSystem -syslibroot "$SDK" -e _main -o "$TMP/$name" 2>/dev/null; then
     out=$("$TMP/$name" 2>&1); code=$?

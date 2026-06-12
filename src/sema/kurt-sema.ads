@@ -1,4 +1,4 @@
---  Kadaif semantic analysis (bootstrap).
+--  Kadayif semantic analysis (bootstrap).
 --
 --  Implements the two-phase model of §10.2:
 --    Phase 1 — collect every fn / @dyn-prototype signature.

@@ -866,7 +866,7 @@ package body Kurt.Codegen is
       end loop;
 
       IO.Create (F, IO.Out_File, Out_Path);
-      IO.Put_Line (F, "// kadaif bootstrap output");
+      IO.Put_Line (F, "// kadayif bootstrap output");
       IO.Put_Line (F, "// target: arm64-apple-darwin");
 
       Emit_String_Pool (F, Pool);
