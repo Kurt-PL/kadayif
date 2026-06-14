@@ -1,8 +1,8 @@
 @dyn as posix { variadic fn printf(&raw ui1) -> si4; }
 
 struct natural { a: ui1, b: si4, c: ui1 }                 // 4+4+1 -> pad -> 12
-struct squeezed { a: ui1, b: si4, c: ui1 } with repr(packed)   // 6, align 1
-struct spaced { a: ui1 } with align(16)                   // 16, align 16
+struct squeezed { a: ui1, b: si4, c: ui1 } with repr(packed);   // 6, align 1
+struct spaced { a: ui1 } with align(16);                   // 16, align 16
 
 fn main() -> ui1 {
     airside { posix::printf("n=%lu/%lu p=%lu/%lu s=%lu/%lu\n\0".ptr,
