@@ -1508,9 +1508,12 @@ package body Kurt.Parser is
    procedure Parse_Impl_Decl
      (C           : in out Cursor;
       Fns         : in out Fn_Vectors.Vector;
-      Trait_Impls : in out Trait_Impl_Vectors.Vector)
+      Trait_Impls : in out Trait_Impl_Vectors.Vector;
+      Gen_Methods : in out Gen_Method_Vectors.Vector)
    is
-      Ty_Name : SU.Unbounded_String;
+      Ty_Name     : SU.Unbounded_String;
+      Impl_Params : Generic_Param_Vectors.Vector;  --  §9.1 `impl(...)` list
+      Is_Generic  : Boolean := False;
 
       --  Replace the `self_t` placeholder with the impl type, in place.
       procedure Subst_Self (T : Type_Access) is
@@ -1541,12 +1544,52 @@ package body Kurt.Parser is
       TI : Trait_Impl;        --  populated only for `impl Type as Trait`
    begin
       Expect (C, Kw_Impl, "'impl'");
+      --  §9.1 / §9.4: optional `impl(P [: bound]…)` generic parameter list,
+      --  immediately after `impl` and before the target type.
+      if C.Cur.Kind = Punct_LParen then
+         Advance (C);
+         loop
+            declare
+               P : Generic_Param;
+            begin
+               P.Name := Take_Ident (C, "impl generic parameter");
+               if C.Cur.Kind = Punct_Colon then
+                  Advance (C);
+                  loop
+                     P.Bounds.Append (Take_Ident (C, "bound name"));
+                     exit when C.Cur.Kind /= Op_Plus;
+                     Advance (C);
+                  end loop;
+               end if;
+               Impl_Params.Append (P);
+            end;
+            exit when C.Cur.Kind /= Punct_Comma;
+            Advance (C);
+            exit when C.Cur.Kind = Punct_RParen;  --  trailing comma
+         end loop;
+         Expect (C, Punct_RParen, "')' to close impl generic parameters");
+         Is_Generic := True;
+      end if;
       Ty_Name := Take_Ident (C, "impl type name");
       TI.Ty_Name := Ty_Name;
+      --  The target's own generic clause `Owner.<P…>` binds the impl
+      --  parameters to the owner; the names are recorded in Impl_Params,
+      --  so the clause itself is consumed and discarded here.
+      declare
+         Dummy : Generic_Param_Vectors.Vector;
+      begin
+         Parse_Opt_Generic_Params_Bounded (C, Dummy);
+      end;
       --  §9.4: `impl Type as Trait`. (`impl Type` is an inherent block.)
       if C.Cur.Kind = Kw_As then
          Advance (C);
          TI.Trait_Name := Take_Ident (C, "trait name");
+         --  A trait may carry its own generic clause `as Trait.<…>`.
+         declare
+            Dummy : Generic_Param_Vectors.Vector;
+         begin
+            Parse_Opt_Generic_Params_Bounded (C, Dummy);
+         end;
       end if;
       Expect (C, Punct_LBrace, "'{' to open impl block");
       while C.Cur.Kind /= Punct_RBrace and then C.Cur.Kind /= Tok_EOF loop
@@ -1570,26 +1613,46 @@ package body Kurt.Parser is
             Fn : Fn_Decl := Parse_Fn_Decl (C);
             MN : constant SU.Unbounded_String := Fn.Header.Name;
          begin
-            for I in Fn.Header.Params.First_Index ..
-                     Fn.Header.Params.Last_Index
-            loop
-               Subst_Self (Fn.Header.Params.Element (I).Ty);
-            end loop;
-            Subst_Self (Fn.Header.Return_Type);
-            --  §9.2: the method is namespaced under its type. Both
-            --  inherent and trait-impl methods lower to `Type$method`,
-            --  so static dispatch finds them uniformly.
-            Fn.Header.Name := SU.To_Unbounded_String
-              (SU.To_String (Ty_Name) & "$" & SU.To_String (MN));
-            Fns.Append (Fn);
-            if SU.Length (TI.Trait_Name) > 0 then
-               TI.Methods.Append (MN);
+            if Is_Generic then
+               --  §9.1/§9.4 generic impl: keep the method as a template.
+               --  `self_t` stays a placeholder and the impl parameters are
+               --  free; Kurt.Mono specialises it per owner instance. The
+               --  bare method name is preserved (mangled to
+               --  `Owner$args$method` at instantiation time).
+               Gen_Methods.Append
+                 ((Owner      => Ty_Name,
+                   Trait_Name => TI.Trait_Name,
+                   Gen_Params => Impl_Params,
+                   Method     => Fn));
+               if SU.Length (TI.Trait_Name) > 0 then
+                  TI.Methods.Append (MN);
+               end if;
+            else
+               for I in Fn.Header.Params.First_Index ..
+                        Fn.Header.Params.Last_Index
+               loop
+                  Subst_Self (Fn.Header.Params.Element (I).Ty);
+               end loop;
+               Subst_Self (Fn.Header.Return_Type);
+               --  §9.2: the method is namespaced under its type. Both
+               --  inherent and trait-impl methods lower to `Type$method`,
+               --  so static dispatch finds them uniformly.
+               Fn.Header.Name := SU.To_Unbounded_String
+                 (SU.To_String (Ty_Name) & "$" & SU.To_String (MN));
+               Fns.Append (Fn);
+               if SU.Length (TI.Trait_Name) > 0 then
+                  TI.Methods.Append (MN);
+               end if;
             end if;
          end;
        end if;
       end loop;
       Expect (C, Punct_RBrace, "'}' to close impl block");
-      if SU.Length (TI.Trait_Name) > 0 then
+      --  A concrete `impl Type as Trait` registers a dispatch-table
+      --  candidate; a generic trait impl provides static methods only
+      --  (per-instance dispatch tables are out of scope for the
+      --  bootstrap), so it is not registered here.
+      if SU.Length (TI.Trait_Name) > 0 and then not Is_Generic then
          Trait_Impls.Append (TI);
       end if;
    end Parse_Impl_Decl;
@@ -1774,6 +1837,8 @@ package body Kurt.Parser is
             end Parse_Struct_With_Item;
          begin
             if C.Cur.Kind = Punct_LBrace then
+               --  with_braced (§5.11): the closing brace terminates the
+               --  clause; no trailing ';'.
                Advance (C);
                loop
                   exit when C.Cur.Kind = Punct_RBrace;
@@ -1783,12 +1848,13 @@ package body Kurt.Parser is
                end loop;
                Expect (C, Punct_RBrace, "'}'");
             else
+               --  with_single (§5.11): a terminating ';' is required
+               --  (§5.6: `composite_form, with_single, ';'`).
                Parse_Struct_With_Item;
+               Expect (C, Punct_Semi,
+                 "';' after single-item `with` clause (spec 5.11)");
             end if;
          end;
-      end if;
-      if C.Cur.Kind = Punct_Semi then
-         Advance (C);
       end if;
       return D;
    end Parse_Struct_Decl;
@@ -1951,8 +2017,12 @@ package body Kurt.Parser is
       --  Items recognised by the bootstrap: `contract [-> type]`, `discrim
       --  (type)`. Other items (repr, align, …) are parsed-and-discarded.
       if C.Cur.Kind = Kw_With then
+       declare
+         Is_Braced : Boolean := False;
+       begin
          Advance (C);
          if C.Cur.Kind = Punct_LBrace then
+            Is_Braced := True;
             Advance (C);
             loop
                exit when C.Cur.Kind = Punct_RBrace;
@@ -2032,10 +2102,13 @@ package body Kurt.Parser is
               "expected 'contract' or '{' after 'with', got " & Image (C.Cur)
               & " at line" & Positive'Image (C.Cur.Line);
          end if;
-      end if;
-      --  §5.7: a terminating ';' after the declaration is optional.
-      if C.Cur.Kind = Punct_Semi then
-         Advance (C);
+         --  §5.7 / §5.11: `with_single` requires a terminating ';';
+         --  `with_braced` is terminated by its closing brace.
+         if not Is_Braced then
+            Expect (C, Punct_Semi,
+              "';' after single-item `with` clause (spec 5.11)");
+         end if;
+       end;
       end if;
       return D;
    end Parse_Enum_Decl;
@@ -2110,7 +2183,7 @@ package body Kurt.Parser is
             when Kw_Enum =>
                U.Enums.Append (Parse_Enum_Decl (C));
             when Kw_Impl =>
-               Parse_Impl_Decl (C, U.Fns, U.Trait_Impls);
+               Parse_Impl_Decl (C, U.Fns, U.Trait_Impls, U.Gen_Methods);
             when Kw_Trait =>
                Parse_Trait_Decl (C, U.Traits);
             when Tok_Ident =>

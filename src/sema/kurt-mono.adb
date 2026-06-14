@@ -407,6 +407,42 @@ package body Kurt.Mono is
          return False;
       end Find_Gen_Fn;
 
+      --  Forward declarations: generic-impl method instantiation (defined
+      --  near the end) both drives and is driven by the type/block visitors.
+      procedure Visit_Type (T : Type_Access);
+      procedure Visit_Block (V : Stmt_Vectors.Vector);
+      procedure Instantiate_Owner_Methods
+        (Orig, Mangled : String; Args : Type_Vectors.Vector);
+
+      --  In-place rewrite of the `self_t` placeholder to a concrete type
+      --  name (the mangled owner instance). Distinct from Subst, which
+      --  substitutes generic *parameters*; `self_t` is neither.
+      procedure Subst_Self_Name (T : Type_Access; Concrete : String) is
+      begin
+         if T = null then
+            return;
+         end if;
+         case T.Kind is
+            when T_Named =>
+               if SU.To_String (T.Name) = "self_t" then
+                  T.Name := SU.To_Unbounded_String (Concrete);
+               end if;
+               for I in T.Args.First_Index .. T.Args.Last_Index loop
+                  Subst_Self_Name (T.Args.Element (I), Concrete);
+               end loop;
+            when T_Ref =>
+               Subst_Self_Name (T.Target, Concrete);
+            when T_Array =>
+               Subst_Self_Name (T.Elem, Concrete);
+            when T_Tuple =>
+               for I in T.Elems.First_Index .. T.Elems.Last_Index loop
+                  Subst_Self_Name (T.Elems.Element (I), Concrete);
+               end loop;
+            when T_Dyn =>
+               null;
+         end case;
+      end Subst_Self_Name;
+
       --  Generate the concrete declaration for one instance, if needed.
       procedure Ensure_Instance (Inst : Type_Access; Mangled : String) is
          Orig : constant String := SU.To_String (Inst.Name);
@@ -503,9 +539,14 @@ package body Kurt.Mono is
                end loop;
                if not T.Args.Is_Empty then
                   declare
-                     Mangled : constant String := Mangle (T);
+                     Orig_N     : constant String := SU.To_String (T.Name);
+                     Mangled    : constant String := Mangle (T);
+                     Saved_Args : constant Type_Vectors.Vector := T.Args;
                   begin
                      Ensure_Instance (T, Mangled);
+                     --  §9.1/§9.4: specialise the owner's generic-impl
+                     --  methods for this instance (e.g. Box$si4$get).
+                     Instantiate_Owner_Methods (Orig_N, Mangled, Saved_Args);
                      T.Name := SU.To_Unbounded_String (Mangled);
                      T.Args.Clear;
                   end;
@@ -726,6 +767,92 @@ package body Kurt.Mono is
                null;
          end case;
       end Visit_Stmt;
+
+      --  §9.1/§9.4: specialise every generic-impl method whose owner is the
+      --  generic type `Orig` for the concrete instance `Mangled` (with type
+      --  arguments `Args`). Produces `Mangled$method` concrete subroutines —
+      --  exactly the names static method dispatch resolves to — substituting
+      --  the impl parameters and rewriting `self_t` to the owner instance.
+      procedure Instantiate_Owner_Methods
+        (Orig, Mangled : String; Args : Type_Vectors.Vector)
+      is
+      begin
+         for GI in U.Gen_Methods.First_Index ..
+                   U.Gen_Methods.Last_Index
+         loop
+            declare
+               GM : constant Gen_Method := U.Gen_Methods.Element (GI);
+            begin
+               if SU.To_String (GM.Owner) = Orig then
+                  declare
+                     Bare     : constant String :=
+                       SU.To_String (GM.Method.Header.Name);
+                     New_Name : constant String := Mangled & "$" & Bare;
+                     PNames   : Path_Segments.Vector;
+                     New_Fn   : Fn_Decl;
+                  begin
+                     if not Already_Generated (New_Name) then
+                        if Natural (GM.Gen_Params.Length)
+                             /= Natural (Args.Length)
+                        then
+                           raise Mono_Error with
+                             "wrong number of type arguments for impl of '"
+                             & Orig & "'";
+                        end if;
+                        Generated.Append
+                          (SU.To_Unbounded_String (New_Name));
+                        for I in GM.Gen_Params.First_Index ..
+                                 GM.Gen_Params.Last_Index
+                        loop
+                           PNames.Append (GM.Gen_Params.Element (I).Name);
+                        end loop;
+
+                        New_Fn.Header := GM.Method.Header;
+                        New_Fn.Header.Name :=
+                          SU.To_Unbounded_String (New_Name);
+                        New_Fn.Header.Generic_Params.Clear;
+                        New_Fn.Header.Params.Clear;
+                        for K in GM.Method.Header.Params.First_Index ..
+                                 GM.Method.Header.Params.Last_Index
+                        loop
+                           New_Fn.Header.Params.Append
+                             ((Name => GM.Method.Header.Params
+                                         .Element (K).Name,
+                               Ty   => Subst
+                                 (GM.Method.Header.Params.Element (K).Ty,
+                                  PNames, Args)));
+                        end loop;
+                        New_Fn.Header.Return_Type :=
+                          Subst (GM.Method.Header.Return_Type,
+                                 PNames, Args);
+                        New_Fn.Body_Stmts :=
+                          Copy_Block (GM.Method.Body_Stmts, PNames, Args);
+
+                        --  self_t -> the concrete owner instance.
+                        for K in New_Fn.Header.Params.First_Index ..
+                                 New_Fn.Header.Params.Last_Index
+                        loop
+                           Subst_Self_Name
+                             (New_Fn.Header.Params.Element (K).Ty, Mangled);
+                        end loop;
+                        Subst_Self_Name (New_Fn.Header.Return_Type, Mangled);
+
+                        --  Re-visit for transitive instantiation.
+                        for K in New_Fn.Header.Params.First_Index ..
+                                 New_Fn.Header.Params.Last_Index
+                        loop
+                           Visit_Type (New_Fn.Header.Params.Element (K).Ty);
+                        end loop;
+                        Visit_Type (New_Fn.Header.Return_Type);
+                        Visit_Block (New_Fn.Body_Stmts);
+
+                        U.Fns.Append (New_Fn);
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+      end Instantiate_Owner_Methods;
 
    begin
       --  §9.3.4 default methods: for every `impl Type as Trait` that omits

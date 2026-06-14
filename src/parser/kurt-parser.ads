@@ -521,6 +521,22 @@ package Kurt.Parser is
    package Trait_Impl_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Trait_Impl);
 
+   --  §9.1 / §9.4 generic implementation `impl(P…) Owner.<P…> [as Trait]`.
+   --  The method is a template: its body keeps the `self_t` placeholder and
+   --  references the impl parameters `Gen_Params`. Kurt.Mono specialises it
+   --  per concrete owner instance (e.g. `Box$si4$get`) when that instance
+   --  is generated, substituting the impl parameters and rewriting `self_t`
+   --  to the mangled owner instance name.
+   type Gen_Method is record
+      Owner      : SU.Unbounded_String;          --  generic base, e.g. "Box"
+      Trait_Name : SU.Unbounded_String;          --  empty => inherent
+      Gen_Params : Generic_Param_Vectors.Vector; --  the `impl(...)` list
+      Method     : Fn_Decl;        --  Header.Name = bare method name
+   end record;
+
+   package Gen_Method_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Gen_Method);
+
    --  §5.3 top-level translation-time constant.
    type Const_Decl is record
       Name : SU.Unbounded_String;
@@ -551,6 +567,7 @@ package Kurt.Parser is
       Trait_Impls : Trait_Impl_Vectors.Vector;
       Consts     : Const_Vectors.Vector;    --  §5.3
       Statics    : Static_Vectors.Vector;   --  §5.4
+      Gen_Methods : Gen_Method_Vectors.Vector;  --  §9.1/§9.4 generic impl
       --  §5.9 generic subroutine templates, lifted out of Fns by
       --  Kurt.Mono. Checked once by Kurt.Sema under the type-erasure
       --  rule (§5.9.2); never lowered by codegen — only their
