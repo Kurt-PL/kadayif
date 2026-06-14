@@ -1,0 +1,25 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+struct pair.<T> { a: T, b: T }
+
+impl(T) pair.<T> {
+    fn first(&self) -> T { return self.a; }
+    fn second(&self) -> T { return self.b; }
+    fn replace_a($self, v: T) { self.a = v; }
+}
+
+trait Sum { fn total(&self) -> si4; }
+
+impl(T) pair.<T> as Sum {
+    fn total(&self) -> si4 { return (self.a as si4) + (self.b as si4); }
+}
+
+fn main() -> ui1 {
+    let p: pair.<si4> = pair.<si4> { a = 3, b = 4 };
+    mut q: pair.<si4> = pair.<si4> { a = 10, b = 20 };
+    q.replace_a(99);
+    let r: pair.<ui1> = pair.<ui1> { a = 5, b = 7 };
+    airside { posix::printf("first=%d second=%d a=%d t=%d u=%u tu=%d\n\0".ptr,
+        p.first(), p.second(), q.first(), p.total(), r.first(), r.total()); }
+    return 0;
+}
