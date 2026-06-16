@@ -38,6 +38,16 @@ package Kurt.Layout is
    function Field_Type
      (Struct_Name, Field : String) return Kurt.Parser.Type_Access;
 
+   --  §5.5.3 default-value expression for a field; null when it has none.
+   function Field_Default
+     (Struct_Name, Field : String) return Kurt.Parser.Expr_Access;
+
+   --  Declared field count and the Index-th field name (1-based) of a
+   --  struct, for iterating its full field list (e.g. to fill defaults).
+   function Struct_Field_Count (Struct_Name : String) return Natural;
+   function Struct_Field_Name
+     (Struct_Name : String; Index : Positive) return String;
+
    --  Whether Name denotes a registered enum type.
    function Is_Enum (Name : String) return Boolean;
 
@@ -92,6 +102,21 @@ package Kurt.Layout is
      (Enum_Name, Variant, Field : String) return Integer;
    function Variant_Field_Type_By_Name
      (Enum_Name, Variant, Field : String) return Kurt.Parser.Type_Access;
+
+   --  §4.5 Type_Access overloads: for the intrinsic verdict the payload
+   --  type/offset come from the type arguments; any other type delegates to
+   --  the by-name query. Used by the contract / variant-construction paths.
+   function Variant_Field_Offset
+     (T : Kurt.Parser.Type_Access; Variant : String; Field_No : Positive)
+      return Natural;
+   function Variant_Field_Type
+     (T : Kurt.Parser.Type_Access; Variant : String; Field_No : Positive)
+      return Kurt.Parser.Type_Access;
+   function Variant_Field_Offset_By_Name
+     (T : Kurt.Parser.Type_Access; Variant, Field : String) return Integer;
+   function Variant_Field_Type_By_Name
+     (T : Kurt.Parser.Type_Access; Variant, Field : String)
+      return Kurt.Parser.Type_Access;
 
    Layout_Error : exception;
 

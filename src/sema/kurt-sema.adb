@@ -95,6 +95,9 @@ package body Kurt.Sema is
                return "[" & Image (T.Elem) & ";"
                  & L & "]";
             end;
+         when T_Range =>
+            return (if T.Rng_Inclusive then "range_in.<" else "range_ex.<")
+              & Image (T.Rng_Elem) & ">";
          when T_Dyn =>
             return "dyn " & SU.To_String (T.Trait_Name);
       end case;
@@ -293,6 +296,9 @@ package body Kurt.Sema is
             return True;
          when T_Array =>
             return A.Len = B.Len and then Same_Type (A.Elem, B.Elem);
+         when T_Range =>
+            return A.Rng_Inclusive = B.Rng_Inclusive
+              and then Same_Type (A.Rng_Elem, B.Rng_Elem);
          when T_Dyn =>
             return SU.To_String (A.Trait_Name)
               = SU.To_String (B.Trait_Name);
@@ -338,6 +344,14 @@ package body Kurt.Sema is
       Sigs    : Sig_Vec.Vector;
       Scope   : SBind_Vec.Vector;
       Cur_Ret : Type_Access;
+      --  §6.1.8/§2.6: airside nesting depth for the statement being
+      --  checked. Raised inside an `airside { … }` block and for the whole
+      --  body of an `airside fn`. `uninit` is valid only when this is > 0.
+      In_Airside : Natural := 0;
+      --  §7.9: loop labels currently in scope, innermost last. A `break`/
+      --  `continue` with a label shall name one of these.
+      Label_Stack : Path_Segments.Vector;
+      In_Loop     : Natural := 0;   --  §7.7 plain break/continue need a loop
       --  §5.9.2 type-erasure context: the generic parameters of the
       --  template currently being checked (empty for concrete fns). A
       --  generic subroutine is checked ONCE against the abstract
@@ -796,6 +810,11 @@ package body Kurt.Sema is
                         end if;
                         E.Sem_Ty := FT;
                      end;
+                  elsif RTD /= null and then RTD.Kind = T_Range
+                    and then (FN = "start" or else FN = "end")
+                  then
+                     --  §4.8 range fields `start` / `end`, both type T.
+                     E.Sem_Ty := RTD.Rng_Elem;
                   elsif RT /= null and then RT.Kind = T_Tuple then
                      --  §6.2.2 tuple field by index `.0`, `.1`, …
                      declare
@@ -1294,6 +1313,36 @@ package body Kurt.Sema is
                            end if;
                         end;
                      end loop;
+
+                     --  §5.5.3: every declared field shall be either supplied
+                     --  by the literal or carry a default-value expression.
+                     for K in 1 .. Kurt.Layout.Struct_Field_Count (SN) loop
+                        declare
+                           FN : constant String :=
+                             Kurt.Layout.Struct_Field_Name (SN, K);
+                           Supplied : Boolean := False;
+                        begin
+                           for I in E.SL_Fields.First_Index ..
+                                    E.SL_Fields.Last_Index
+                           loop
+                              if SU.To_String (E.SL_Fields.Element (I).Name)
+                                   = FN
+                              then
+                                 Supplied := True;
+                              end if;
+                           end loop;
+                           --  §5.5.2 `?` padding fields are auto-zeroed and
+                           --  never supplied; exempt them from the rule.
+                           if FN /= "?"
+                             and then not Supplied
+                             and then Kurt.Layout.Field_Default (SN, FN) = null
+                           then
+                              Error ("struct literal of '" & SN
+                                     & "' omits field '" & FN
+                                     & "' which has no default (spec 5.5.3)");
+                           end if;
+                        end;
+                     end loop;
                   end if;
                   E.Sem_Ty := Mk_Named (SN);
                   return E.Sem_Ty;
@@ -1301,14 +1350,16 @@ package body Kurt.Sema is
 
             when E_Variant_New =>
                declare
-                  --  Concrete enum from the expected type when the written
-                  --  name is a generic template (post-monomorphisation).
-                  EN : constant String :=
+                  --  Concrete enum type from the expected type when the
+                  --  written name is a generic template / intrinsic verdict;
+                  --  keep its arguments (verdict payload types come from them).
+                  Conc : constant Type_Access :=
                     (if Expected /= null and then Expected.Kind = T_Named
                         and then Kurt.Layout.Is_Enum
                                    (SU.To_String (Expected.Name))
-                     then SU.To_String (Expected.Name)
-                     else SU.To_String (E.VN_Enum));
+                     then Expected
+                     else Mk_Named (SU.To_String (E.VN_Enum)));
+                  EN : constant String := SU.To_String (Conc.Name);
                   VN : constant String := SU.To_String (E.VN_Variant);
                begin
                   if not Kurt.Layout.Is_Enum (EN) then
@@ -1324,7 +1375,7 @@ package body Kurt.Sema is
                              E.VN_Fields.Element (I);
                            FT : constant Type_Access :=
                              Kurt.Layout.Variant_Field_Type_By_Name
-                               (EN, VN, SU.To_String (FI.Name));
+                               (Conc, VN, SU.To_String (FI.Name));
                            VT : Type_Access;
                         begin
                            if FT = null then
@@ -1342,7 +1393,7 @@ package body Kurt.Sema is
                         end;
                      end loop;
                   end if;
-                  E.Sem_Ty := Mk_Named (EN);
+                  E.Sem_Ty := Conc;
                   return E.Sem_Ty;
                end;
 
@@ -1396,7 +1447,7 @@ package body Kurt.Sema is
                                                         (K),
                                               Ty   => Kurt.Layout
                                                 .Variant_Field_Type
-                                                  (EN, VN, K)));
+                                                  (Scrut_Ty, VN, K)));
                                        end loop;
                                     end if;
                                  end;
@@ -1624,9 +1675,9 @@ package body Kurt.Sema is
                               if SC /= FC
                                 or else (SC > 0 and then not Same_Type
                                   (Kurt.Layout.Variant_Field_Type
-                                     (EN, SV, 1),
+                                     (OT, SV, 1),
                                    Kurt.Layout.Variant_Field_Type
-                                     (EN, FV, 1)))
+                                     (OT, FV, 1)))
                               then
                                  Error ("'!' on '" & Image (OT)
                                         & "' needs a declared inverted "
@@ -1668,9 +1719,9 @@ package body Kurt.Sema is
                             & "return a `contract` type; got '"
                             & Image (Cur_Ret) & "'");
                   elsif not Same_Type (Kurt.Layout.Variant_Field_Type
-                          (EN, Kurt.Layout.Contract_Fail_Variant (EN), 1),
+                          (IT, Kurt.Layout.Contract_Fail_Variant (EN), 1),
                         Kurt.Layout.Variant_Field_Type
-                          (Ret_EN,
+                          (Cur_Ret,
                            Kurt.Layout.Contract_Fail_Variant (Ret_EN), 1))
                   then
                      Error ("`?` failure payload type of '" & Image (IT)
@@ -1678,7 +1729,55 @@ package body Kurt.Sema is
                             & "type '" & Image (Cur_Ret) & "' (spec 7.2.4)");
                   end if;
                   E.Sem_Ty := Kurt.Layout.Variant_Field_Type
-                    (EN, Kurt.Layout.Contract_Success_Variant (EN), 1);
+                    (IT, Kurt.Layout.Contract_Success_Variant (EN), 1);
+                  return E.Sem_Ty;
+               end;
+
+            when E_Range =>
+               --  §4.8: `a..b` / `a..=b`. Both bounds share one numeric
+               --  element type T. A bare (unsuffixed) integer-literal bound
+               --  is flexible and adopts the other bound's type (§4.12).
+               declare
+                  function Flex (X : Expr_Access) return Boolean is
+                    (X.Kind = E_Int_Lit and then SU.Length (X.Int_Suffix) = 0);
+
+                  Exp_Elem : constant Type_Access :=
+                    (if Expected /= null and then Expected.Kind = T_Range
+                     then Expected.Rng_Elem else null);
+                  LT, HT, Elem : Type_Access;
+               begin
+                  if Exp_Elem /= null then
+                     LT := Infer (E.Rg_Lo, Exp_Elem);
+                     HT := Infer (E.Rg_Hi, Exp_Elem);
+                     Elem := Exp_Elem;
+                  elsif Flex (E.Rg_Lo) and then not Flex (E.Rg_Hi) then
+                     HT := Infer (E.Rg_Hi, null);
+                     LT := Infer (E.Rg_Lo, HT);
+                     Elem := HT;
+                  else
+                     LT := Infer (E.Rg_Lo, null);
+                     HT := Infer (E.Rg_Hi, LT);
+                     Elem := LT;
+                  end if;
+
+                  if Elem = null
+                    or else not (Is_Integer_Type (Elem)
+                                 or else Is_Float_Type (Elem))
+                  then
+                     Error ("range bounds shall be a numeric type (spec 4.8);"
+                            & " got '" & Image (Elem) & "'");
+                  elsif not Assignable (Elem, LT)
+                    or else not Assignable (Elem, HT)
+                  then
+                     Error ("range bounds have differing types '"
+                            & Image (LT) & "' and '" & Image (HT)
+                            & "' (spec 4.8)");
+                  end if;
+
+                  E.Sem_Ty := new AST_Type'
+                    (Kind          => T_Range,
+                     Rng_Inclusive => E.Rg_Inclusive,
+                     Rng_Elem      => Elem);
                   return E.Sem_Ty;
                end;
 
@@ -1802,29 +1901,17 @@ package body Kurt.Sema is
                      end if;
                   end;
 
-                  --  Result type verdict.<T, T>. Monomorphisation has
-                  --  already run, so the instance must exist — either via
-                  --  the expected type (a let annotation) or because some
-                  --  other annotation instantiated it.
+                  --  §4.5/§8.7 result type is the intrinsic verdict.<T, T>
+                  --  (T the referent type) — built directly, no instantiation.
                   if RT /= null then
                      declare
-                        Mangled : constant String :=
-                          "verdict$" & SU.To_String (RT.Name)
-                          & "$" & SU.To_String (RT.Name);
+                        V : constant Type_Access :=
+                          new AST_Type (Kind => T_Named);
                      begin
-                        if Expected /= null and then Expected.Kind = T_Named
-                          and then SU.To_String (Expected.Name) = Mangled
-                        then
-                           E.Sem_Ty := Expected;
-                        elsif Kurt.Layout.Is_Enum (Mangled) then
-                           E.Sem_Ty := Mk_Named (Mangled);
-                        else
-                           Error ("CAS result type 'verdict.<"
-                                  & Image (RT) & ", " & Image (RT)
-                                  & ">' was never instantiated -- annotate "
-                                  & "the binding (bootstrap limitation)");
-                           E.Sem_Ty := null;
-                        end if;
+                        V.Name := SU.To_Unbounded_String ("verdict");
+                        V.Args.Append (RT);
+                        V.Args.Append (RT);
+                        E.Sem_Ty := V;
                      end;
                   else
                      E.Sem_Ty := null;
@@ -1952,8 +2039,51 @@ package body Kurt.Sema is
                   E.Sem_Ty := Mk_Named ("uaddr");
                   return E.Sem_Ty;
                end;
+
+            when E_Uninit =>
+               --  §6.1.8: `uninit` is valid only as the value of an
+               --  assignment to a binding's object (handled in S_Let/S_Mut/
+               --  S_Assign). Reaching it through ordinary inference means it
+               --  appeared in some other position, which is ill-formed.
+               Error ("`uninit` shall appear only as the value of an "
+                      & "assignment to a binding (spec 6.1.8)");
+               E.Sem_Ty := Expected;
+               return Expected;
          end case;
       end Infer;
+
+      --  §6.1.8 shared check for a `uninit` value in a valid assignment
+      --  position: it must occur in an airside region, and the target type
+      --  must be known (so the binding's object has a determinate type).
+      procedure Check_Uninit (Target : Type_Access) is
+      begin
+         if In_Airside = 0 then
+            Error ("`uninit` shall appear only inside an `airside` block or "
+                   & "`airside fn` body (spec 6.1.8)");
+         end if;
+         if Target = null then
+            Error ("`uninit` requires a known target type; annotate the "
+                   & "binding (spec 6.1.8)");
+         end if;
+      end Check_Uninit;
+
+      --  §7.9: a labelled `break`/`continue` shall name a loop label that is
+      --  in scope. An empty label (plain break/continue) is always allowed.
+      procedure Check_Loop_Label (Label : SU.Unbounded_String) is
+      begin
+         if SU.Length (Label) = 0 then
+            return;
+         end if;
+         for I in Label_Stack.First_Index .. Label_Stack.Last_Index loop
+            if SU.To_String (Label_Stack.Element (I))
+                 = SU.To_String (Label)
+            then
+               return;
+            end if;
+         end loop;
+         Error ("`break`/`continue` names loop label ''" & SU.To_String (Label)
+                & "' which is not in scope (spec 7.9)");
+      end Check_Loop_Label;
 
       --------------------------------------------------------------------
       procedure Check_Stmt (S : Stmt_Access);
@@ -1991,7 +2121,12 @@ package body Kurt.Sema is
                declare
                   Ty : Type_Access := S.L_Ty;
                begin
-                  if S.L_Init /= null then
+                  if S.L_Init /= null and then S.L_Init.Kind = E_Uninit then
+                     --  §6.1.8: `let/mut x: T = uninit;` — no value to infer
+                     --  from, so the type annotation is required.
+                     Check_Uninit (Ty);
+                     S.L_Init.Sem_Ty := Ty;
+                  elsif S.L_Init /= null then
                      declare
                         IT : constant Type_Access := Infer (S.L_Init, Ty);
                      begin
@@ -2049,6 +2184,17 @@ package body Kurt.Sema is
                end;
 
             when S_Assign =>
+               if S.Asn_Rhs.Kind = E_Uninit then
+                  --  §6.1.8: `place = uninit;` — establishes the contained
+                  --  state without storing a value.
+                  declare
+                     LT : constant Type_Access := Infer (S.Asn_Lhs, null);
+                  begin
+                     Check_Uninit (LT);
+                     S.Asn_Rhs.Sem_Ty := LT;
+                  end;
+                  return;
+               end if;
                declare
                   LT : constant Type_Access := Infer (S.Asn_Lhs, null);
                   RT : constant Type_Access := Infer (S.Asn_Rhs, LT);
@@ -2107,13 +2253,61 @@ package body Kurt.Sema is
                   CT : constant Type_Access :=
                     Infer (S.W_Cond, Mk_Named ("bool"));
                   pragma Unreferenced (CT);
+                  Has_Label : constant Boolean := SU.Length (S.W_Label) > 0;
                begin
+                  In_Loop := In_Loop + 1;
+                  if Has_Label then
+                     Label_Stack.Append (S.W_Label);   --  §7.9 in scope
+                  end if;
                   Check_Block (S.W_Body);
                   Check_Block (S.W_Then);   --  §7.5.3 step block
+                  if Has_Label then
+                     Label_Stack.Delete_Last;
+                  end if;
+                  In_Loop := In_Loop - 1;
                end;
 
             when S_If =>
-               if S.SI_Is_Contract then
+               if S.SI_Is_Let then
+                  --  §7.3.3 `if let Enum::Variant { binds } = e { } else { }`.
+                  declare
+                     CT : constant Type_Access := Infer (S.SI_Cond, null);
+                     EN : constant String :=
+                       (if CT /= null and then CT.Kind = T_Named
+                        then SU.To_String (CT.Name) else "");
+                     VN : constant String :=
+                       SU.To_String (S.SI_Let_Pat.Path.Last_Element);
+                     Saved : Natural;
+                  begin
+                     if EN = "" or else not Kurt.Layout.Is_Enum (EN) then
+                        Error ("`if let` requires an enum value; got '"
+                               & Image (CT) & "' (spec 7.3.3)");
+                        Check_Block (S.SI_Then);
+                        Check_Block (S.SI_Else);
+                     elsif not Kurt.Layout.Has_Variant (EN, VN) then
+                        Error ("enum '" & EN & "' has no variant '" & VN
+                               & "' (spec 7.3.3)");
+                        Check_Block (S.SI_Then);
+                        Check_Block (S.SI_Else);
+                     else
+                        --  then-block sees the positional payload bindings.
+                        Saved := Natural (Scope.Length);
+                        for K in 1 .. Natural (S.SI_Let_Pat.Bindings.Length)
+                        loop
+                           Scope.Append
+                             ((Name => S.SI_Let_Pat.Bindings.Element (K),
+                               Ty   => Kurt.Layout.Variant_Field_Type
+                                         (CT, VN, K)));
+                        end loop;
+                        Check_Block (S.SI_Then);
+                        while Natural (Scope.Length) > Saved loop
+                           Scope.Delete_Last;
+                        end loop;
+                        --  else-block binds nothing (§7.3.3).
+                        Check_Block (S.SI_Else);
+                     end if;
+                  end;
+               elsif S.SI_Is_Contract then
                   --  §7 contract-binding `if e -> v | err`.
                   declare
                      CT : constant Type_Access := Infer (S.SI_Cond, null);
@@ -2134,7 +2328,7 @@ package body Kurt.Sema is
                         Scope.Append
                           ((Name => S.SI_Succ_Bind,
                             Ty   => Kurt.Layout.Variant_Field_Type
-                                      (EN,
+                                      (CT,
                                        Kurt.Layout.Contract_Success_Variant
                                          (EN), 1)));
                         Check_Block (S.SI_Then);
@@ -2147,7 +2341,7 @@ package body Kurt.Sema is
                            Scope.Append
                              ((Name => S.SI_Fail_Bind,
                                Ty   => Kurt.Layout.Variant_Field_Type
-                                         (EN,
+                                         (CT,
                                           Kurt.Layout.Contract_Fail_Variant
                                             (EN), 1)));
                         end if;
@@ -2169,7 +2363,9 @@ package body Kurt.Sema is
                end if;
 
             when S_Airside_Block =>
+               In_Airside := In_Airside + 1;
                Check_Block (S.A_Stmts);
+               In_Airside := In_Airside - 1;
 
             when S_Extract =>
                --  §7: `let v <- e else err { … }`. e is a contract value;
@@ -2193,7 +2389,7 @@ package body Kurt.Sema is
                         Scope.Append
                           ((Name => S.X_Err,
                             Ty   => Kurt.Layout.Variant_Field_Type
-                                      (EN,
+                                      (ET,
                                        Kurt.Layout.Contract_Fail_Variant (EN),
                                        1)));
                      end if;
@@ -2205,15 +2401,18 @@ package body Kurt.Sema is
                      Scope.Append
                        ((Name => S.X_Bind,
                          Ty   => Kurt.Layout.Variant_Field_Type
-                                   (EN,
+                                   (ET,
                                     Kurt.Layout.Contract_Success_Variant (EN),
                                     1)));
                   end if;
                end;
 
             when S_Break =>
-               --  §7.7: break may carry a value. Loop-context and value-
-               --  type validation deferred.
+               --  §7.7/§7.9: break may carry a value and/or a target label.
+               if In_Loop = 0 then
+                  Error ("`break` shall appear only within a loop (spec 7.7)");
+               end if;
+               Check_Loop_Label (S.Brk_Label);
                if S.Brk_Val /= null then
                   declare
                      T : constant Type_Access := Infer (S.Brk_Val, null);
@@ -2221,7 +2420,12 @@ package body Kurt.Sema is
                   begin null; end;
                end if;
             when S_Continue =>
-               null;
+               --  §7.9: optional target label.
+               if In_Loop = 0 then
+                  Error ("`continue` shall appear only within a loop "
+                         & "(spec 7.7)");
+               end if;
+               Check_Loop_Label (S.Cont_Label);
             when S_Express =>
                --  §7.8: type checked against the targeted block's express
                --  type once block-expressions are tracked; for now just
@@ -2234,6 +2438,63 @@ package body Kurt.Sema is
       end Check_Stmt;
 
    begin
+      --  §5.17: within the top-level scope a name shall be declared at most
+      --  once, uniformly across fn / struct / enum / trait / const / static.
+      --  Names containing '$' are compiler-generated (monomorphised
+      --  instances, lowered `Type$method` impl items) and are unique by
+      --  construction, so they are excluded to avoid false positives.
+      declare
+         Seen : Path_Segments.Vector;
+
+         function Is_Generated (Name : String) return Boolean is
+         begin
+            for I in Name'Range loop
+               if Name (I) = '$' then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Is_Generated;
+
+         procedure Note (Name : String; Kind : String) is
+         begin
+            if Is_Generated (Name) then
+               return;
+            end if;
+            for I in Seen.First_Index .. Seen.Last_Index loop
+               if SU.To_String (Seen.Element (I)) = Name then
+                  Error ("duplicate declaration of '" & Name
+                         & "' (" & Kind & "): a name shall be declared at "
+                         & "most once in a scope (spec 5.17)");
+                  return;
+               end if;
+            end loop;
+            Seen.Append (SU.To_Unbounded_String (Name));
+         end Note;
+      begin
+         for I in U.Structs.First_Index .. U.Structs.Last_Index loop
+            Note (SU.To_String (U.Structs.Element (I).Name), "struct");
+         end loop;
+         for I in U.Enums.First_Index .. U.Enums.Last_Index loop
+            Note (SU.To_String (U.Enums.Element (I).Name), "enum");
+         end loop;
+         for I in U.Traits.First_Index .. U.Traits.Last_Index loop
+            Note (SU.To_String (U.Traits.Element (I).Name), "trait");
+         end loop;
+         for I in U.Consts.First_Index .. U.Consts.Last_Index loop
+            Note (SU.To_String (U.Consts.Element (I).Name), "const");
+         end loop;
+         for I in U.Statics.First_Index .. U.Statics.Last_Index loop
+            Note (SU.To_String (U.Statics.Element (I).Name), "static");
+         end loop;
+         for I in U.Fns.First_Index .. U.Fns.Last_Index loop
+            Note (SU.To_String (U.Fns.Element (I).Header.Name), "fn");
+         end loop;
+         for I in U.Gen_Fns.First_Index .. U.Gen_Fns.Last_Index loop
+            Note (SU.To_String (U.Gen_Fns.Element (I).Header.Name), "fn");
+         end loop;
+      end;
+
       --  Phase 1: collect signatures (fns and @dyn prototypes).
       for I in U.Fns.First_Index .. U.Fns.Last_Index loop
          declare
@@ -2345,6 +2606,30 @@ package body Kurt.Sema is
                       & "': align(" & Natural'Image (D.Align_N)
                       & " ) shall be a power of two (spec 4.11.5)");
             end if;
+
+            --  §5.5.3: type-check each default-value expression against its
+            --  field type (and give it a Sem_Ty for codegen to lower).
+            for J in D.Fields.First_Index .. D.Fields.Last_Index loop
+               declare
+                  Fld : constant Struct_Field := D.Fields.Element (J);
+               begin
+                  if Fld.Default /= null then
+                     declare
+                        DT : constant Type_Access :=
+                          Infer (Fld.Default, Fld.Ty);
+                     begin
+                        if Fld.Ty /= null and then not Assignable (Fld.Ty, DT)
+                        then
+                           Error ("struct '" & SU.To_String (D.Name)
+                                  & "': default for field '"
+                                  & SU.To_String (Fld.Name) & "' is '"
+                                  & Image (DT) & "' but the field is '"
+                                  & Image (Fld.Ty) & "' (spec 5.5.3)");
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
          end;
       end loop;
 
@@ -2479,11 +2764,15 @@ package body Kurt.Sema is
                Cur_Ret := Fn.Header.Return_Type;
             end if;
 
+            --  §5.1.1: the whole body of an `airside fn` is an airside
+            --  region (§6.1.8 lets `uninit` appear there).
+            In_Airside := (if Fn.Header.Is_Airside then 1 else 0);
             for J in Fn.Body_Stmts.First_Index ..
                      Fn.Body_Stmts.Last_Index
             loop
                Check_Stmt (Fn.Body_Stmts.Element (J));
             end loop;
+            In_Airside := 0;
          end Check_Fn;
       begin
          for I in U.Fns.First_Index .. U.Fns.Last_Index loop

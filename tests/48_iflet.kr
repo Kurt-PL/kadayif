@@ -1,0 +1,27 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §7.3.3 if let: refutable variant pattern branching. On a match the
+// positional payload bindings are available in the then-block; otherwise
+// the else-block runs (no bindings). Composes with else-if chaining.
+enum Packet { Data { code: si4 } = 1, Ack = 2, Nak = 3 }
+
+fn classify(p: Packet) -> si4 {
+    if let Packet::Data { c } = p {
+        return c;
+    } else if let Packet::Ack = p {
+        return -1;
+    } else {
+        return -2;
+    }
+}
+
+fn main() -> ui1 {
+    let a: Packet = Packet::Data { code = 5 };
+    let b: Packet = Packet::Ack;
+    let c: Packet = Packet::Nak;
+    airside {
+        posix::printf("a=%d b=%d c=%d\n\0".ptr,
+            classify(a), classify(b), classify(c));
+    }                                                   // 5 -1 -2
+    return 0;
+}

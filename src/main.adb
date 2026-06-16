@@ -1,9 +1,21 @@
+--  Kadayif command-line entry point.
+--
+--  A conventional compiler command-line interface: the -h/-v/-a self-reports,
+--  the -y semantic-check phase, -S assembly, -c object, and the default
+--  translate-and-link to an executable.
+--
+--  Assembly and linking are delegated to the host `as`/`ld` through the C
+--  library `system(3)`. That binding uses only standard Ada 2012 facilities
+--  (Interfaces.C from Annex B plus a Convention-C Import); no GNAT-specific
+--  package is used anywhere in this compiler.
+
 with Ada.Command_Line;
 with Ada.Text_IO;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
 with Ada.Directories;
 with Ada.Exceptions;
+with Interfaces.C;
 
 with Kurt.Lexer;
 with Kurt.Parser;
@@ -16,16 +28,119 @@ procedure Main is
 
    package CLI renames Ada.Command_Line;
    package IO  renames Ada.Text_IO;
+   package Dir renames Ada.Directories;
+   use Ada.Strings.Unbounded;
 
-   procedure Usage is
+   --  Exit statuses: success / failure, with usage and internal-error codes
+   --  refining "failure".
+   Exit_OK       : constant := 0;
+   Exit_TransErr : constant := 1;   --  translation or toolchain failure
+   Exit_Usage    : constant := 2;   --  malformed / unsupported command line
+   Exit_Internal : constant := 3;   --  compiler bug (unexpected exception)
+   pragma Unreferenced (Exit_OK);
+
+   Version_Line : constant String :=
+     "kadayif 0.0.0-aleph.1 - Kurt bootstrap compiler (translates KPLSS 0.1)";
+
+   --  C library system(3): run a command via the shell, return its status.
+   --  Standard Ada 2012 (Annex B Interfaces.C + a Convention-C import) -
+   --  not a GNAT extension.
+   function C_System (Command : Interfaces.C.char_array)
+     return Interfaces.C.int
+     with Import, Convention => C, External_Name => "system";
+
+   --  What the command was asked to do.
+   type Mode_Kind is
+     (M_Build,      --  default: translate, assemble, and link -> executable
+      M_Obj,        --  -c: translate and assemble -> object, no link
+      M_Asm,        --  -S: emit assembly and stop
+      M_Check,      --  -y: stages 1-4 only, a full semantic check, no output
+      M_Help,       --  -h: report usage
+      M_Version,    --  -v: report version
+      M_Licence);   --  -a: report legal status
+
+   procedure Put_E (S : String) is
    begin
-      IO.Put_Line (IO.Standard_Error,
-        "usage: kadayif <input.kr> [-o <output.s>]");
-      IO.Put_Line (IO.Standard_Error,
-        "  L0 bootstrap: accepts only `fn NAME() -> ui1 { return N; }`.");
-   end Usage;
+      IO.Put_Line (IO.Standard_Error, S);
+   end Put_E;
 
-   --  Read an entire file into a String, byte-for-byte.
+   --  Run a shell command through system(3); True iff it exited 0.
+   function Run (Command : String) return Boolean is
+      use type Interfaces.C.int;
+   begin
+      return C_System (Interfaces.C.To_C (Command)) = 0;
+   end Run;
+
+   --  Shell-quote a path so spaces and most metacharacters are literal.
+   function Q (S : String) return String is
+      R : Unbounded_String := To_Unbounded_String ("'");
+   begin
+      for C of S loop
+         if C = ''' then
+            Append (R, "'\''");   --  close, escaped quote, reopen
+         else
+            Append (R, C);
+         end if;
+      end loop;
+      Append (R, "'");
+      return To_String (R);
+   end Q;
+
+   procedure Show_Version is
+   begin
+      IO.Put_Line (Version_Line);
+   end Show_Version;
+
+   --  `-a`: state the terms under which the utility is distributed.
+   procedure Show_Licence is
+   begin
+      IO.Put_Line (Version_Line);
+      IO.Put_Line ("");
+      IO.Put_Line ("Licence: ISC. Copyright 2026 HanuL.");
+      IO.Put_Line ("Full text: see the LICENCE file in the kadayif "
+                   & "distribution.");
+      IO.Put_Line ("Provided ""as is"" without warranty of any kind; the "
+                   & "author is");
+      IO.Put_Line ("not liable for any damages arising from its use.");
+   end Show_Licence;
+
+   --  `-h`: a usage summary naming every option.
+   procedure Show_Usage is
+   begin
+      IO.Put_Line (Version_Line);
+      IO.Put_Line ("");
+      IO.Put_Line ("Compile a Kurt source file (arm64-apple-darwin).");
+      IO.Put_Line ("");
+      IO.Put_Line ("USAGE:");
+      IO.Put_Line ("    kadayif [options] <input.kr>");
+      IO.Put_Line ("");
+      IO.Put_Line ("PHASE OPTIONS:");
+      IO.Put_Line ("    (default)     Translate, assemble, and link to an "
+                   & "executable.");
+      IO.Put_Line ("    -c            Translate and assemble to an object "
+                   & "(.o); no link.");
+      IO.Put_Line ("    -S            Emit assembly and stop (.s).");
+      IO.Put_Line ("    -y            Semantic check only (stages 1-4); no "
+                   & "output file.");
+      IO.Put_Line ("    -o <file>     Output path (default: a.out / .o / "
+                   & ".s by phase).");
+      IO.Put_Line ("");
+      IO.Put_Line ("SELF-REPORTS (write to stdout, exit 0):");
+      IO.Put_Line ("    -h, --help    Report usage.");
+      IO.Put_Line ("    -v, --version Report version.");
+      IO.Put_Line ("    -a, --licence Report legal status.");
+      IO.Put_Line ("");
+      IO.Put_Line ("PIPELINE:");
+      IO.Put_Line ("    .kr -> lex -> parse -> built-ins -> mono -> layout "
+                   & "-> sema -> codegen");
+      IO.Put_Line ("         -> as -> ld");
+      IO.Put_Line ("");
+      IO.Put_Line ("NOT YET IMPLEMENTED: -E -G -O -T and other options.");
+      IO.Put_Line ("");
+      IO.Put_Line ("EXIT STATUS: 0 ok   1 failure   2 usage   3 internal");
+   end Show_Usage;
+
+   --  Read an entire file into a String, byte-for-byte (section 3.1).
    function Read_File (Path : String) return String is
       package SIO renames Ada.Streams.Stream_IO;
       F  : SIO.File_Type;
@@ -35,41 +150,88 @@ procedure Main is
       L := SIO.Size (F);
       declare
          use Ada.Streams;
-         Buf : Stream_Element_Array (1 .. Stream_Element_Offset (L));
-         Got : Stream_Element_Offset;
+         Buf   : Stream_Element_Array (1 .. Stream_Element_Offset (L));
+         Got   : Stream_Element_Offset;
          Out_S : String (1 .. Natural (L));
       begin
          SIO.Read (F, Buf, Got);
          SIO.Close (F);
          for I in Out_S'Range loop
-            Out_S (I) := Character'Val
-              (Buf (Stream_Element_Offset (I)));
+            Out_S (I) := Character'Val (Buf (Stream_Element_Offset (I)));
          end loop;
          return Out_S;
       end;
    end Read_File;
 
-   --  Replace the trailing ".kr" extension with ".s". If no .kr suffix,
-   --  just append ".s".
-   function Default_Out_Path (Input : String) return String is
+   --  Strip a trailing ".kr" from a source path (its stem).
+   function Stem (Input : String) return String is
    begin
       if Input'Length >= 3
         and then Input (Input'Last - 2 .. Input'Last) = ".kr"
       then
-         return Input (Input'First .. Input'Last - 3) & ".s";
+         return Input (Input'First .. Input'Last - 3);
       else
-         return Input & ".s";
+         return Input;
       end if;
-   end Default_Out_Path;
+   end Stem;
 
-   In_Path  : Ada.Strings.Unbounded.Unbounded_String;
-   Out_Path : Ada.Strings.Unbounded.Unbounded_String;
-   use Ada.Strings.Unbounded;
+   --  Front + middle ends, then codegen when Emit. Returns the sema error
+   --  count; lexer/parser failures propagate to the outer handler.
+   procedure Translate
+     (In_Path  : String;
+      Out_Path : String;
+      Emit     : Boolean;
+      Errors   : out Natural)
+   is
+      Source : constant String := Read_File (In_Path);
+      Lex    : Kurt.Lexer.Lexer;
+      Unit   : Kurt.Parser.Translation_Unit;
+   begin
+      Kurt.Lexer.Init (Lex, Source);
+      Unit := Kurt.Parser.Parse_Unit (Lex);
+      --  Built-in types verdict (§4.5) and the ranges (§4.8) are intrinsic —
+      --  recognised by name/structure in Kurt.Layout like the primitives, not
+      --  monomorphised here.
+      Kurt.Mono.Monomorphize (Unit);   --  section 5.9.3 specialise generics
+      Kurt.Layout.Register (Unit);     --  section 4.11 KSA layout
+      Kurt.Sema.Check (Unit, Errors);  --  section 10.2 stages 3-4
+      if Errors = 0 and then Emit then
+         Kurt.Codegen.Emit (Unit, Out_Path);   --  section 10.2 stage 5
+      end if;
+   end Translate;
+
+   --  Delete a temporary intermediate, ignoring absence.
+   procedure Cleanup (Path : String) is
+   begin
+      if Dir.Exists (Path) then
+         Dir.Delete_File (Path);
+      end if;
+   exception
+      when others => null;
+   end Cleanup;
+
+   Mode     : Mode_Kind := M_Build;
+   In_Path  : Unbounded_String;
+   Out_Path : Unbounded_String;
 
 begin
-   --  Argument parsing
+   ----------------------------------------------------------------------
+   --  Command-line parsing. Each option is given separately; option
+   --  grouping (e.g. -cS) is not recognised.
+   ----------------------------------------------------------------------
    declare
       I : Natural := 1;
+
+      --  Options the interface reserves but this bootstrap does not yet
+      --  perform.
+      function Is_Unsupported (A : String) return Boolean is
+        (A = "-E" or else A = "-G" or else A = "-g" or else A = "-s"
+         or else A = "-w" or else A = "-Werror" or else A = "-Wno-error"
+         or else (A'Length >= 2
+                  and then A (A'First) = '-'
+                  and then A (A'First + 1) in
+                    'O' | 'T' | 'K' | 'Q' | 'f' | 'B' | 'e' | 'n'
+                    | 'F' | 'U' | 'X' | 'L' | 'l' | 'R'));
    begin
       while I <= CLI.Argument_Count loop
          declare
@@ -77,22 +239,40 @@ begin
          begin
             if A = "-o" then
                if I = CLI.Argument_Count then
-                  Usage;
-                  CLI.Set_Exit_Status (2);
+                  Put_E ("kadayif: -o requires an output path");
+                  CLI.Set_Exit_Status (Exit_Usage);
                   return;
                end if;
                I := I + 1;
                Out_Path := To_Unbounded_String (CLI.Argument (I));
+            elsif A = "-c" then
+               Mode := M_Obj;
+            elsif A = "-S" then
+               Mode := M_Asm;
+            elsif A = "-y" then
+               Mode := M_Check;
             elsif A = "-h" or else A = "--help" then
-               Usage;
+               Mode := M_Help;
+            elsif A = "-v" or else A = "--version" then
+               Mode := M_Version;
+            elsif A = "-a" or else A = "--licence" or else A = "--license" then
+               Mode := M_Licence;
+            elsif Is_Unsupported (A) then
+               Put_E ("kadayif: option '" & A & "' is reserved but not yet "
+                      & "implemented by this bootstrap.");
+               CLI.Set_Exit_Status (Exit_Usage);
+               return;
+            elsif A'Length >= 1 and then A (A'First) = '-' then
+               Put_E ("kadayif: unknown option '" & A
+                      & "' (run `kadayif -h`)");
+               CLI.Set_Exit_Status (Exit_Usage);
                return;
             elsif Length (In_Path) = 0 then
                In_Path := To_Unbounded_String (A);
             else
-               IO.Put_Line (IO.Standard_Error,
-                 "kadayif: unexpected extra argument: " & A);
-               Usage;
-               CLI.Set_Exit_Status (2);
+               Put_E ("kadayif: this bootstrap accepts a single source "
+                      & "operand; unexpected '" & A & "'");
+               CLI.Set_Exit_Status (Exit_Usage);
                return;
             end if;
          end;
@@ -100,84 +280,123 @@ begin
       end loop;
    end;
 
+   ----------------------------------------------------------------------
+   --  Self-reports: no source operand required; exit success.
+   ----------------------------------------------------------------------
+   case Mode is
+      when M_Help    => Show_Usage;   return;
+      when M_Version => Show_Version; return;
+      when M_Licence => Show_Licence; return;
+      when others    => null;
+   end case;
+
+   ----------------------------------------------------------------------
+   --  Translation modes require a source operand.
+   ----------------------------------------------------------------------
    if Length (In_Path) = 0 then
-      Usage;
-      CLI.Set_Exit_Status (2);
+      Put_E ("kadayif: no input file (run `kadayif -h`)");
+      CLI.Set_Exit_Status (Exit_Usage);
       return;
    end if;
 
-   if not Ada.Directories.Exists (To_String (In_Path)) then
-      IO.Put_Line (IO.Standard_Error,
-        "kadayif: input file not found: " & To_String (In_Path));
-      CLI.Set_Exit_Status (1);
+   if not Dir.Exists (To_String (In_Path)) then
+      Put_E ("kadayif: input file not found: " & To_String (In_Path));
+      CLI.Set_Exit_Status (Exit_TransErr);
       return;
    end if;
 
-   if Length (Out_Path) = 0 then
-      Out_Path := To_Unbounded_String
-        (Default_Out_Path (To_String (In_Path)));
-   end if;
-
-   ----------------------------------------------------------------------
-   --  Pipeline: read → lex → parse → emit
-   ----------------------------------------------------------------------
    declare
-      --  Implicit prelude: the built-in contract enum verdict.<T, F>
-      --  (§4.5). `Pass = 1` is the success (truthy) variant; `Fail` is the
-      --  `#wild#` failure variant. Monomorphisation drops it if unused.
-      --
-      --  Spec form (§4.5): tuple-variant payload (`Pass { pub T }`,
-      --  positional) with a `with { contract -> self_t.<F, T>, discrim(ui1) }`
-      --  block. The bootstrap recognises the tuple-variant payload and the
-      --  with-block; the `-> inverted_pair_type` part is parsed-and-discarded
-      --  (so `!verdict` is not yet usable). `pub` modifiers on payload
-      --  fields are also discarded.
-      Prelude : constant String :=
-        "enum verdict.<T, F> { Pass { pub T } = 1, "
-        & "Fail { pub F } = #wild#(0) } with { "
-        & "contract -> self_t.<F, T>, discrim(ui1) }"
-        & ASCII.LF;
-      Source : constant String :=
-        Prelude & Read_File (To_String (In_Path));
-      Lex    : Kurt.Lexer.Lexer;
-      Unit   : Kurt.Parser.Translation_Unit;
+      In_S   : constant String := To_String (In_Path);
+      Base   : constant String := Stem (In_S);
+      --  Where assembly goes: the requested artefact for -S, else a temp.
+      Asm    : constant String :=
+        (if Mode = M_Asm and then Length (Out_Path) > 0
+            then To_String (Out_Path)
+         elsif Mode = M_Asm then Base & ".s"
+         else Base & ".kt.s");                 --  build/obj intermediate
+      Errors : Natural := 0;
    begin
-      Kurt.Lexer.Init (Lex, Source);
-      Unit := Kurt.Parser.Parse_Unit (Lex);
-      Kurt.Mono.Monomorphize (Unit);   --  §5.8.1: specialise generic types
-      Kurt.Layout.Register (Unit);
+      Translate (In_S, Asm, Emit => Mode /= M_Check, Errors => Errors);
 
-      declare
-         Errors : Natural;
-      begin
-         Kurt.Sema.Check (Unit, Errors);
-         if Errors > 0 then
-            IO.Put_Line (IO.Standard_Error,
-              "kadayif: aborting after"
-              & Natural'Image (Errors) & " type error(s)");
-            CLI.Set_Exit_Status (1);
-            return;
-         end if;
-      end;
+      if Errors > 0 then
+         Put_E ("kadayif: aborting after" & Natural'Image (Errors)
+                & " error(s)");
+         Cleanup (Asm);
+         CLI.Set_Exit_Status (Exit_TransErr);
+         return;
+      end if;
 
-      Kurt.Codegen.Emit (Unit, To_String (Out_Path));
-      IO.Put_Line ("kadayif: wrote " & To_String (Out_Path));
+      case Mode is
+         when M_Check =>
+            IO.Put_Line ("kadayif: " & In_S
+                         & ": no errors (semantic check passed)");
+
+         when M_Asm =>
+            IO.Put_Line ("kadayif: wrote " & Asm);
+
+         when M_Obj =>
+            declare
+               Obj : constant String :=
+                 (if Length (Out_Path) > 0 then To_String (Out_Path)
+                  else Base & ".o");
+            begin
+               if not Run ("as -arch arm64 " & Q (Asm) & " -o " & Q (Obj))
+               then
+                  Put_E ("kadayif: assembler (as) failed");
+                  Cleanup (Asm);
+                  CLI.Set_Exit_Status (Exit_TransErr);
+                  return;
+               end if;
+               Cleanup (Asm);
+               IO.Put_Line ("kadayif: wrote " & Obj);
+            end;
+
+         when M_Build =>
+            declare
+               Obj : constant String := Base & ".kt.o";
+               Exe : constant String :=
+                 (if Length (Out_Path) > 0 then To_String (Out_Path)
+                  else "a.out");
+            begin
+               if not Run ("as -arch arm64 " & Q (Asm) & " -o " & Q (Obj))
+               then
+                  Put_E ("kadayif: assembler (as) failed");
+                  Cleanup (Asm);
+                  CLI.Set_Exit_Status (Exit_TransErr);
+                  return;
+               end if;
+               --  Link with the host SDK; the shell expands xcrun.
+               if not Run ("ld " & Q (Obj)
+                           & " -lSystem -syslibroot ""$(xcrun "
+                           & "--show-sdk-path)"" -e _main -o " & Q (Exe))
+               then
+                  Put_E ("kadayif: linker (ld) failed");
+                  Cleanup (Asm);
+                  Cleanup (Obj);
+                  CLI.Set_Exit_Status (Exit_TransErr);
+                  return;
+               end if;
+               Cleanup (Asm);
+               Cleanup (Obj);
+               IO.Put_Line ("kadayif: wrote " & Exe);
+            end;
+
+         when others =>
+            null;
+      end case;
    end;
 
 exception
    when E : Kurt.Lexer.Translation_Failure =>
-      IO.Put_Line (IO.Standard_Error,
-        "kadayif: translation failure: "
-        & Ada.Exceptions.Exception_Message (E));
-      CLI.Set_Exit_Status (1);
+      Put_E ("kadayif: translation failure: "
+             & Ada.Exceptions.Exception_Message (E));
+      CLI.Set_Exit_Status (Exit_TransErr);
    when E : Kurt.Parser.Syntax_Error =>
-      IO.Put_Line (IO.Standard_Error,
-        "kadayif: syntax error: "
-        & Ada.Exceptions.Exception_Message (E));
-      CLI.Set_Exit_Status (1);
+      Put_E ("kadayif: syntax error: "
+             & Ada.Exceptions.Exception_Message (E));
+      CLI.Set_Exit_Status (Exit_TransErr);
    when E : others =>
-      IO.Put_Line (IO.Standard_Error,
-        "kadayif: internal error: "
-        & Ada.Exceptions.Exception_Information (E));
-      CLI.Set_Exit_Status (3);
+      Put_E ("kadayif: internal error: "
+             & Ada.Exceptions.Exception_Information (E));
+      CLI.Set_Exit_Status (Exit_Internal);
 end Main;

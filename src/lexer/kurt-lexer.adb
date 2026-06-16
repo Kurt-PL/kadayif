@@ -130,6 +130,7 @@ package body Kurt.Lexer is
          elsif S = "break"    then T.Kind := Kw_Break;
          elsif S = "continue" then T.Kind := Kw_Continue;
          elsif S = "express"  then T.Kind := Kw_Express;
+         elsif S = "uninit"   then T.Kind := Kw_Uninit;
          elsif S = "struct"   then T.Kind := Kw_Struct;
          elsif S = "enum"     then T.Kind := Kw_Enum;
          elsif S = "match"    then T.Kind := Kw_Match;
@@ -654,6 +655,27 @@ package body Kurt.Lexer is
          elsif C = '"' then
             return Scan_String (L);
          elsif C = ''' then
+            --  §7.9: disambiguate a label `'name` from a character literal
+            --  `'c'`. It is a label when an identifier follows the quote and
+            --  is not closed by another quote (a char literal always is).
+            if Is_Ident_Start (Peek (L, 1)) then
+               declare
+                  K : Positive := 2;
+               begin
+                  while Is_Ident_Continue (Peek (L, K)) loop
+                     K := K + 1;
+                  end loop;
+                  if Peek (L, K) /= ''' then
+                     Advance (L);                  --  consume the quote
+                     declare
+                        T : Token := Scan_Ident (L);
+                     begin
+                        T.Kind := Tok_Label;       --  name retained in Lexeme
+                        return T;
+                     end;
+                  end if;
+               end;
+            end if;
             return Scan_Char (L);
          end if;
 
@@ -663,10 +685,25 @@ package body Kurt.Lexer is
             when '{' => Tok.Kind := Punct_LBrace; Advance (L);
             when '}' => Tok.Kind := Punct_RBrace; Advance (L);
             when '[' => Tok.Kind := Punct_LBracket; Advance (L);
-            when ']' => Tok.Kind := Punct_RBracket; Advance (L);
+            when ']' =>
+               if Peek (L, 1) = '@' then           --  §5.16 annotation close
+                  Tok.Kind := Dir_At_RBracket;
+                  Advance (L); Advance (L);
+               else
+                  Tok.Kind := Punct_RBracket; Advance (L);
+               end if;
             when ';' => Tok.Kind := Punct_Semi;   Advance (L);
             when ',' => Tok.Kind := Punct_Comma;  Advance (L);
-            when '.' => Tok.Kind := Punct_Dot;    Advance (L);
+            when '.' =>
+               if Peek (L, 1) = '.' and then Peek (L, 2) = '=' then
+                  Tok.Kind := Op_DotDotEq;        --  ..=  (§4.8)
+                  Advance (L); Advance (L); Advance (L);
+               elsif Peek (L, 1) = '.' then
+                  Tok.Kind := Op_DotDot;          --  ..   (§4.8)
+                  Advance (L); Advance (L);
+               else
+                  Tok.Kind := Punct_Dot; Advance (L);
+               end if;
             when '&' =>
                if Peek (L, 1) = '&' then
                   Tok.Kind := Op_AmpAmp; Advance (L); Advance (L);
@@ -830,6 +867,12 @@ package body Kurt.Lexer is
                end if;
             when '@' =>
                Advance (L);
+               --  §5.16 annotation open `@[`.
+               if Peek (L) = '[' then
+                  Advance (L);
+                  Tok.Kind := Dir_At_LBracket;
+                  return Tok;
+               end if;
                if not Is_Ident_Start (Peek (L)) then
                   raise Translation_Failure
                     with "expected identifier after '@' at line"
@@ -857,12 +900,22 @@ package body Kurt.Lexer is
                   elsif S = "offset" then
                      Tok.Kind   := Dir_At_Offset;    --  §6.12
                      Tok.Lexeme := Name_Tok.Lexeme;
+                  elsif S = "inline" then
+                     Tok.Kind   := Dir_At_Inline;    --  §5.14
+                     Tok.Lexeme := Name_Tok.Lexeme;
+                  elsif S = "no_inline" then
+                     Tok.Kind   := Dir_At_No_Inline; --  §5.14
+                     Tok.Lexeme := Name_Tok.Lexeme;
+                  elsif S = "symbol" then
+                     Tok.Kind   := Dir_At_Symbol;    --  §5.15
+                     Tok.Lexeme := Name_Tok.Lexeme;
                   else
                      raise Translation_Failure
                        with "unknown @-directive '@" & S
                           & "' at line" & Positive'Image (Tok.Line)
                           & " (bootstrap supports @dyn/@guard/@volatile"
-                          & "/@size/@align/@offset)";
+                          & "/@size/@align/@offset/@inline/@no_inline"
+                          & "/@symbol)";
                   end if;
                end;
             when others =>

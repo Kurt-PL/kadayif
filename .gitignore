@@ -2,3 +2,7 @@
 /bin/
 /alire/
 /config/
+
+*.o
+*.s
+a.out

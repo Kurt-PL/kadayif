@@ -49,9 +49,52 @@ package body Kurt.Layout is
       return Find_Struct (Name, D);
    end Is_Struct;
 
+   function Mk_Named (N : String) return Type_Access is
+     (new AST_Type'(Kind => T_Named,
+                    Name => SU.To_Unbounded_String (N), Args => <>));
+
+   --  §4.5: verdict is an intrinsic built-in (like bool / the primitives) —
+   --  it is recognised by name, never declared or monomorphised. For the
+   --  name-only queries below (variant names/values, discriminant, contract
+   --  flags) the shape is constant, so a synthesised declaration suffices.
+   --  The payload field *types* here are placeholders: every size/alignment/
+   --  field-offset query for verdict is element-type dependent and is served
+   --  from the type's arguments instead (see Size_Of, Align_Of, and the
+   --  Type_Access-taking Variant_Field_* overloads).
+   function Is_Verdict (Name : String) return Boolean is (Name = "verdict");
+
+   function Synth_Verdict return Enum_Decl is
+      D    : Enum_Decl;
+      Pass : Enum_Variant;
+      Fail : Enum_Variant;
+   begin
+      D.Name        := SU.To_Unbounded_String ("verdict");
+      D.Is_Contract := True;
+      D.Discrim_Ty  := Mk_Named ("ui1");
+      Pass.Name  := SU.To_Unbounded_String ("Pass");
+      Pass.Value := 1;
+      Pass.Payload.Append
+        ((Name => SU.To_Unbounded_String ("0"), Ty => Mk_Named ("ui1"),
+          Default => null));
+      Fail.Name       := SU.To_Unbounded_String ("Fail");
+      Fail.Value      := 0;
+      Fail.Is_Wild    := True;
+      Fail.Wild_Canon := True;
+      Fail.Payload.Append
+        ((Name => SU.To_Unbounded_String ("0"), Ty => Mk_Named ("ui1"),
+          Default => null));
+      D.Variants.Append (Pass);
+      D.Variants.Append (Fail);
+      return D;
+   end Synth_Verdict;
+
    --  Locate an enum declaration by name.
    function Find_Enum (Name : String; Found : out Enum_Decl) return Boolean is
    begin
+      if Is_Verdict (Name) then
+         Found := Synth_Verdict;
+         return True;
+      end if;
       if not Have_Unit then
          return False;
       end if;
@@ -429,6 +472,41 @@ package body Kurt.Layout is
       return null;
    end Variant_Field_Type_By_Name;
 
+   --  §4.5 verdict payload accessors, from the type arguments. `Pass` carries
+   --  the success type (Args[1]), `Fail` the error type (Args[2]); both sit at
+   --  the payload region after the ui1 discriminant.
+   function Verdict_Payload_Type
+     (T : Type_Access; Variant : String) return Type_Access is
+     (if Variant = "Pass" then T.Args.Element (T.Args.First_Index)
+      else T.Args.Element (T.Args.First_Index + 1));
+
+   --  Type_Access-taking overloads: for verdict (intrinsic, no declaration)
+   --  the payload type/offset come from the arguments; any other type
+   --  delegates to the declaration-based query by name.
+   function Variant_Field_Type
+     (T : Type_Access; Variant : String; Field_No : Positive)
+      return Type_Access is
+     (if Is_Verdict (SU.To_String (T.Name))
+      then Verdict_Payload_Type (T, Variant)
+      else Variant_Field_Type (SU.To_String (T.Name), Variant, Field_No));
+
+   function Variant_Field_Offset
+     (T : Type_Access; Variant : String; Field_No : Positive) return Natural is
+     (if Is_Verdict (SU.To_String (T.Name)) then Ceil (1, Align_Of (T))
+      else Variant_Field_Offset (SU.To_String (T.Name), Variant, Field_No));
+
+   function Variant_Field_Type_By_Name
+     (T : Type_Access; Variant, Field : String) return Type_Access is
+     (if Is_Verdict (SU.To_String (T.Name))
+      then Verdict_Payload_Type (T, Variant)
+      else Variant_Field_Type_By_Name (SU.To_String (T.Name), Variant, Field));
+
+   function Variant_Field_Offset_By_Name
+     (T : Type_Access; Variant, Field : String) return Integer is
+     (if Is_Verdict (SU.To_String (T.Name)) then Integer (Ceil (1, Align_Of (T)))
+      else Variant_Field_Offset_By_Name
+             (SU.To_String (T.Name), Variant, Field));
+
    function Variant_Count (Enum_Name : String) return Natural is
       D : Enum_Decl;
    begin
@@ -465,6 +543,9 @@ package body Kurt.Layout is
          when T_Array =>
             --  §4.6: an array aligns as its element type.
             return Align_Of (T.Elem);
+         when T_Range =>
+            --  §4.8: { start: T, end: T } aligns as T.
+            return Align_Of (T.Rng_Elem);
          when T_Dyn =>
             --  §9.5: a bare `dyn Trait` is unsized; only `&dyn Trait`
             --  (a fat ref) is sized. Align as a pointer pair.
@@ -483,7 +564,18 @@ package body Kurt.Layout is
                N : constant String := SU.To_String (T.Name);
                D : Struct_Decl;
             begin
-               if Find_Struct (N, D) then
+               if Is_Verdict (N) then
+                  --  §4.5: max of the discriminant (1) and the alignments of
+                  --  the payload element types.
+                  declare
+                     A : Natural := 1;
+                  begin
+                     for I in T.Args.First_Index .. T.Args.Last_Index loop
+                        A := Natural'Max (A, Align_Of (T.Args.Element (I)));
+                     end loop;
+                     return A;
+                  end;
+               elsif Find_Struct (N, D) then
                   declare
                      A : Natural := 1;
                   begin
@@ -531,6 +623,10 @@ package body Kurt.Layout is
             --  size is a multiple of its alignment, so stride = size.
             --  An unsized slice (Len = 0) has no value size of its own.
             return T.Len * Size_Of (T.Elem);
+         when T_Range =>
+            --  §4.8: two T fields; size = 2*size(T) (size is a multiple of
+            --  align, so `end` sits exactly at size(T)).
+            return 2 * Size_Of (T.Rng_Elem);
          when T_Dyn =>
             --  §9.5: `dyn Trait` is unsized (a placeholder); a reference
             --  to it is the fat pair handled in Ref-size code. Report the
@@ -570,6 +666,22 @@ package body Kurt.Layout is
                elsif N = "uaddr" or else N = "saddr" then return 8;
                elsif N = "bool" then return 1;
                elsif N = "void" then return 0;
+               elsif Is_Verdict (N) then
+                  --  §4.5 verdict.<Ok, Err>: ui1 discriminant + the larger
+                  --  payload, from the type arguments.
+                  declare
+                     A   : constant Natural := Align_Of (T);
+                     POf : constant Natural := Ceil (1, A);
+                     PSz : Natural := 0;
+                  begin
+                     for I in T.Args.First_Index .. T.Args.Last_Index loop
+                        PSz := Natural'Max (PSz, Size_Of (T.Args.Element (I)));
+                     end loop;
+                     if PSz = 0 then
+                        return Ceil (1, A);   --  e.g. verdict.<void, void>
+                     end if;
+                     return Ceil (POf + PSz, A);
+                  end;
                elsif Is_Enum (N) then
                   return Enum_Size (N);
                elsif Find_Struct (N, D) then
@@ -676,5 +788,43 @@ package body Kurt.Layout is
       end loop;
       return null;
    end Field_Type;
+
+   --  §5.5.3 default-value expression for a field, or null when none.
+   function Field_Default
+     (Struct_Name, Field : String) return Kurt.Parser.Expr_Access
+   is
+      D : Struct_Decl;
+   begin
+      if not Find_Struct (Struct_Name, D) then
+         return null;
+      end if;
+      for I in D.Fields.First_Index .. D.Fields.Last_Index loop
+         if SU.To_String (D.Fields.Element (I).Name) = Field then
+            return D.Fields.Element (I).Default;
+         end if;
+      end loop;
+      return null;
+   end Field_Default;
+
+   function Struct_Field_Count (Struct_Name : String) return Natural is
+      D : Struct_Decl;
+   begin
+      if not Find_Struct (Struct_Name, D) then
+         return 0;
+      end if;
+      return Natural (D.Fields.Length);
+   end Struct_Field_Count;
+
+   function Struct_Field_Name
+     (Struct_Name : String; Index : Positive) return String
+   is
+      D : Struct_Decl;
+   begin
+      if not Find_Struct (Struct_Name, D) then
+         return "";
+      end if;
+      return SU.To_String
+        (D.Fields.Element (D.Fields.First_Index + (Index - 1)).Name);
+   end Struct_Field_Name;
 
 end Kurt.Layout;

@@ -29,7 +29,7 @@ package Kurt.Parser is
    package Type_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Type_Access);
 
-   type Type_Kind is (T_Named, T_Ref, T_Tuple, T_Array, T_Dyn);
+   type Type_Kind is (T_Named, T_Ref, T_Tuple, T_Array, T_Dyn, T_Range);
    type Ref_Sigil is (R_Shared, R_Excl, R_Raw);
 
    --  §8.1 store-discipline modifier: `mut`, `atomic`, and `guard` are
@@ -63,6 +63,13 @@ package Kurt.Parser is
             --  reference referent; `&dyn Trait` is a fat reference
             --  (value ptr + dispatch-table ptr).
             Trait_Name : SU.Unbounded_String;
+         when T_Range =>
+            --  §4.8 built-in range type. `range_ex.<T>` (exclusive) and
+            --  `range_in.<T>` (inclusive) are intrinsic two-field aggregates
+            --  { start: T, end: T }, handled structurally like `[T; N]` —
+            --  no declaration, no monomorphisation.
+            Rng_Inclusive : Boolean := False;
+            Rng_Elem      : Type_Access;
       end case;
    end record;
 
@@ -115,7 +122,9 @@ package Kurt.Parser is
       E_Array_Lit,    --  `[a, b, c]` / repeat `[v; N]` (§6.1.6)
       E_Dyn_Cast,     --  implicit `&T → &dyn Trait` coercion (§9.5)
       E_Slice_Cast,   --  implicit `&[T; N] → &[T]` coercion (§4.6)
-      E_Type_Intrinsic);  --  `T@size` / `T@align` / `T@offset(f)` (§6.12)
+      E_Type_Intrinsic,  --  `T@size` / `T@align` / `T@offset(f)` (§6.12)
+      E_Uninit,           --  `uninit` uninitialized value (§6.1.8)
+      E_Range);           --  `a..b` / `a..=b` range literal (§4.8)
       --  Note: Kurt has no `[]` indexing operator (§6.2). Element access
       --  is `*(arr.ptr + i)` (raw reference arithmetic, §8.6.4) or the
       --  library `.at()` method.
@@ -271,6 +280,14 @@ package Kurt.Parser is
             TI_Ty    : Type_Access;
             TI_Op    : Type_Intrinsic_Op := TI_Size;
             TI_Field : SU.Unbounded_String;   --  TI_Offset only
+         when E_Uninit =>
+            null;   --  §6.1.8: no payload; type comes from the assignment
+         when E_Range =>
+            --  §4.8 range literal: low/high bounds and exclusivity. Its type
+            --  is the intrinsic T_Range, resolved by sema from the operands.
+            Rg_Lo        : Expr_Access;
+            Rg_Hi        : Expr_Access;
+            Rg_Inclusive : Boolean := False;
       end case;
    end record;
 
@@ -320,6 +337,7 @@ package Kurt.Parser is
             W_Cond  : Expr_Access;
             W_Body  : Stmt_Vectors.Vector;
             W_Then  : Stmt_Vectors.Vector;  --  §7.5.3 step block; may be empty
+            W_Label : SU.Unbounded_String;  --  §7.9 `'name:` loop label; empty=none
          when S_If =>
             SI_Cond : Expr_Access;
             SI_Then : Stmt_Vectors.Vector;
@@ -331,6 +349,12 @@ package Kurt.Parser is
             SI_Is_Contract : Boolean := False;
             SI_Succ_Bind   : SU.Unbounded_String;
             SI_Fail_Bind   : SU.Unbounded_String;  --  empty if no `| err`
+            --  §7.3.3 `if let PAT = e { } else { }`: SI_Cond is the
+            --  scrutinee, SI_Let_Pat the refutable variant pattern (with
+            --  positional payload bindings). The bootstrap requires the
+            --  scrutinee to be a binding (a place), like `<-` and `if ->`.
+            SI_Is_Let  : Boolean := False;
+            SI_Let_Pat : Pattern;
          when S_Extract =>
             X_Bind : SU.Unbounded_String;       --  success binding
             X_Expr : Expr_Access;               --  contract value
@@ -338,9 +362,12 @@ package Kurt.Parser is
             X_Else : Stmt_Vectors.Vector;       --  else block (diverging)
          when S_Break =>
             --  Optional value form `break expr;` (§7.7). null = no value.
-            Brk_Val : Expr_Access;
+            Brk_Val   : Expr_Access;
+            --  §7.9 `break 'label [expr];` target loop label; empty = innermost.
+            Brk_Label : SU.Unbounded_String;
          when S_Continue =>
-            null;
+            --  §7.9 `continue 'label;` target loop label; empty = innermost.
+            Cont_Label : SU.Unbounded_String;
          when S_Express =>
             Xp_Val : Expr_Access;
          when S_Fence =>
@@ -386,6 +413,15 @@ package Kurt.Parser is
       Is_Extern   : Boolean := False;
       Is_Variadic : Boolean := False;
       Is_Airside  : Boolean := False;
+      --  §5.14 inlining directives. Hints to the transformation pipeline;
+      --  the bootstrap performs no inlining, so they are recorded (and
+      --  their constraints checked) but otherwise have no codegen effect.
+      Is_Inline    : Boolean := False;  --  @inline
+      Is_No_Inline : Boolean := False;  --  @no_inline
+      --  §5.15 `@symbol "name"`: external symbol override; empty = derive
+      --  the external name from the identifier. Valid only with `extern`
+      --  or inside a `@dyn` block.
+      Symbol_Name  : SU.Unbounded_String;
       --  variadic(name: T): retained for future codegen; ignored now.
       Variadic_Name : SU.Unbounded_String;
       Variadic_Ty   : Type_Access;
@@ -423,6 +459,9 @@ package Kurt.Parser is
    type Struct_Field is record
       Name : SU.Unbounded_String;
       Ty   : Type_Access;
+      --  §5.5.3 default-value expression (`= expr`); null when the field has
+      --  no default and must be supplied in every composite literal.
+      Default : Expr_Access := null;
    end record;
 
    package Struct_Field_Vectors is new Ada.Containers.Vectors

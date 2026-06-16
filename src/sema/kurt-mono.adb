@@ -55,6 +55,9 @@ package body Kurt.Mono is
                return "arr" & Img (Img'First + 1 .. Img'Last)
                  & "_" & Mangle (T.Elem);
             end;
+         when T_Range =>
+            return (if T.Rng_Inclusive then "rangein_" else "rangeex_")
+              & Mangle (T.Rng_Elem);
          when T_Dyn =>
             return "dyn_" & SU.To_String (T.Trait_Name);
       end case;
@@ -124,6 +127,11 @@ package body Kurt.Mono is
                R.Len  := T.Len;
                return R;
             end;
+         when T_Range =>
+            return new AST_Type'
+              (Kind          => T_Range,
+               Rng_Inclusive => T.Rng_Inclusive,
+               Rng_Elem      => Subst (T.Rng_Elem, Params, Args));
          when T_Dyn =>
             return T;   --  trait object carries no substitutable parts
       end case;
@@ -289,6 +297,12 @@ package body Kurt.Mono is
             R.TI_Ty    := Subst (E.TI_Ty, Params, Args);
             R.TI_Op    := E.TI_Op;
             R.TI_Field := E.TI_Field;
+         when E_Uninit =>
+            null;
+         when E_Range =>
+            R.Rg_Lo        := C (E.Rg_Lo);
+            R.Rg_Hi        := C (E.Rg_Hi);
+            R.Rg_Inclusive := E.Rg_Inclusive;
       end case;
       return R;
    end Copy_Expr;
@@ -322,9 +336,10 @@ package body Kurt.Mono is
             R.Asn_Lhs := C (S.Asn_Lhs);
             R.Asn_Rhs := C (S.Asn_Rhs);
          when S_While =>
-            R.W_Cond := C (S.W_Cond);
-            R.W_Body := Copy_Block (S.W_Body, Params, Args);
-            R.W_Then := Copy_Block (S.W_Then, Params, Args);
+            R.W_Cond  := C (S.W_Cond);
+            R.W_Body  := Copy_Block (S.W_Body, Params, Args);
+            R.W_Then  := Copy_Block (S.W_Then, Params, Args);
+            R.W_Label := S.W_Label;
          when S_If =>
             R.SI_Cond        := C (S.SI_Cond);
             R.SI_Then        := Copy_Block (S.SI_Then, Params, Args);
@@ -332,15 +347,18 @@ package body Kurt.Mono is
             R.SI_Is_Contract := S.SI_Is_Contract;
             R.SI_Succ_Bind   := S.SI_Succ_Bind;
             R.SI_Fail_Bind   := S.SI_Fail_Bind;
+            R.SI_Is_Let      := S.SI_Is_Let;
+            R.SI_Let_Pat     := S.SI_Let_Pat;
          when S_Extract =>
             R.X_Bind := S.X_Bind;
             R.X_Expr := C (S.X_Expr);
             R.X_Err  := S.X_Err;
             R.X_Else := Copy_Block (S.X_Else, Params, Args);
          when S_Break =>
-            R.Brk_Val := C (S.Brk_Val);
+            R.Brk_Val   := C (S.Brk_Val);
+            R.Brk_Label := S.Brk_Label;
          when S_Continue =>
-            null;
+            R.Cont_Label := S.Cont_Label;
          when S_Express =>
             R.Xp_Val := C (S.Xp_Val);
          when S_Fence =>
@@ -438,6 +456,8 @@ package body Kurt.Mono is
                for I in T.Elems.First_Index .. T.Elems.Last_Index loop
                   Subst_Self_Name (T.Elems.Element (I), Concrete);
                end loop;
+            when T_Range =>
+               Subst_Self_Name (T.Rng_Elem, Concrete);
             when T_Dyn =>
                null;
          end case;
@@ -466,9 +486,11 @@ package body Kurt.Mono is
                New_D.Name := SU.To_Unbounded_String (Mangled);
                for I in SD.Fields.First_Index .. SD.Fields.Last_Index loop
                   New_D.Fields.Append
-                    ((Name => SD.Fields.Element (I).Name,
-                      Ty   => Subst (SD.Fields.Element (I).Ty,
-                                     SD.Generic_Params, Inst.Args)));
+                    ((Name    => SD.Fields.Element (I).Name,
+                      Ty      => Subst (SD.Fields.Element (I).Ty,
+                                        SD.Generic_Params, Inst.Args),
+                      Default => Copy_Expr (SD.Fields.Element (I).Default,
+                                            SD.Generic_Params, Inst.Args)));
                end loop;
                U.Structs.Append (New_D);
             end;
@@ -498,9 +520,12 @@ package body Kurt.Mono is
                      for J in V.Payload.First_Index .. V.Payload.Last_Index
                      loop
                         NV.Payload.Append
-                          ((Name => V.Payload.Element (J).Name,
-                            Ty   => Subst (V.Payload.Element (J).Ty,
-                                           ED.Generic_Params, Inst.Args)));
+                          ((Name    => V.Payload.Element (J).Name,
+                            Ty      => Subst (V.Payload.Element (J).Ty,
+                                              ED.Generic_Params, Inst.Args),
+                            Default => Copy_Expr
+                                         (V.Payload.Element (J).Default,
+                                          ED.Generic_Params, Inst.Args)));
                      end loop;
                      New_D.Variants.Append (NV);
                   end;
@@ -527,6 +552,8 @@ package body Kurt.Mono is
                Visit_Type (T.Target);
             when T_Array =>
                Visit_Type (T.Elem);
+            when T_Range =>
+               Visit_Type (T.Rng_Elem);   --  intrinsic; no instantiation
             when T_Dyn =>
                null;
             when T_Tuple =>
@@ -537,7 +564,13 @@ package body Kurt.Mono is
                for I in T.Args.First_Index .. T.Args.Last_Index loop
                   Visit_Type (T.Args.Element (I));   --  innermost first
                end loop;
-               if not T.Args.Is_Empty then
+               --  §4.5 verdict is an intrinsic built-in (like bool): it is
+               --  recognised by name + args directly by Kurt.Layout, never
+               --  monomorphised into a generated enum. Leave it as
+               --  T_Named "verdict" with its Args intact.
+               if SU.To_String (T.Name) = "verdict" then
+                  null;
+               elsif not T.Args.Is_Empty then
                   declare
                      Orig_N     : constant String := SU.To_String (T.Name);
                      Mangled    : constant String := Mangle (T);
@@ -646,7 +679,8 @@ package body Kurt.Mono is
             return;
          end if;
          case E.Kind is
-            when E_Int_Lit | E_Float_Lit | E_Bool_Lit | E_String_Lit =>
+            when E_Int_Lit | E_Float_Lit | E_Bool_Lit | E_String_Lit
+               | E_Uninit =>
                null;
             when E_Path =>
                for I in E.P_Type_Args.First_Index ..
@@ -692,6 +726,9 @@ package body Kurt.Mono is
                loop
                   Visit_Expr (E.SL_Fields.Element (I).Val);
                end loop;
+            when E_Range =>
+               Visit_Expr (E.Rg_Lo);
+               Visit_Expr (E.Rg_Hi);
             when E_Variant_New =>
                for I in E.VN_Fields.First_Index ..
                         E.VN_Fields.Last_Index
@@ -959,6 +996,9 @@ package body Kurt.Mono is
          end loop;
          U.Enums := Keep_E;
       end;
+
+      --  §4.5 verdict is intrinsic (see Visit_Type / Kurt.Layout): it is
+      --  recognised by name and never monomorphised, so no template here.
 
       --  Lift §5.9 fn templates into U.Gen_Fns. They are checked once by
       --  Kurt.Sema under type erasure and never reach codegen; only the

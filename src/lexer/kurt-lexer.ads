@@ -19,6 +19,7 @@ package Kurt.Lexer is
       Tok_Float_Lit,   --  value in Float_V, type suffix in Int_Suffix
       Tok_String_Lit,  --  payload in Str_Bytes (post-escape resolution)
       Tok_Char_Lit,    --  §3.5.4 character literal; cell value in Int_V
+      Tok_Label,       --  §7.9 loop/block label `'name` (name in Lexeme)
       Tok_Hash_Wild,   --  #wild#  (§3.6, single indivisible token)
       --  Keywords (§3.3.1)
       Kw_Fn,
@@ -38,6 +39,7 @@ package Kurt.Lexer is
       Kw_Break,
       Kw_Continue,
       Kw_Express,        --  `express` block-level exit-with-value (§7.8)
+      Kw_Uninit,         --  `uninit` uninitialized value introduction (§6.1.8)
       Kw_Struct,
       Kw_Enum,
       Kw_Match,
@@ -118,13 +120,20 @@ package Kurt.Lexer is
       Punct_Colon,       --  :
       Punct_ColonColon,  --  ::
       Punct_Dot,         --  .
+      Op_DotDot,         --  ..   (exclusive range, §4.8)
+      Op_DotDotEq,       --  ..=  (inclusive range, §4.8)
       --  Directives (§10.3, §8.5.3)
       Dir_At_Dyn,
       Dir_At_Guard,      --  @guard fence family (§8.5.3)
       Dir_At_Volatile,   --  @volatile fence family (§8.5.3)
       Dir_At_Size,       --  T@size   type intrinsic (§6.12)
       Dir_At_Align,      --  T@align  type intrinsic (§6.12)
-      Dir_At_Offset);    --  T@offset(field) type intrinsic (§6.12)
+      Dir_At_Offset,     --  T@offset(field) type intrinsic (§6.12)
+      Dir_At_Inline,     --  @inline    subroutine inlining hint (§5.14)
+      Dir_At_No_Inline,  --  @no_inline subroutine inlining prohibition
+      Dir_At_Symbol,     --  @symbol "name"  external symbol override (§5.15)
+      Dir_At_LBracket,   --  @[   annotation open  (§5.16)
+      Dir_At_RBracket);  --  ]@   annotation close (§5.16)
 
    type Token is record
       Kind      : Token_Kind   := Tok_EOF;

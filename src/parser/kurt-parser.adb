@@ -252,6 +252,20 @@ package body Kurt.Parser is
             end if;
             Expect (C, Op_Gt, "'>' to close generic arguments");
          end if;
+         --  §4.8: the built-in range types are intrinsic — rewrite
+         --  `range_ex.<T>` / `range_in.<T>` to the dedicated T_Range kind.
+         declare
+            NN : constant String := SU.To_String (Node.Name);
+         begin
+            if (NN = "range_ex" or else NN = "range_in")
+              and then Natural (Node.Args.Length) = 1
+            then
+               return new AST_Type'
+                 (Kind          => T_Range,
+                  Rng_Inclusive => NN = "range_in",
+                  Rng_Elem      => Node.Args.First_Element);
+            end if;
+         end;
          --  §5.8: a type-alias name is replaced by its underlying type
          --  at every use site before any further analysis. Bootstrap:
          --  non-generic aliases, declared before use.
@@ -492,6 +506,14 @@ package body Kurt.Parser is
             E := new Expr_Node (Kind => E_Int_Lit);
             E.Int_V      := C.Cur.Int_V;
             E.Int_Suffix := C.Cur.Int_Suffix;
+            Advance (C);
+            return E;
+
+         when Kw_Uninit =>
+            --  §6.1.8: uninitialized value. Its type is supplied by the
+            --  enclosing assignment; sema enforces the airside-only and
+            --  assignment-value-only constraints.
+            E := new Expr_Node (Kind => E_Uninit);
             Advance (C);
             return E;
 
@@ -1039,6 +1061,26 @@ package body Kurt.Parser is
    function Parse_Expr (C : in out Cursor) return Expr_Access is
       E : Expr_Access := Parse_Binary (C, 0);
    begin
+      --  §4.8 range literal `a..b` / `a..=b`. The `..`/`..=` operators
+      --  produce the intrinsic range type (T_Range); sema resolves the
+      --  element type from the operands. Non-associative (`a..b..c` is
+      --  ill-formed).
+      if C.Cur.Kind = Op_DotDot or else C.Cur.Kind = Op_DotDotEq then
+         declare
+            Rng : constant Expr_Access := new Expr_Node (Kind => E_Range);
+         begin
+            Rng.Rg_Inclusive := C.Cur.Kind = Op_DotDotEq;
+            Advance (C);
+            Rng.Rg_Lo := E;
+            Rng.Rg_Hi := Parse_Binary (C, 0);
+            if C.Cur.Kind = Op_DotDot or else C.Cur.Kind = Op_DotDotEq then
+               raise Syntax_Error with
+                 "range operators are non-associative (§4.8) at line"
+                 & Positive'Image (C.Cur.Line);
+            end if;
+            return Rng;
+         end;
+      end if;
       if C.Cur.Kind = Op_EqCas or else C.Cur.Kind = Op_NeCas then
          declare
             Next : constant Expr_Access := new Expr_Node (Kind => E_CAS);
@@ -1179,7 +1221,13 @@ package body Kurt.Parser is
                   S.L_Name := Name;
                   if C.Cur.Kind = Punct_Colon then
                      Advance (C);
-                     S.L_Ty := Parse_Type (C);
+                     --  §4.12: a `?` annotation is equivalent to an omitted
+                     --  one — the type is synthesised from the initializer.
+                     if C.Cur.Kind = Op_Question then
+                        Advance (C);
+                     else
+                        S.L_Ty := Parse_Type (C);
+                     end if;
                   end if;
                   Expect (C, Punct_Eq, "'='");
                   S.L_Init := Parse_Expr (C);
@@ -1196,7 +1244,11 @@ package body Kurt.Parser is
             S.L_Name := Take_Ident (C, "mut binding name");
             if C.Cur.Kind = Punct_Colon then
                Advance (C);
-               S.L_Ty := Parse_Type (C);
+               if C.Cur.Kind = Op_Question then   --  §4.12 inferred
+                  Advance (C);
+               else
+                  S.L_Ty := Parse_Type (C);
+               end if;
             end if;
             if C.Cur.Kind = Punct_Eq then
                Advance (C);
@@ -1206,6 +1258,25 @@ package body Kurt.Parser is
             end if;
             Expect (C, Punct_Semi, "';'");
             return S;
+
+         when Tok_Label =>
+            --  §7.9: a `'name:` label prefixes a loop (labelled blocks are
+            --  not yet supported). Attach the name to the loop it heads.
+            declare
+               Lbl : constant SU.Unbounded_String := C.Cur.Lexeme;
+            begin
+               Advance (C);
+               Expect (C, Punct_Colon, "':' after loop label (spec 7.9)");
+               if C.Cur.Kind /= Kw_While and then C.Cur.Kind /= Kw_Loop then
+                  raise Syntax_Error with
+                    "a label shall prefix a `while`/`loop` (labelled blocks "
+                    & "are not supported) at line"
+                    & Positive'Image (C.Cur.Line);
+               end if;
+               S := Parse_Stmt (C);   --  parse the loop, then label it
+               S.W_Label := Lbl;
+               return S;
+            end;
 
          when Kw_While =>
             --  §7.5.1 / §7.5.3: while expr { stmts } [ then { stmts } ].
@@ -1242,6 +1313,48 @@ package body Kurt.Parser is
             --    inline expression      if cond then a else b      (as a stmt)
             --  Disambiguate after the condition: '{' => statement.
             Advance (C);
+
+            --  §7.3.3 `if let PAT = e { } else { }` refutable pattern branch.
+            if C.Cur.Kind = Kw_Let then
+               Advance (C);
+               S := new Stmt_Node (Kind => S_If);
+               S.SI_Is_Let := True;
+               --  Pattern: Enum::Variant [ { binds } ] (positional bindings),
+               --  same shape as a match arm pattern.
+               S.SI_Let_Pat.Kind := Pat_Variant;
+               S.SI_Let_Pat.Path.Append
+                 (Take_Ident (C, "enum name in if-let pattern"));
+               while C.Cur.Kind = Punct_ColonColon loop
+                  Advance (C);
+                  S.SI_Let_Pat.Path.Append (Take_Ident (C, "variant name"));
+               end loop;
+               if C.Cur.Kind = Punct_LBrace then
+                  Advance (C);
+                  if C.Cur.Kind /= Punct_RBrace then
+                     loop
+                        S.SI_Let_Pat.Bindings.Append
+                          (Take_Ident (C, "payload binding"));
+                        exit when C.Cur.Kind /= Punct_Comma;
+                        Advance (C);
+                        exit when C.Cur.Kind = Punct_RBrace;
+                     end loop;
+                  end if;
+                  Expect (C, Punct_RBrace, "'}'");
+               end if;
+               Expect (C, Punct_Eq, "'=' in if-let");
+               --  Suppress trailing struct-literal parsing so the then-block
+               --  `{` is not read as `scrutinee { … }`.
+               S.SI_Cond := Parse_Cond (C);
+               Parse_Block_Stmts (C, S.SI_Then);
+               Expect (C, Kw_Else, "'else' in if-let (spec 7.3.3)");
+               if C.Cur.Kind = Kw_If then
+                  S.SI_Else.Append (Parse_Stmt (C));   --  else-if chaining
+               else
+                  Parse_Block_Stmts (C, S.SI_Else);
+               end if;
+               return S;
+            end if;
+
             declare
                Cond : constant Expr_Access := Parse_Cond (C);
             begin
@@ -1300,10 +1413,14 @@ package body Kurt.Parser is
             end;
 
          when Kw_Break =>
-            --  §7.7: break [expr] ";"  (labels deferred). The optional
-            --  expression becomes the value of the terminated loop.
+            --  §7.7 / §7.9: break ['label] [expr] ";". The label names the
+            --  loop to terminate; the optional expression is its value.
             Advance (C);
             S := new Stmt_Node (Kind => S_Break);
+            if C.Cur.Kind = Tok_Label then
+               S.Brk_Label := C.Cur.Lexeme;
+               Advance (C);
+            end if;
             if C.Cur.Kind /= Punct_Semi then
                S.Brk_Val := Parse_Expr (C);
             end if;
@@ -1311,8 +1428,13 @@ package body Kurt.Parser is
             return S;
 
          when Kw_Continue =>
+            --  §7.9: continue ['label] ";".
             Advance (C);
             S := new Stmt_Node (Kind => S_Continue);
+            if C.Cur.Kind = Tok_Label then
+               S.Cont_Label := C.Cur.Lexeme;
+               Advance (C);
+            end if;
             Expect (C, Punct_Semi, "';'");
             return S;
 
@@ -1399,6 +1521,36 @@ package body Kurt.Parser is
       H             : out Fn_Header)
    is
    begin
+      --  §5.14/§5.15: `@inline` / `@no_inline` / `@symbol "name"` precede
+      --  the rest of the header (before `pub`/`airside`). The inlining
+      --  directives are mutually exclusive.
+      while C.Cur.Kind = Dir_At_Inline
+            or else C.Cur.Kind = Dir_At_No_Inline
+            or else C.Cur.Kind = Dir_At_Symbol
+      loop
+         if C.Cur.Kind = Dir_At_Inline then
+            H.Is_Inline := True;
+            Advance (C);
+         elsif C.Cur.Kind = Dir_At_No_Inline then
+            H.Is_No_Inline := True;
+            Advance (C);
+         else
+            Advance (C);   --  past @symbol
+            if C.Cur.Kind /= Tok_String_Lit then
+               raise Syntax_Error with
+                 "`@symbol` requires a string literal (spec 5.15) at line"
+                 & Positive'Image (C.Cur.Line);
+            end if;
+            H.Symbol_Name := C.Cur.Str_Bytes;
+            Advance (C);
+         end if;
+      end loop;
+      if H.Is_Inline and then H.Is_No_Inline then
+         raise Syntax_Error with
+           "`@inline` and `@no_inline` shall not both appear on the same "
+           & "subroutine (spec 5.14) at line" & Positive'Image (C.Cur.Line);
+      end if;
+
       --  §5.1 header order: [pub] [extern[(iface)]] — independent
       --  modifiers; `pub extern fn` is legal.
       if C.Cur.Kind = Kw_Pub then
@@ -1452,6 +1604,15 @@ package body Kurt.Parser is
       F : Fn_Decl;
    begin
       Parse_Fn_Header (C, Allow_Unnamed => False, H => F.Header);
+      --  §5.15: `@symbol` on a definition requires the `extern` prefix
+      --  (a non-extern subroutine has no external name to override).
+      if SU.Length (F.Header.Symbol_Name) > 0
+        and then not F.Header.Is_Extern
+      then
+         raise Syntax_Error with
+           "`@symbol` requires `extern` (or a `@dyn` block) (spec 5.15) at "
+           & "line" & Positive'Image (C.Cur.Line);
+      end if;
       Parse_Block_Stmts (C, F.Body_Stmts);
       return F;
    end Parse_Fn_Decl;
@@ -1460,6 +1621,13 @@ package body Kurt.Parser is
       H : Fn_Header;
    begin
       Parse_Fn_Header (C, Allow_Unnamed => True, H => H);
+      --  §5.14: inlining directives shall not apply to a prototype (a
+      --  declaration without a body).
+      if H.Is_Inline or else H.Is_No_Inline then
+         raise Syntax_Error with
+           "`@inline`/`@no_inline` shall not be applied to a subroutine "
+           & "prototype (spec 5.14) at line" & Positive'Image (C.Cur.Line);
+      end if;
       Expect (C, Punct_Semi, "';' to terminate fn prototype");
       return H;
    end Parse_Fn_Proto;
@@ -1485,6 +1653,7 @@ package body Kurt.Parser is
            or else C.Cur.Kind = Kw_Pub
            or else C.Cur.Kind = Kw_Extern
            or else C.Cur.Kind = Kw_Variadic
+           or else C.Cur.Kind = Dir_At_Symbol   --  §5.15 on a dyn item
          then
             D.Items.Append (Parse_Fn_Proto (C));
          else
@@ -1537,6 +1706,8 @@ package body Kurt.Parser is
                for I in T.Elems.First_Index .. T.Elems.Last_Index loop
                   Subst_Self (T.Elems.Element (I));
                end loop;
+            when T_Range =>
+               Subst_Self (T.Rng_Elem);
             when T_Dyn =>
                null;   --  `dyn Trait` names a trait, never `self_t`
          end case;
@@ -1764,6 +1935,11 @@ package body Kurt.Parser is
                 end if;
                Expect (C, Punct_Colon, "':'");
                Fld.Ty := Parse_Type (C);
+               --  §5.5.3 optional default-value expression.
+               if C.Cur.Kind = Punct_Eq then
+                  Advance (C);
+                  Fld.Default := Parse_Expr (C);
+               end if;
                D.Fields.Append (Fld);
             end;
             exit when C.Cur.Kind /= Punct_Comma;
@@ -2154,8 +2330,24 @@ package body Kurt.Parser is
    begin
       Advance (C);
       while C.Cur.Kind /= Tok_EOF loop
+         --  §5.16: skip any `@[ … ]@` annotations preceding a declaration.
+         --  Their content is opaque and unrecognised ones are ignored.
+         while C.Cur.Kind = Dir_At_LBracket loop
+            Advance (C);
+            while C.Cur.Kind /= Dir_At_RBracket loop
+               if C.Cur.Kind = Tok_EOF then
+                  raise Syntax_Error with
+                    "unbalanced `@[` annotation (missing `]@`, spec 5.16)";
+               end if;
+               Advance (C);
+            end loop;
+            Advance (C);   --  past `]@`
+         end loop;
+         exit when C.Cur.Kind = Tok_EOF;
          case C.Cur.Kind is
-            when Kw_Fn | Kw_Extern | Kw_Variadic | Kw_Airside =>
+            when Kw_Fn | Kw_Extern | Kw_Variadic | Kw_Airside
+               | Dir_At_Inline | Dir_At_No_Inline   --  §5.14
+               | Dir_At_Symbol =>                    --  §5.15
                U.Fns.Append (Parse_Fn_Decl (C));
             when Kw_Pub =>
                --  `pub` heads a subroutine, trait, const, or static. The

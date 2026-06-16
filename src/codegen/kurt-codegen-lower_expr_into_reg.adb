@@ -58,11 +58,15 @@ is
    ------------------------------------------------------------------
    procedure Lower_Call (E : Expr_Access) is
       Callee_Name : constant String := Path_Symbol (E.C_Callee);
-      Sym         : constant String := "_" & Callee_Name;
       N           : constant Natural := Natural (E.C_Args.Length);
 
       Info      : Dyn_Sym;
       Has_Info  : constant Boolean := Lookup_Dyn_Sym (ST, Callee_Name, Info);
+      --  §5.15: a `@symbol "name"` on the (dyn) callee overrides the
+      --  external name; otherwise the identifier is used.
+      Sym       : constant String := "_"
+        & (if Has_Info and then SU.Length (Info.Symbol) > 0
+           then SU.To_String (Info.Symbol) else Callee_Name);
       Is_Var    : constant Boolean := Has_Info and then Info.Is_Variadic;
       Fixed     : constant Natural :=
         (if Is_Var then Natural'Min (Info.Fixed_Args, N) else N);
@@ -921,9 +925,9 @@ is
                                 ((Name   => Arm.Pat.Bindings.Element (K),
                                   Offset => Base
                                     + Kurt.Layout.Variant_Field_Offset
-                                        (Ename, VN, K),
+                                        (Scrut_T, VN, K),
                                   Ty     => Kurt.Layout.Variant_Field_Type
-                                              (Ename, VN, K)));
+                                              (Scrut_T, VN, K)));
                            end loop;
                            Lower_Expr_Into_Reg (F, Arm.Arm_Body, Target_Reg, ST);
                            while Natural (ST.Bindings.Length) > Saved loop
@@ -1009,6 +1013,19 @@ is
 
 begin
    case E.Kind is
+      when E_Range =>
+         --  §4.8: a range is an aggregate; it is built in place by the
+         --  let/mut initialiser path, never produced in a register.
+         raise Program_Error with
+           "codegen: range value outside a binding initialiser";
+
+      when E_Uninit =>
+         --  §6.1.8: an uninitialized value. Valid `uninit` positions
+         --  (let/mut/assign) are intercepted earlier and store nothing;
+         --  if one reaches here the target register simply keeps its
+         --  current (indeterminate) contents — no instruction is emitted.
+         null;
+
       when E_Int_Lit =>
          --  Width follows the inferred type; values wider than 16 bits
          --  are built with a movz/movk chain.
@@ -1134,7 +1151,13 @@ begin
                      end if;
                      return;
                   end if;
-                  if B.Ty /= null and then B.Ty.Kind = T_Tuple then
+                  if B.Ty /= null and then B.Ty.Kind = T_Range then
+                     --  §4.8 range fields: `start` at offset 0, `end` at
+                     --  size(T); both have type T.
+                     FT  := B.Ty.Rng_Elem;
+                     Off := B.Offset
+                       + (if FName = "end" then Sizeof (B.Ty.Rng_Elem) else 0);
+                  elsif B.Ty /= null and then B.Ty.Kind = T_Tuple then
                      --  §6.2.2 tuple field by index `.N`.
                      declare
                         TI : constant Natural := Natural'Value (FName);
@@ -1514,7 +1537,7 @@ begin
             --  discriminant (w12) at offset 0.
             declare
                PO : constant Natural := Kurt.Layout.Variant_Field_Offset
-                 (EN, Kurt.Layout.Contract_Success_Variant (EN), 1);
+                 (E.Sem_Ty, Kurt.Layout.Contract_Success_Variant (EN), 1);
             begin
                IO.Put_Line (F, "    lsl     " & Xreg & ", x13, #"
                                & Img (8 * PO));
@@ -1637,9 +1660,10 @@ begin
             L_Done : constant String :=
               "Lq_" & FN_S & "_done_" & Img (Idx);
             Pay_Off : constant Natural :=
-              B.Offset + Kurt.Layout.Variant_Field_Offset (EN, Succ_V, 1);
+              B.Offset + Kurt.Layout.Variant_Field_Offset
+                           (Inner_Ty, Succ_V, 1);
             Pay_Ty  : constant Type_Access :=
-              Kurt.Layout.Variant_Field_Type (EN, Succ_V, 1);
+              Kurt.Layout.Variant_Field_Type (Inner_Ty, Succ_V, 1);
             Pay_Sz  : constant Natural := Sizeof (Pay_Ty);
             Whole_Sz : constant Natural := Sizeof (Inner_Ty);
             Loc_P : constant String :=

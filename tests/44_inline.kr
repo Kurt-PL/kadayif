@@ -1,0 +1,15 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.14 `@inline` / `@no_inline`: inlining directives. The bootstrap does no
+// inlining, so they are accepted (and their constraints enforced) but have
+// no codegen effect — the program behaves identically with or without them.
+@inline fn add(a: si4, b: si4) -> si4 { return a + b; }
+
+@no_inline pub fn mul(a: si4, b: si4) -> si4 { return a * b; }
+
+fn main() -> ui1 {
+    airside {
+        posix::printf("r=%d\n\0".ptr, add(3, 4) + mul(2, 5));   // 7 + 10 = 17
+    }
+    return 0;
+}

@@ -8,6 +8,27 @@ procedure Lower_Stmt
    S  : Stmt_Access;
    ST : in out Lower_State)
 is
+   --  §7.9: resolve the loop targeted by a `break`/`continue`. An empty
+   --  label denotes the innermost loop; a non-empty label selects the
+   --  nearest enclosing loop with that source name.
+   function Target_Loop
+     (ST : Lower_State; Label : SU.Unbounded_String) return Loop_Labels is
+   begin
+      if SU.Length (Label) = 0 then
+         return ST.Loops.Last_Element;
+      end if;
+      for I in reverse ST.Loops.First_Index .. ST.Loops.Last_Index loop
+         if SU.To_String (ST.Loops.Element (I).Name)
+              = SU.To_String (Label)
+         then
+            return ST.Loops.Element (I);
+         end if;
+      end loop;
+      raise Program_Error with
+        "codegen: break/continue to unknown loop label '"
+        & SU.To_String (Label) & "'";
+   end Target_Loop;
+
    --  Store the value currently in x9/w9 to [x29, Off] using the width
    --  implied by Sz cells.
    procedure Store_Sized (Off : Natural; Sz : Natural) is
@@ -196,6 +217,11 @@ begin
          --  and register the binding. §5.2 lets `mut` omit the
          --  initialiser. Per §2.2.3 every binding object — struct or
          --  scalar — gets a stack slot (never a register).
+         --  §6.1.8: `= uninit` allocates the slot and registers the binding
+         --  but performs no store, exactly like an omitted initialiser.
+         if S.L_Init /= null and then S.L_Init.Kind = E_Uninit then
+            S.L_Init := null;
+         end if;
          declare
             Ty : Type_Access := S.L_Ty;
          begin
@@ -303,6 +329,62 @@ begin
                                  Sizeof (Kurt.Layout.Field_Type (SN, FN)));
                            end;
                         end loop;
+
+                        --  §5.5.3: fill each omitted field from its
+                        --  default-value expression, evaluated here at the
+                        --  point of construction.
+                        for K in 1 .. Kurt.Layout.Struct_Field_Count (SN) loop
+                           declare
+                              FN  : constant String :=
+                                Kurt.Layout.Struct_Field_Name (SN, K);
+                              Dfl : constant Expr_Access :=
+                                Kurt.Layout.Field_Default (SN, FN);
+                              Supplied : Boolean := False;
+                           begin
+                              for I in S.L_Init.SL_Fields.First_Index ..
+                                       S.L_Init.SL_Fields.Last_Index
+                              loop
+                                 if SU.To_String
+                                      (S.L_Init.SL_Fields.Element (I).Name)
+                                      = FN
+                                 then
+                                    Supplied := True;
+                                 end if;
+                              end loop;
+                              if not Supplied and then Dfl /= null then
+                                 Lower_Expr_Into_Reg (F, Dfl, 9, ST);
+                                 Store_Sized
+                                   (Off + Kurt.Layout.Field_Offset (SN, FN),
+                                    Sizeof
+                                      (Kurt.Layout.Field_Type (SN, FN)));
+                              end if;
+                           end;
+                        end loop;
+                     end;
+                  elsif S.L_Init.Kind = E_Range then
+                     --  §4.8 range literal: store `start` at offset 0 and
+                     --  `end` at size(T), the two T-typed fields in place.
+                     declare
+                        Elem_Sz : constant Natural :=
+                          (if Ty.Rng_Elem /= null
+                           then Sizeof (Ty.Rng_Elem) else 8);
+                        Is_FP   : constant Boolean := Is_Float (Ty.Rng_Elem);
+                     begin
+                        if Is_FP then
+                           Lower_Float_Into_D (F, S.L_Init.Rg_Lo, 0, ST);
+                           IO.Put_Line (F, "    str     "
+                             & (if Elem_Sz = 4 then "s0" else "d0")
+                             & ", [x29, #" & Img (Off) & "]");
+                           Lower_Float_Into_D (F, S.L_Init.Rg_Hi, 0, ST);
+                           IO.Put_Line (F, "    str     "
+                             & (if Elem_Sz = 4 then "s0" else "d0")
+                             & ", [x29, #" & Img (Off + Elem_Sz) & "]");
+                        else
+                           Lower_Expr_Into_Reg (F, S.L_Init.Rg_Lo, 9, ST);
+                           Store_Sized (Off, Elem_Sz);
+                           Lower_Expr_Into_Reg (F, S.L_Init.Rg_Hi, 9, ST);
+                           Store_Sized (Off + Elem_Sz, Elem_Sz);
+                        end if;
                      end;
                    elsif S.L_Init.Kind = E_Variant_New then
                       Zero_Fill (Off, Sizeof (Ty));
@@ -329,16 +411,26 @@ begin
                               FI : constant Field_Init :=
                                 S.L_Init.VN_Fields.Element (I);
                               FN : constant String := SU.To_String (FI.Name);
+                              --  §4.5: an intrinsic verdict instance carries
+                              --  its element types in Sem_Ty's args, so pass
+                              --  the type when available (handles verdict and,
+                              --  via delegation, every declared enum too).
+                              ST_T : constant Type_Access := S.L_Init.Sem_Ty;
                               FO : constant Integer :=
-                                Kurt.Layout.Variant_Field_Offset_By_Name
-                                  (EN, VN, FN);
+                                (if ST_T /= null
+                                 then Kurt.Layout.Variant_Field_Offset_By_Name
+                                        (ST_T, VN, FN)
+                                 else Kurt.Layout.Variant_Field_Offset_By_Name
+                                        (EN, VN, FN));
+                              FT : constant Type_Access :=
+                                (if ST_T /= null
+                                 then Kurt.Layout.Variant_Field_Type_By_Name
+                                        (ST_T, VN, FN)
+                                 else Kurt.Layout.Variant_Field_Type_By_Name
+                                        (EN, VN, FN));
                            begin
                               Lower_Expr_Into_Reg (F, FI.Val, 9, ST);
-                              Store_Sized
-                                (Off + Natural (FO),
-                                 Sizeof
-                                   (Kurt.Layout.Variant_Field_Type_By_Name
-                                      (EN, VN, FN)));
+                              Store_Sized (Off + Natural (FO), Sizeof (FT));
                            end;
                         end loop;
                      end;
@@ -550,6 +642,11 @@ begin
          end;
 
       when S_Assign =>
+         --  §6.1.8: `place = uninit;` stores nothing (the object keeps its
+         --  current, uninitialized contents).
+         if S.Asn_Rhs.Kind = E_Uninit then
+            return;
+         end if;
          --  Bootstrap lvalue forms: single-segment path, or `*expr`.
          if S.Asn_Lhs.Kind = E_Path
            and then Natural (S.Asn_Lhs.Segments.Length) = 1
@@ -776,7 +873,8 @@ begin
             ST.Loops.Append
               ((Cont_Lbl  => SU.To_Unbounded_String
                                (if Has_Then then L_Thn else L_Top),
-                Break_Lbl => SU.To_Unbounded_String (L_End)));
+                Break_Lbl => SU.To_Unbounded_String (L_End),
+                Name      => S.W_Label));
             IO.Put_Line (F, L_Top & ":");
             Lower_Expr_Into_Reg (F, S.W_Cond, 10, ST);
             IO.Put_Line (F, "    cbz     w10, " & L_End);
@@ -803,7 +901,77 @@ begin
          begin
             ST.If_Idx := ST.If_Idx + 1;
 
-            if S.SI_Is_Contract then
+            if S.SI_Is_Let then
+               --  §7.3.3 `if let Enum::Variant { binds } = e`. The bootstrap
+               --  requires e to be a binding (a place); compare its
+               --  discriminant against the pattern variant and, on a match,
+               --  alias the positional payload fields in the then-block.
+               declare
+                  CName : constant String :=
+                    (if S.SI_Cond.Kind = E_Path
+                        and then Natural (S.SI_Cond.Segments.Length) = 1
+                     then SU.To_String (S.SI_Cond.Segments.Last_Element)
+                     else "");
+                  Bi : constant Natural :=
+                    (if CName /= "" then Find_Binding (ST, CName) else 0);
+               begin
+                  if Bi = 0 then
+                     raise Program_Error with
+                       "codegen: `if let` scrutinee must be a binding";
+                  end if;
+                  declare
+                     B    : constant Binding := ST.Bindings.Element (Bi);
+                     EN   : constant String := SU.To_String (B.Ty.Name);
+                     VN   : constant String :=
+                       SU.To_String (S.SI_Let_Pat.Path.Last_Element);
+                     DSz  : constant Natural := Kurt.Layout.Enum_Disc_Size (EN);
+                     Loc  : constant String :=
+                       ", [x29, #" & Img (B.Offset) & "]";
+                     Saved : Natural;
+                  begin
+                     --  A void discriminant (single-variant enum) matches
+                     --  unconditionally; otherwise compare in place.
+                     if DSz > 0 then
+                        if DSz >= 4 then
+                           IO.Put_Line (F, "    ldr     w10" & Loc);
+                        elsif DSz = 2 then
+                           IO.Put_Line (F, "    ldrh    w10" & Loc);
+                        else
+                           IO.Put_Line (F, "    ldrb    w10" & Loc);
+                        end if;
+                        Lower_Imm (F, 11,
+                          Kurt.Layout.Variant_Value (EN, VN), False);
+                        IO.Put_Line (F, "    cmp     w10, w11");
+                        IO.Put_Line (F, "    b.ne    " & L_Else);
+                     end if;
+                     --  then: bind payload fields as slot+offset aliases.
+                     Saved := Natural (ST.Bindings.Length);
+                     for K in 1 .. Natural (S.SI_Let_Pat.Bindings.Length) loop
+                        ST.Bindings.Append
+                          ((Name   => S.SI_Let_Pat.Bindings.Element (K),
+                            Offset => B.Offset
+                              + Kurt.Layout.Variant_Field_Offset (B.Ty, VN, K),
+                            Ty     => Kurt.Layout.Variant_Field_Type
+                                        (B.Ty, VN, K)));
+                     end loop;
+                     for I in S.SI_Then.First_Index .. S.SI_Then.Last_Index
+                     loop
+                        Lower_Stmt (F, S.SI_Then.Element (I), ST);
+                     end loop;
+                     while Natural (ST.Bindings.Length) > Saved loop
+                        ST.Bindings.Delete_Last;
+                     end loop;
+                     IO.Put_Line (F, "    b       " & L_End);
+                     IO.Put_Line (F, L_Else & ":");
+                     for I in S.SI_Else.First_Index .. S.SI_Else.Last_Index
+                     loop
+                        Lower_Stmt (F, S.SI_Else.Element (I), ST);
+                     end loop;
+                     IO.Put_Line (F, L_End & ":");
+                  end;
+               end;
+
+            elsif S.SI_Is_Contract then
                --  Contract-binding `if e -> v | err`. The scrutinee is a
                --  contract-enum binding; branch on its discriminant and
                --  alias each side's payload to the bound name.
@@ -847,9 +1015,10 @@ begin
                      ST.Bindings.Append
                        ((Name   => S.SI_Succ_Bind,
                          Offset => B.Offset
-                           + Kurt.Layout.Variant_Field_Offset (EN, Succ_V, 1),
+                           + Kurt.Layout.Variant_Field_Offset
+                               (B.Ty, Succ_V, 1),
                          Ty     => Kurt.Layout.Variant_Field_Type
-                                     (EN, Succ_V, 1)));
+                                     (B.Ty, Succ_V, 1)));
                      for I in S.SI_Then.First_Index .. S.SI_Then.Last_Index
                      loop
                         Lower_Stmt (F, S.SI_Then.Element (I), ST);
@@ -867,9 +1036,9 @@ begin
                           ((Name   => S.SI_Fail_Bind,
                             Offset => B.Offset
                               + Kurt.Layout.Variant_Field_Offset
-                                  (EN, Fail_V, 1),
+                                  (B.Ty, Fail_V, 1),
                             Ty     => Kurt.Layout.Variant_Field_Type
-                                        (EN, Fail_V, 1)));
+                                        (B.Ty, Fail_V, 1)));
                      end if;
                      for I in S.SI_Else.First_Index .. S.SI_Else.Last_Index
                      loop
@@ -946,9 +1115,9 @@ begin
                   ST.Bindings.Append
                     ((Name   => S.X_Err,
                       Offset => B.Offset
-                        + Kurt.Layout.Variant_Field_Offset (EN, Fail_V, 1),
+                        + Kurt.Layout.Variant_Field_Offset (B.Ty, Fail_V, 1),
                       Ty     => Kurt.Layout.Variant_Field_Type
-                                  (EN, Fail_V, 1)));
+                                  (B.Ty, Fail_V, 1)));
                end if;
                for I in S.X_Else.First_Index .. S.X_Else.Last_Index loop
                   Lower_Stmt (F, S.X_Else.Element (I), ST);
@@ -962,8 +1131,8 @@ begin
                ST.Bindings.Append
                  ((Name   => S.X_Bind,
                    Offset => B.Offset
-                     + Kurt.Layout.Variant_Field_Offset (EN, Succ_V, 1),
-                   Ty     => Kurt.Layout.Variant_Field_Type (EN, Succ_V, 1)));
+                     + Kurt.Layout.Variant_Field_Offset (B.Ty, Succ_V, 1),
+                   Ty     => Kurt.Layout.Variant_Field_Type (B.Ty, Succ_V, 1)));
             end;
          end;
 
@@ -977,14 +1146,16 @@ begin
             Lower_Expr_Into_Reg (F, S.Brk_Val, 9, ST);
          end if;
          IO.Put_Line (F, "    b       "
-                         & SU.To_String (ST.Loops.Last_Element.Break_Lbl));
+                         & SU.To_String
+                             (Target_Loop (ST, S.Brk_Label).Break_Lbl));
 
       when S_Continue =>
          if ST.Loops.Is_Empty then
             raise Program_Error with "codegen: 'continue' outside a loop";
          end if;
          IO.Put_Line (F, "    b       "
-                         & SU.To_String (ST.Loops.Last_Element.Cont_Lbl));
+                         & SU.To_String
+                             (Target_Loop (ST, S.Cont_Label).Cont_Lbl));
 
       when S_Express =>
          --  §7.8 block exit-with-value. Full block-expression support is

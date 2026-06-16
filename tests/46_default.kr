@@ -1,0 +1,18 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.5.3 default-value expressions: a field may carry `= expr`; a composite
+// literal that omits such a field gets the default, evaluated at construction.
+struct Config { width: si4 = 80, height: si4 = 24, depth: si4 }
+
+fn main() -> ui1 {
+    let c: Config = Config { depth = 5 };          // width/height defaulted
+    airside {
+        posix::printf("w=%d h=%d d=%d\n\0".ptr, c.width, c.height, c.depth);
+    }                                              // 80 24 5
+
+    let c2: Config = Config { width = 100, height = 50, depth = 1 };
+    airside {
+        posix::printf("w=%d h=%d d=%d\n\0".ptr, c2.width, c2.height, c2.depth);
+    }                                              // 100 50 1
+    return 0;
+}

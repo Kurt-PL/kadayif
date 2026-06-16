@@ -49,8 +49,11 @@ package body Kurt.Codegen is
          return;
       end if;
       case E.Kind is
-         when E_Int_Lit | E_Float_Lit | E_Bool_Lit | E_Path =>
+         when E_Int_Lit | E_Float_Lit | E_Bool_Lit | E_Path | E_Uninit =>
             null;
+         when E_Range =>
+            Collect_Strings_In_Expr (E.Rg_Lo, Pool);
+            Collect_Strings_In_Expr (E.Rg_Hi, Pool);
          when E_String_Lit =>
             Pool.Append ((Bytes => E.Str_Bytes));
          when E_Field =>
@@ -183,6 +186,9 @@ package body Kurt.Codegen is
       Name        : SU.Unbounded_String;
       Fixed_Args  : Natural := 0;
       Is_Variadic : Boolean := False;
+      --  §5.15 `@symbol`: external name to emit at call sites; empty means
+      --  use the Kurt identifier (Name).
+      Symbol      : SU.Unbounded_String;
    end record;
 
    package Dyn_Sym_Pkg is new Ada.Containers.Vectors
@@ -236,6 +242,7 @@ package body Kurt.Codegen is
    type Loop_Labels is record
       Cont_Lbl  : SU.Unbounded_String;
       Break_Lbl : SU.Unbounded_String;
+      Name      : SU.Unbounded_String;   --  §7.9 source label; empty = none
    end record;
 
    package Loop_Stack_Pkg is new Ada.Containers.Vectors
@@ -327,7 +334,8 @@ package body Kurt.Codegen is
                              or else Kurt.Layout.Enum_Has_Payload
                                        (SU.To_String (T.Name))))
                 or else T.Kind = T_Tuple
-                or else T.Kind = T_Array));
+                or else T.Kind = T_Array
+                or else T.Kind = T_Range));
 
    --  §7.2: contract types in codegen. `bool` is the built-in scalar
    --  contract (success = 1, failure = 0); any other contract enum takes
@@ -708,7 +716,12 @@ package body Kurt.Codegen is
       Fn_Rets  : Fn_Ret_Pkg.Vector;
       Str_Base : in out Natural)
    is
-      Sym : constant String := "_" & SU.To_String (Fn.Header.Name);
+      --  §5.15: an `@symbol "name"` on an extern fn overrides the emitted
+      --  external label; otherwise the identifier is used.
+      Sym : constant String := "_"
+        & (if SU.Length (Fn.Header.Symbol_Name) > 0
+           then SU.To_String (Fn.Header.Symbol_Name)
+           else SU.To_String (Fn.Header.Name));
       ST  : Lower_State;
    begin
       ST.Dyn_Syms := Dyn_Syms;
@@ -846,7 +859,8 @@ package body Kurt.Codegen is
                   Dyn_Syms.Append
                     ((Name        => P.Name,
                       Fixed_Args  => Natural (P.Params.Length),
-                      Is_Variadic => P.Is_Variadic));
+                      Is_Variadic => P.Is_Variadic,
+                      Symbol      => P.Symbol_Name));
                end;
             end loop;
          end;

@@ -1,0 +1,13 @@
+// §5.15 @symbol: the Kurt identifier `say` is bound to the external symbol
+// `printf`; the call site emits a reference to `printf`.
+// §4.12 inferred `?`: a `?` annotation is equivalent to an omitted one.
+// §5.16 @[...]@: non-normative annotations are parsed and ignored.
+@dyn as libc { @symbol "printf" variadic fn say(&raw ui1) -> si4; }
+
+@[ doc("entry point") ]@
+fn main() -> ui1 {
+    let n: ? = 7si4;          // §4.12 inferred from the initializer
+    mut m: ? = n * 6;
+    airside { libc::say("symbol+inferred+anno: %d\n\0".ptr, m); }   // 42
+    return 0;
+}

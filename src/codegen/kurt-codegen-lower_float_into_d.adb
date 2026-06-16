@@ -64,6 +64,10 @@ begin
                if B.Ty /= null and then B.Ty.Kind = T_Tuple then
                   Off := B.Offset + Kurt.Layout.Tuple_Field_Offset
                     (B.Ty, Natural'Value (FN));
+               elsif B.Ty /= null and then B.Ty.Kind = T_Range then
+                  --  §4.8 range fields: start at 0, end at size(T).
+                  Off := B.Offset
+                    + (if FN = "end" then Sizeof (B.Ty.Rng_Elem) else 0);
                else
                   Off := B.Offset + Kurt.Layout.Field_Offset
                     (SU.To_String (B.Ty.Name), FN);

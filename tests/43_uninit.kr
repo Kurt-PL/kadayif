@@ -1,0 +1,19 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §6.1.8 `uninit`: introduces an uninitialized value. It performs no store,
+// so the binding is allocated and registered but holds indeterminate
+// contents until a real value is written. Valid only as an assignment value
+// inside an airside region.
+fn main() -> ui1 {
+    airside {
+        mut x: si4 = uninit;   // contained: slot allocated, no store
+        x = 42;                // first real store exits the uninit state
+        posix::printf("x=%d\n\0".ptr, x);   // 42
+
+        mut y: si4 = 7;
+        y = uninit;            // re-enter contained state (no-op store)
+        y = 99;
+        posix::printf("y=%d\n\0".ptr, y);   // 99
+    }
+    return 0;
+}
