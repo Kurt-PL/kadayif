@@ -1,0 +1,23 @@
+@dyn as posix {
+    variadic fn printf(&raw ui1) -> si4;
+    fn exit(si4);
+}
+
+// §7.10.1 a single @trap handler replaces the default termination.
+// It shall itself diverge; here it exits with a fixed code.
+@trap {
+    airside { posix::printf("trapped\n\0".ptr); }
+    airside { posix::exit(7); }
+}
+
+// §4.10/§7.11 a `-> never` subroutine diverges; its body is `@trap;`.
+fn boom() -> never {
+    @trap;
+}
+
+fn main() -> ui1 {
+    airside { posix::printf("before\n\0".ptr); }
+    boom();
+    airside { posix::printf("after\n\0".ptr); }   // unreachable
+    return 0;
+}

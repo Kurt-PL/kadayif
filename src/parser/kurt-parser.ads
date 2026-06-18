@@ -308,7 +308,8 @@ package Kurt.Parser is
       S_Break,          --  "break" [expr] ";"   (§7.7 optional loop value)
       S_Continue,       --  "continue" ";"
       S_Express,        --  "express" expr ";"   (§7.8 block exit-with-value)
-      S_Fence);         --  "@guard"/"@volatile" [".start"|".end"] (§8.5.3)
+      S_Fence,          --  "@guard"/"@volatile" [".start"|".end"] (§8.5.3)
+      S_Trap);          --  "@trap" ";"   termination primitive (§7.10)
 
    --  §8.5.3 fence forms: forward boundary, backward boundary, or the
    --  fully ordered standalone form.
@@ -375,6 +376,9 @@ package Kurt.Parser is
             --  barrier) over @volatile (translation fence, no instruction).
             Fn_Guard : Boolean := True;
             Fn_Form  : Fence_Form := FF_Full;
+         when S_Trap =>
+            --  §7.10 `@trap;` — diverging termination primitive; no fields.
+            null;
       end case;
    end record;
 
@@ -408,11 +412,15 @@ package Kurt.Parser is
       Name           : SU.Unbounded_String;
       Generic_Params : Generic_Param_Vectors.Vector;  --  .<T[: bound], …>
       Params         : Param_Vectors.Vector;
-      Return_Type : Type_Access;     --  null => void
+      Return_Type : Type_Access;     --  null => void (or never, see Is_Never)
       Is_Pub      : Boolean := False;
       Is_Extern   : Boolean := False;
       Is_Variadic : Boolean := False;
       Is_Airside  : Boolean := False;
+      --  §4.10/§7.11 `-> never`: the subroutine diverges and yields no
+      --  value. Lowered like `void` (no implicit return needed); a call to
+      --  it is a diverging expression. Return_Type stays null.
+      Is_Never    : Boolean := False;
       --  §5.14 inlining directives. Hints to the transformation pipeline;
       --  the bootstrap performs no inlining, so they are recorded (and
       --  their constraints checked) but otherwise have no codegen effect.
@@ -612,6 +620,10 @@ package Kurt.Parser is
       --  rule (§5.9.2); never lowered by codegen — only their
       --  monomorphised instances (back in Fns) are.
       Gen_Fns : Fn_Vectors.Vector;
+      --  §7.10.1 the single `@trap { … }` handler for this translation
+      --  unit, if one is declared. At most one is permitted.
+      Has_Trap_Handler : Boolean := False;
+      Trap_Handler     : Stmt_Vectors.Vector;
    end record;
 
    function Parse_Unit (Lex : in out Kurt.Lexer.Lexer)

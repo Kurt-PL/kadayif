@@ -1154,6 +1154,15 @@ package body Kurt.Parser is
             --  §3.2: block expressions used as statements need no ';'
             return S;
 
+         when Dir_At_Trap =>
+            --  §7.10 `@trap;` termination primitive (statement position).
+            --  The `@trap { … }` handler form is a top-level declaration,
+            --  parsed in Parse_Unit, so here a `;` always follows.
+            Advance (C);
+            S := new Stmt_Node (Kind => S_Trap);
+            Expect (C, Punct_Semi, "';'");
+            return S;
+
          when Dir_At_Guard | Dir_At_Volatile =>
             --  §8.5.3 ordering fences: `@guard[.start|.end]`,
             --  `@volatile[.start|.end]`. Fence directives are statements;
@@ -1604,7 +1613,14 @@ package body Kurt.Parser is
 
       if C.Cur.Kind = Punct_Arrow then
          Advance (C);
-         H.Return_Type := Parse_Type (C);
+         if C.Cur.Kind = Kw_Never then
+            --  §4.10/§7.11: `-> never`. No value type; the body diverges.
+            Advance (C);
+            H.Is_Never    := True;
+            H.Return_Type := null;
+         else
+            H.Return_Type := Parse_Type (C);
+         end if;
       else
          H.Return_Type := null;
       end if;
@@ -2380,6 +2396,17 @@ package body Kurt.Parser is
                U.Consts.Append (Parse_Const_Decl (C));
             when Dir_At_Dyn =>
                U.Dyns.Append (Parse_Dyn_Decl (C));
+            when Dir_At_Trap =>
+               --  §7.10.1 `@trap { … }` handler. At most one per
+               --  translation unit.
+               if U.Has_Trap_Handler then
+                  raise Syntax_Error with
+                    "multiple @trap handlers in one translation unit "
+                    & "(§7.10.1) at line" & Positive'Image (C.Cur.Line);
+               end if;
+               Advance (C);
+               U.Has_Trap_Handler := True;
+               Parse_Block_Stmts (C, U.Trap_Handler);
             when Kw_Struct =>
                U.Structs.Append (Parse_Struct_Decl (C));
             when Kw_Enum =>

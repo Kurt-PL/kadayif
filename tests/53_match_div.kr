@@ -1,0 +1,34 @@
+@dyn as posix {
+    variadic fn printf(&raw ui1) -> si4;
+    fn exit(si4);
+}
+
+fn die() -> never {
+    airside { posix::exit(9); }
+    @trap;
+}
+
+// §7.11 a diverging match arm contributes no type; the result comes from
+// the live arms, so this type-checks as si4.
+fn pick2(c: si4) -> si4 {
+    let x: si4 = match c {
+        0 = 10,
+        #wild# = die(),
+    };
+    return x;
+}
+
+// §7.11 a match whose every arm diverges is itself diverging — a valid
+// `-> never` body. Compiled but not called.
+fn allnever(c: si4) -> never {
+    match c {
+        0 = die(),
+        #wild# = die(),
+    };
+}
+
+fn main() -> ui1 {
+    let r: si4 = pick2(0);                              // 0 -> 10 (live arm)
+    airside { posix::printf("r=%d\n\0".ptr, r); }      // r=10
+    return 0;
+}

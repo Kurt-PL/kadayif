@@ -1,0 +1,30 @@
+@dyn as posix {
+    variadic fn printf(&raw ui1) -> si4;
+    fn exit(si4);
+}
+
+// §4.10/§7.11 a `-> never` body shall diverge — here a terminating @trap.
+fn die() -> never {
+    airside { posix::printf("dying\n\0".ptr); }
+    airside { posix::exit(3); }
+    @trap;
+}
+
+// §7.11 `loop {}` (no break) is a diverging body — accepted by sema.
+// Declared but never called (it would not return).
+fn spin() -> never {
+    loop {}
+}
+
+// §7.11 a `-> never` call contributes no type to unification; the result
+// type comes from the surviving branch, so this type-checks as si4.
+fn pick(c: bool) -> si4 {
+    let x: si4 = if c then 5 else die();
+    return x;
+}
+
+fn main() -> ui1 {
+    let r: si4 = pick(true);
+    airside { posix::printf("r=%d\n\0".ptr, r); }   // r=5
+    return 0;
+}

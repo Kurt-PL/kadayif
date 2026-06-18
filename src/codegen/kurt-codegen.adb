@@ -155,7 +155,7 @@ package body Kurt.Codegen is
             end loop;
          when S_Break =>
             Collect_Strings_In_Expr (S.Brk_Val, Pool);
-         when S_Continue | S_Fence =>
+         when S_Continue | S_Fence | S_Trap =>
             null;
          when S_Express =>
             Collect_Strings_In_Expr (S.Xp_Val, Pool);
@@ -201,6 +201,11 @@ package body Kurt.Codegen is
 
    --  §5.4 static bindings of the unit being emitted (label `_Kst_NAME`).
    Unit_Statics : Static_Vectors.Vector;
+
+   --  §7.10.1 whether this unit declares a `@trap` handler. When set, a
+   --  `@trap;` branches to the synthesised `_kurt_trap_handler`; otherwise
+   --  it goes straight to the default divergence.
+   Unit_Has_Trap_Handler : Boolean := False;
 
    --  Index of Name in Unit_Statics, or 0.
    function Find_Static (Name : String) return Natural is
@@ -808,6 +813,13 @@ package body Kurt.Codegen is
          Lower_Stmt (F, Fn.Body_Stmts.Element (I), ST);
       end loop;
 
+      --  §7.11: a `-> never` body diverges, so reaching here is impossible.
+      --  Emit the implicit `@trap` the spec requires at the unreachable
+      --  point — an undefined-instruction trap rather than a stray return.
+      if Fn.Header.Is_Never then
+         IO.Put_Line (F, "    udf     #0         // implicit @trap (§7.11)");
+      end if;
+
       --  Epilogue
       IO.Put_Line (F, SU.To_String (ST.Epilogue_Lbl) & ":");
       IO.Put_Line (F, "    ldp     x29, x30, [sp]");
@@ -831,6 +843,11 @@ package body Kurt.Codegen is
       Pool     : String_Pool;
       Dyn_Syms : Dyn_Sym_Pkg.Vector;
       Fn_Rets  : Fn_Ret_Pkg.Vector;
+      --  Every subroutine to emit. §7.10.1: when a `@trap` handler is
+      --  declared it is synthesised as an ordinary void subroutine
+      --  `_kurt_trap_handler` so string-pool collection, return-type
+      --  classification, and lowering all treat it uniformly.
+      All_Fns  : Fn_Vectors.Vector := U.Fns;
    begin
       --  §9.5-6: publish trait metadata for the dispatch machinery.
       Unit_Traits := U.Traits;
@@ -839,12 +856,24 @@ package body Kurt.Codegen is
       --  the lowering passes.
       Unit_Statics := U.Statics;
 
+      Unit_Has_Trap_Handler := U.Has_Trap_Handler;
+      if U.Has_Trap_Handler then
+         declare
+            H : Fn_Decl;
+         begin
+            H.Header.Name := SU.To_Unbounded_String ("kurt_trap_handler");
+            H.Header.Return_Type := null;   --  void; the body diverges
+            H.Body_Stmts := U.Trap_Handler;
+            All_Fns.Append (H);
+         end;
+      end if;
+
       --  Return-type table for every internal fn, so call sites can
       --  classify aggregate returns (AAPCS64).
-      for I in U.Fns.First_Index .. U.Fns.Last_Index loop
+      for I in All_Fns.First_Index .. All_Fns.Last_Index loop
          Fn_Rets.Append
-           ((Name => U.Fns.Element (I).Header.Name,
-             Ty   => U.Fns.Element (I).Header.Return_Type));
+           ((Name => All_Fns.Element (I).Header.Name,
+             Ty   => All_Fns.Element (I).Header.Return_Type));
       end loop;
 
       --  Build the @dyn symbol table from every @dyn block in the unit.
@@ -868,9 +897,9 @@ package body Kurt.Codegen is
 
       --  Pre-pass: collect every string literal in the order the
       --  lowering pass will encounter them.
-      for I in U.Fns.First_Index .. U.Fns.Last_Index loop
+      for I in All_Fns.First_Index .. All_Fns.Last_Index loop
          declare
-            Fn : constant Fn_Decl := U.Fns.Element (I);
+            Fn : constant Fn_Decl := All_Fns.Element (I);
          begin
             for J in Fn.Body_Stmts.First_Index .. Fn.Body_Stmts.Last_Index
             loop
@@ -890,8 +919,8 @@ package body Kurt.Codegen is
       declare
          Str_Base : Natural := 0;
       begin
-         for I in U.Fns.First_Index .. U.Fns.Last_Index loop
-            Emit_Fn (F, U.Fns.Element (I), Dyn_Syms, Fn_Rets, Str_Base);
+         for I in All_Fns.First_Index .. All_Fns.Last_Index loop
+            Emit_Fn (F, All_Fns.Element (I), Dyn_Syms, Fn_Rets, Str_Base);
          end loop;
       end;
 

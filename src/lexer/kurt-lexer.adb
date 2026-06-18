@@ -142,6 +142,7 @@ package body Kurt.Lexer is
          elsif S = "true"     then T.Kind := Kw_True;
          elsif S = "false"    then T.Kind := Kw_False;
          elsif S = "cellbits" then T.Kind := Kw_Cellbits;
+         elsif S = "never"    then T.Kind := Kw_Never;
          else                       T.Kind := Tok_Ident;
          end if;
       end;
@@ -874,6 +875,9 @@ package body Kurt.Lexer is
                   if S = "dyn" then
                      Tok.Kind   := Dir_At_Dyn;
                      Tok.Lexeme := Name_Tok.Lexeme;
+                  elsif S = "trap" then
+                     Tok.Kind   := Dir_At_Trap;      --  §7.10
+                     Tok.Lexeme := Name_Tok.Lexeme;
                   elsif S = "guard" then
                      Tok.Kind   := Dir_At_Guard;     --  §8.5.3
                      Tok.Lexeme := Name_Tok.Lexeme;
@@ -902,7 +906,7 @@ package body Kurt.Lexer is
                      raise Translation_Failure
                        with "unknown @-directive '@" & S
                           & "' at line" & Positive'Image (Tok.Line)
-                          & " (bootstrap supports @dyn/@guard/@volatile"
+                          & " (bootstrap supports @dyn/@trap/@guard/@volatile"
                           & "/@size/@align/@offset/@inline/@no_inline"
                           & "/@symbol)";
                   end if;

@@ -21,6 +21,14 @@ package body Kurt.Sema is
                     Name => SU.To_Unbounded_String (N),
                     Args => <>));
 
+   --  §4.10/§7.11 the `never` type: the result type of a diverging
+   --  expression (a `-> never` call). Modelled as the reserved named type
+   --  "never"; it is uninhabited, assignable to any target, and dropped in
+   --  type unification.
+   function Is_Never_Ty (T : Type_Access) return Boolean is
+     (T /= null and then T.Kind = T_Named
+      and then SU.To_String (T.Name) = "never");
+
    --  Canonicalise float type aliases (mirrors Kurt.Parser.Canon_Float).
    function Canon_Float (N : String) return String is
      (if    N = "f16"  then "fe5m10"
@@ -307,6 +315,10 @@ package body Kurt.Sema is
 
    function Assignable (Target, Source : Type_Access) return Boolean is
    begin
+      if Is_Never_Ty (Source) then
+         --  §7.11: a diverging expression is accepted in place of any T.
+         return True;
+      end if;
       if Target = null or else Source = null then
          return True;  --  unknown; a separate diagnostic already fired
       end if;
@@ -322,6 +334,7 @@ package body Kurt.Sema is
       Params      : Param_Vectors.Vector;
       Ret         : Type_Access;
       Is_Variadic : Boolean := False;
+      Is_Never    : Boolean := False;   --  §4.10 `-> never`
    end record;
 
    package Sig_Vec is new Ada.Containers.Vectors
@@ -1081,7 +1094,13 @@ package body Kurt.Sema is
                            end;
                         end;
                      end loop;
-                     E.Sem_Ty := S.Ret;
+                     --  §7.11: a call to a `-> never` subroutine is a
+                     --  diverging expression; its type is `never`.
+                     if S.Is_Never then
+                        E.Sem_Ty := Mk_Named ("never");
+                     else
+                        E.Sem_Ty := S.Ret;
+                     end if;
                   else
                      Error ("call to unknown subroutine '"
                             & SU.To_String (Name) & "'");
@@ -1248,16 +1267,29 @@ package body Kurt.Sema is
                   CT : constant Type_Access :=
                     Infer (E.I_Cond, Mk_Named ("bool"));
                   TT : constant Type_Access := Infer (E.I_Then, Expected);
-                  ET : constant Type_Access := Infer (E.I_Else, TT);
+                  --  §7.11: a diverging `then` contributes no type; steer the
+                  --  `else` by the surviving expected type, not by `never`.
+                  ET : constant Type_Access :=
+                    Infer (E.I_Else,
+                           (if Is_Never_Ty (TT) then Expected else TT));
                   pragma Unreferenced (CT);
                begin
-                  if not Same_Type (TT, ET) then
-                     Error ("if branches have differing types: '"
-                            & Image (TT) & "' vs '" & Image (ET)
-                            & "' (§7.1)");
+                  --  §7.11 unification: drop the diverging branch; the
+                  --  result type comes from the non-diverging one (or is
+                  --  itself `never` when both diverge).
+                  if Is_Never_Ty (TT) then
+                     E.Sem_Ty := ET;
+                  elsif Is_Never_Ty (ET) then
+                     E.Sem_Ty := TT;
+                  else
+                     if not Same_Type (TT, ET) then
+                        Error ("if branches have differing types: '"
+                               & Image (TT) & "' vs '" & Image (ET)
+                               & "' (§7.1)");
+                     end if;
+                     E.Sem_Ty := TT;
                   end if;
-                  E.Sem_Ty := TT;
-                  return TT;
+                  return E.Sem_Ty;
                end;
 
             when E_Deref =>
@@ -1402,6 +1434,7 @@ package body Kurt.Sema is
                   Scrut_Ty : constant Type_Access := Infer (E.M_Scrut, null);
                   Result   : Type_Access := Expected;
                   Has_Wild : Boolean := False;
+                  Any_Live : Boolean := False;  --  §7.11 saw a non-diverging arm
                   Is_Enum_Scrut : constant Boolean :=
                     Scrut_Ty /= null and then Scrut_Ty.Kind = T_Named
                     and then Kurt.Layout.Is_Enum
@@ -1464,12 +1497,17 @@ package body Kurt.Sema is
                            Scope.Delete_Last;
                         end loop;
 
-                        if Result = null then
-                           Result := BT;
-                        elsif not Same_Type (Result, BT) then
-                           Error ("match arms have differing types: '"
-                                  & Image (Result) & "' vs '"
-                                  & Image (BT) & "'");
+                        --  §7.11: a diverging arm contributes no type to the
+                        --  unification; the result comes from the live arms.
+                        if not Is_Never_Ty (BT) then
+                           Any_Live := True;
+                           if Result = null or else Is_Never_Ty (Result) then
+                              Result := BT;
+                           elsif not Same_Type (Result, BT) then
+                              Error ("match arms have differing types: '"
+                                     & Image (Result) & "' vs '"
+                                     & Image (BT) & "'");
+                           end if;
                         end if;
                      end;
                   end loop;
@@ -1527,8 +1565,14 @@ package body Kurt.Sema is
                      end if;
                   end if;
 
-                  E.Sem_Ty := Result;
-                  return Result;
+                  --  §7.11: when every arm diverges, the match itself is a
+                  --  diverging expression of type `never`.
+                  if not Any_Live then
+                     E.Sem_Ty := Mk_Named ("never");
+                  else
+                     E.Sem_Ty := Result;
+                  end if;
+                  return E.Sem_Ty;
                end;
 
             when E_Cast =>
@@ -2434,6 +2478,11 @@ package body Kurt.Sema is
                   T : constant Type_Access := Infer (S.Xp_Val, null);
                   pragma Unreferenced (T);
                begin null; end;
+
+            when S_Trap =>
+               --  §7.10/§7.11: `@trap;` is a diverging expression; it
+               --  produces no value and imposes no type obligation.
+               null;
          end case;
       end Check_Stmt;
 
@@ -2504,7 +2553,8 @@ package body Kurt.Sema is
               ((Name        => Fn.Header.Name,
                 Params      => Fn.Header.Params,
                 Ret         => Fn.Header.Return_Type,
-                Is_Variadic => Fn.Header.Is_Variadic));
+                Is_Variadic => Fn.Header.Is_Variadic,
+                Is_Never    => Fn.Header.Is_Never));
          end;
       end loop;
 
@@ -2520,7 +2570,8 @@ package body Kurt.Sema is
                     ((Name        => P.Name,
                       Params      => P.Params,
                       Ret         => P.Return_Type,
-                      Is_Variadic => P.Is_Variadic));
+                      Is_Variadic => P.Is_Variadic,
+                      Is_Never    => P.Is_Never));
                end;
             end loop;
          end;
@@ -2742,6 +2793,88 @@ package body Kurt.Sema is
       --  an empty generic context; §5.9 templates are checked ONCE under
       --  the type-erasure rule with their parameters abstract.
       declare
+         --  §7.11 divergence analysis (bootstrap subset). A statement list
+         --  diverges when control cannot reach its end. The diverging forms
+         --  recognised here: `@trap`, `return`, `break`, `continue`,
+         --  `express`, a `-> never` call, a `loop {}` with no `break`, an
+         --  `if`/`else` whose both arms diverge, and an `airside` block
+         --  whose body diverges.
+         function Cond_Is_True (E : Expr_Access) return Boolean is
+           (E /= null and then E.Kind = E_Bool_Lit and then E.Bool_V);
+
+         --  §7.11: a `loop {}` diverges only when no `break` (targeting it or
+         --  an enclosing loop) and no `express` (targeting an enclosing
+         --  block) is reachable in its body. Conservative: any such escape
+         --  anywhere in V disqualifies it, even one bound to a nested
+         --  construct — a false negative is safe; a false positive is not.
+         function Has_Escape (V : Stmt_Vectors.Vector) return Boolean is
+         begin
+            for I in V.First_Index .. V.Last_Index loop
+               declare
+                  S : constant Stmt_Access := V.Element (I);
+               begin
+                  case S.Kind is
+                     when S_Break | S_Express => return True;
+                     when S_Airside_Block =>
+                        if Has_Escape (S.A_Stmts) then return True; end if;
+                     when S_If =>
+                        if Has_Escape (S.SI_Then)
+                          or else Has_Escape (S.SI_Else)
+                        then return True; end if;
+                     when S_While =>
+                        if Has_Escape (S.W_Body)
+                          or else Has_Escape (S.W_Then)
+                        then return True; end if;
+                     when S_Extract =>
+                        if Has_Escape (S.X_Else) then return True; end if;
+                     when others => null;
+                  end case;
+               end;
+            end loop;
+            return False;
+         end Has_Escape;
+
+         function Stmts_Diverge (V : Stmt_Vectors.Vector) return Boolean;
+
+         function Stmt_Diverges (S : Stmt_Access) return Boolean is
+         begin
+            if S = null then
+               return False;
+            end if;
+            case S.Kind is
+               when S_Trap | S_Return | S_Break | S_Continue | S_Express =>
+                  return True;
+               when S_Expr =>
+                  --  §7.11: a `-> never` call (its value type is `never`).
+                  return Is_Never_Ty (S.E_Val.Sem_Ty);
+               when S_Airside_Block =>
+                  return Stmts_Diverge (S.A_Stmts);
+               when S_If =>
+                  return (not S.SI_Else.Is_Empty)
+                    and then Stmts_Diverge (S.SI_Then)
+                    and then Stmts_Diverge (S.SI_Else);
+               when S_While =>
+                  --  `loop { … }` desugars to `while true`; with no escaping
+                  --  break/express it never transfers control onward.
+                  return Cond_Is_True (S.W_Cond)
+                    and then not Has_Escape (S.W_Body);
+               when S_Let | S_Mut | S_Assign | S_Fence | S_Extract =>
+                  return False;
+            end case;
+         end Stmt_Diverges;
+
+         function Stmts_Diverge (V : Stmt_Vectors.Vector) return Boolean is
+         begin
+            --  Once a statement diverges, the rest of the list is
+            --  unreachable, so the list diverges from that point.
+            for I in V.First_Index .. V.Last_Index loop
+               if Stmt_Diverges (V.Element (I)) then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Stmts_Diverge;
+
          procedure Check_Fn (Fn : Fn_Decl) is
          begin
             Cur_Generics := Fn.Header.Generic_Params;
@@ -2773,6 +2906,17 @@ package body Kurt.Sema is
                Check_Stmt (Fn.Body_Stmts.Element (J));
             end loop;
             In_Airside := 0;
+
+            --  §4.10/§7.11: a `-> never` subroutine's body shall diverge —
+            --  control shall not be able to reach its end.
+            if Fn.Header.Is_Never
+              and then not Stmts_Diverge (Fn.Body_Stmts)
+            then
+               Error ("body of '-> never' subroutine '"
+                      & SU.To_String (Fn.Header.Name)
+                      & "' can fall through; it shall diverge "
+                      & "(spec 4.10/7.11)");
+            end if;
          end Check_Fn;
       begin
          for I in U.Fns.First_Index .. U.Fns.Last_Index loop

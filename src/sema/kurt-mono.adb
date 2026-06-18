@@ -364,6 +364,8 @@ package body Kurt.Mono is
          when S_Fence =>
             R.Fn_Guard := S.Fn_Guard;
             R.Fn_Form  := S.Fn_Form;
+         when S_Trap =>
+            null;   --  §7.10: no fields to copy
       end case;
       return R;
    end Copy_Stmt;
@@ -800,7 +802,7 @@ package body Kurt.Mono is
                Visit_Expr (S.Brk_Val);
             when S_Express =>
                Visit_Expr (S.Xp_Val);
-            when S_Continue | S_Fence =>
+            when S_Continue | S_Fence | S_Trap =>
                null;
          end case;
       end Visit_Stmt;

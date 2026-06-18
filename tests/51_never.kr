@@ -1,0 +1,12 @@
+@dyn as posix { fn write(si4, &raw ui1, uaddr) -> saddr; }
+
+// §7.10 with no handler declared, `@trap;` diverges via the
+// implementation-defined default: an undefined-instruction trap
+// (udf -> SIGILL, exit 132). The trap terminates without unwinding and
+// flushes nothing, so the proof-of-progress is an unbuffered write(2)
+// rather than a buffered printf.
+fn main() -> ui1 {
+    airside { posix::write(1, "reached\n\0".ptr, 8); }
+    @trap;
+    return 0;   // unreachable
+}

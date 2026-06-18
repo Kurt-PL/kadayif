@@ -53,6 +53,7 @@ package Kurt.Lexer is
       Kw_True,
       Kw_False,
       Kw_Cellbits,       --  cell-width keyword (§4.2.1, replaces CELL_BITS)
+      Kw_Never,          --  `never` diverging return type (§4.10, §7.11)
       --  Reference sigils (§4.9, §8.1). The `raw` qualifier in `&raw T`
       --  is a normal identifier; the parser splices the two tokens.
       Op_Amp,            --  &
@@ -124,6 +125,7 @@ package Kurt.Lexer is
       Op_DotDotEq,       --  ..=  (inclusive range, §4.8)
       --  Directives (§10.3, §8.5.3)
       Dir_At_Dyn,
+      Dir_At_Trap,       --  @trap termination primitive / handler (§7.10)
       Dir_At_Guard,      --  @guard fence family (§8.5.3)
       Dir_At_Volatile,   --  @volatile fence family (§8.5.3)
       Dir_At_Size,       --  T@size   type intrinsic (§6.12)

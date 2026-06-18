@@ -1184,5 +1184,20 @@ begin
                     when FF_End   => ".end")
               & " translation fence (no instruction)");
          end if;
+
+      when S_Trap =>
+         --  §7.10: `@trap;` diverges. With a handler declared, branch into
+         --  it; `@trap` is reentrant, so the handler may itself `@trap;`
+         --  (another `bl` re-invokes it). The handler shall diverge, but
+         --  should it fall through, the default divergence below still
+         --  terminates. Default divergence is the implementation-defined
+         --  behaviour: an undefined-instruction trap. It is self-contained
+         --  (no external symbol or stack discipline), cannot return, and
+         --  does not unwind — matching §7.10's "terminates without
+         --  unwinding".
+         if Unit_Has_Trap_Handler then
+            IO.Put_Line (F, "    bl      _kurt_trap_handler");
+         end if;
+         IO.Put_Line (F, "    udf     #0         // @trap default divergence");
    end case;
 end Lower_Stmt;
