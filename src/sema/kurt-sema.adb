@@ -1177,19 +1177,64 @@ package body Kurt.Sema is
                         E.Sem_Ty := S.Ret;
                      end if;
                   else
-                     Error ("call to unknown subroutine '"
-                            & SU.To_String (Name) & "'");
-                     for I in E.C_Args.First_Index .. E.C_Args.Last_Index
-                     loop
-                        declare
-                           Ignore : constant Type_Access :=
-                             Infer (E.C_Args.Element (I), null);
-                           pragma Unreferenced (Ignore);
-                        begin
-                           null;
-                        end;
-                     end loop;
-                     E.Sem_Ty := null;
+                     --  §4.10: not a named subroutine — try an indirect call
+                     --  through a subroutine-pointer-typed callee value.
+                     declare
+                        CT : constant Type_Access := Infer (Callee, null);
+                     begin
+                        if CT /= null and then CT.Kind = T_Fn then
+                           E.C_Indirect := True;
+                           for I in E.C_Args.First_Index ..
+                                    E.C_Args.Last_Index
+                           loop
+                              declare
+                                 Pidx : constant Natural :=
+                                   CT.Fn_Params.First_Index
+                                     + (I - E.C_Args.First_Index);
+                                 Exp  : Type_Access := null;
+                              begin
+                                 if Pidx <= CT.Fn_Params.Last_Index then
+                                    Exp := CT.Fn_Params.Element (Pidx);
+                                 end if;
+                                 declare
+                                    Arg_Ty : constant Type_Access :=
+                                      Infer (E.C_Args.Element (I), Exp);
+                                 begin
+                                    if Exp /= null
+                                      and then not Assignable (Exp, Arg_Ty)
+                                    then
+                                       Error ("argument" & Integer'Image
+                                                (I - E.C_Args.First_Index + 1)
+                                              & " to subroutine pointer: "
+                                              & "expected '" & Image (Exp)
+                                              & "' but got '" & Image (Arg_Ty)
+                                              & "'");
+                                    end if;
+                                 end;
+                              end;
+                           end loop;
+                           if CT.Fn_Never then
+                              E.Sem_Ty := Mk_Named ("never");
+                           else
+                              E.Sem_Ty := CT.Fn_Ret;
+                           end if;
+                        else
+                           Error ("call to unknown subroutine '"
+                                  & SU.To_String (Name) & "'");
+                           for I in E.C_Args.First_Index ..
+                                    E.C_Args.Last_Index
+                           loop
+                              declare
+                                 Ignore : constant Type_Access :=
+                                   Infer (E.C_Args.Element (I), null);
+                                 pragma Unreferenced (Ignore);
+                              begin
+                                 null;
+                              end;
+                           end loop;
+                           E.Sem_Ty := null;
+                        end if;
+                     end;
                   end if;
                   return E.Sem_Ty;
                end;

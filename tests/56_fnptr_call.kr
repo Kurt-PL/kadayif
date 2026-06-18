@@ -1,0 +1,22 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+fn add(a: si4, b: si4) -> si4 { return a + b; }
+fn mul(a: si4, b: si4) -> si4 { return a * b; }
+
+// §4.10 a subroutine-pointer parameter, invoked indirectly.
+fn apply(f: fn(si4, si4) -> si4, x: si4, y: si4) -> si4 {
+    return f(x, y);
+}
+
+fn main() -> ui1 {
+    // Bind a subroutine pointer from a bare subroutine name, then call it.
+    let p: fn(si4, si4) -> si4 = add;
+    let r1: si4 = p(3, 4);                        // indirect -> 7
+    let r2: si4 = apply(mul, 6, 7);               // pass + indirect -> 42
+    // Reassign the pointer and call through it again.
+    mut q: fn(si4, si4) -> si4 = add;
+    q = mul;
+    let r3: si4 = q(5, 5);                         // indirect -> 25
+    airside { posix::printf("r1=%d r2=%d r3=%d\n\0".ptr, r1, r2, r3); }
+    return 0;
+}

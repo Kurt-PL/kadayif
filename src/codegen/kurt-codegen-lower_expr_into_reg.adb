@@ -303,7 +303,15 @@ is
          IO.Put_Line (F, "    add     x8, x29, #" & Img (Sret_Slot));
       end if;
 
-      IO.Put_Line (F, "    bl      " & Sym);
+      if E.C_Indirect then
+         --  §4.10 indirect call: the fixed args are already in x0..x7, so
+         --  load the subroutine-pointer value into x9 (a binding/field load
+         --  does not touch the argument registers) and branch to it.
+         Lower_Expr_Into_Reg (F, E.C_Callee, 9, ST);
+         IO.Put_Line (F, "    blr     x9");
+      else
+         IO.Put_Line (F, "    bl      " & Sym);
+      end if;
 
       if Total > 0 then
          IO.Put_Line (F, "    add     sp, sp, #" & Img (Total));

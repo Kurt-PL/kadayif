@@ -226,6 +226,10 @@ package Kurt.Parser is
          when E_Call =>
             C_Callee : Expr_Access;
             C_Args   : Expr_Vectors.Vector;
+            --  §4.10: set by Kurt.Sema when the callee is a
+            --  subroutine-pointer value rather than a named subroutine, so
+            --  codegen emits an indirect call (`blr`).
+            C_Indirect : Boolean := False;
          when E_If =>
             I_Cond : Expr_Access;
             I_Then : Expr_Access;
