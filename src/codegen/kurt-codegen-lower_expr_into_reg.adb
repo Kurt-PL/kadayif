@@ -1248,6 +1248,19 @@ begin
             Lower_Expr_Into_Reg (F, E.P_Assoc_Val, Target_Reg, ST);
             return;
          end if;
+         --  §4.10: a bare subroutine name used as a value — load its
+         --  address (the subroutine pointer).
+         if E.P_Is_Fn_Ptr then
+            declare
+               Lbl : constant String :=
+                 "_" & SU.To_String (E.Segments.Last_Element);
+            begin
+               IO.Put_Line (F, "    adrp    " & Xreg & ", " & Lbl & "@PAGE");
+               IO.Put_Line (F, "    add     " & Xreg & ", " & Xreg
+                               & ", " & Lbl & "@PAGEOFF");
+               return;
+            end;
+         end if;
          if Natural (E.Segments.Length) = 1 then
             declare
                Name : constant String :=

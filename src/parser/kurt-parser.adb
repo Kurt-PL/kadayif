@@ -196,6 +196,66 @@ package body Kurt.Parser is
          Node := new AST_Type (Kind => T_Dyn);
          Node.Trait_Name := Take_Ident (C, "trait name after 'dyn'");
          return Node;
+      elsif C.Cur.Kind = Kw_Fn or else C.Cur.Kind = Kw_Extern
+        or else C.Cur.Kind = Kw_Variadic or else C.Cur.Kind = Kw_Airside
+      then
+         --  §4.10 subroutine pointer type:
+         --      [extern[(iface)]] [variadic] [airside] fn '(' types ')'
+         --      [ '->' ( type | never ) ]
+         Node := new AST_Type (Kind => T_Fn);
+         if C.Cur.Kind = Kw_Extern then
+            Advance (C);
+            if C.Cur.Kind = Punct_LParen then
+               Advance (C);
+               Node.Fn_Extern := Take_Ident (C, "extern interface name");
+               --  `extern(native)` denotes the native interface (empty).
+               if SU.To_String (Node.Fn_Extern) = "native" then
+                  Node.Fn_Extern := SU.Null_Unbounded_String;
+               end if;
+               Expect (C, Punct_RParen, "')'");
+            end if;
+         end if;
+         if C.Cur.Kind = Kw_Variadic then
+            Advance (C);
+            Node.Fn_Variadic := True;
+         end if;
+         if C.Cur.Kind = Kw_Airside then
+            Advance (C);
+            Node.Fn_Airside := True;
+         end if;
+         Expect (C, Kw_Fn, "'fn'");
+         if C.Cur.Kind = Punct_Dot then
+            raise Syntax_Error with
+              "generic subroutine pointer types are not yet supported "
+              & "at line" & Positive'Image (C.Cur.Line);
+         end if;
+         Expect (C, Punct_LParen, "'('");
+         while C.Cur.Kind /= Punct_RParen loop
+            --  Optional informational `name :` prefix (no semantic effect).
+            if C.Cur.Kind = Tok_Ident
+              and then Peek_Tok (C).Kind = Punct_Colon
+            then
+               Advance (C);   --  name
+               Advance (C);   --  ':'
+            end if;
+            Node.Fn_Params.Append (Parse_Type (C));
+            exit when C.Cur.Kind /= Punct_Comma;
+            Advance (C);       --  ','  (trailing comma tolerated)
+         end loop;
+         Expect (C, Punct_RParen, "')'");
+         if C.Cur.Kind = Punct_Arrow then
+            Advance (C);
+            if C.Cur.Kind = Kw_Never then
+               Advance (C);
+               Node.Fn_Never := True;
+               Node.Fn_Ret   := null;
+            else
+               Node.Fn_Ret := Parse_Type (C);
+            end if;
+         else
+            Node.Fn_Ret := null;
+         end if;
+         return Node;
       elsif C.Cur.Kind = Punct_LBracket then
          --  §4.6 array type: `[T; N]` fixed-size (Len = N) or `[T]`
          --  unsized slice (Len = 0, only valid as a reference target).
@@ -399,7 +459,14 @@ package body Kurt.Parser is
             end if;
          end;
       elsif Allow_Unnamed
-        and then (C.Cur.Kind = Op_Amp or else C.Cur.Kind = Op_Dollar)
+        and then (C.Cur.Kind = Op_Amp or else C.Cur.Kind = Op_Dollar
+                  or else C.Cur.Kind = Kw_Dyn
+                  or else C.Cur.Kind = Punct_LBracket
+                  --  §4.10 unnamed subroutine-pointer-typed parameter.
+                  or else C.Cur.Kind = Kw_Fn
+                  or else C.Cur.Kind = Kw_Extern
+                  or else C.Cur.Kind = Kw_Variadic
+                  or else C.Cur.Kind = Kw_Airside)
       then
          P.Name := SU.Null_Unbounded_String;
          P.Ty   := Parse_Type (C);
@@ -1732,6 +1799,11 @@ package body Kurt.Parser is
                Subst_Self (T.Rng_Elem);
             when T_Dyn =>
                null;   --  `dyn Trait` names a trait, never `self_t`
+            when T_Fn =>
+               for I in T.Fn_Params.First_Index .. T.Fn_Params.Last_Index loop
+                  Subst_Self (T.Fn_Params.Element (I));
+               end loop;
+               Subst_Self (T.Fn_Ret);
          end case;
       end Subst_Self;
       TI : Trait_Impl;        --  populated only for `impl Type as Trait`

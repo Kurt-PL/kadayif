@@ -60,6 +60,18 @@ package body Kurt.Mono is
               & Mangle (T.Rng_Elem);
          when T_Dyn =>
             return "dyn_" & SU.To_String (T.Trait_Name);
+         when T_Fn =>
+            declare
+               S : SU.Unbounded_String := SU.To_Unbounded_String ("fnptr");
+            begin
+               for I in T.Fn_Params.First_Index .. T.Fn_Params.Last_Index loop
+                  SU.Append (S, "$" & Mangle (T.Fn_Params.Element (I)));
+               end loop;
+               if T.Fn_Ret /= null then
+                  SU.Append (S, "$ret$" & Mangle (T.Fn_Ret));
+               end if;
+               return SU.To_String (S);
+            end;
       end case;
    end Mangle;
 
@@ -134,6 +146,21 @@ package body Kurt.Mono is
                Rng_Elem      => Subst (T.Rng_Elem, Params, Args));
          when T_Dyn =>
             return T;   --  trait object carries no substitutable parts
+         when T_Fn =>
+            declare
+               R : constant Type_Access := new AST_Type (Kind => T_Fn);
+            begin
+               for I in T.Fn_Params.First_Index .. T.Fn_Params.Last_Index loop
+                  R.Fn_Params.Append
+                    (Subst (T.Fn_Params.Element (I), Params, Args));
+               end loop;
+               R.Fn_Ret      := Subst (T.Fn_Ret, Params, Args);
+               R.Fn_Variadic := T.Fn_Variadic;
+               R.Fn_Airside  := T.Fn_Airside;
+               R.Fn_Never    := T.Fn_Never;
+               R.Fn_Extern   := T.Fn_Extern;
+               return R;
+            end;
       end case;
    end Subst;
 
@@ -462,6 +489,11 @@ package body Kurt.Mono is
                Subst_Self_Name (T.Rng_Elem, Concrete);
             when T_Dyn =>
                null;
+            when T_Fn =>
+               for I in T.Fn_Params.First_Index .. T.Fn_Params.Last_Index loop
+                  Subst_Self_Name (T.Fn_Params.Element (I), Concrete);
+               end loop;
+               Subst_Self_Name (T.Fn_Ret, Concrete);
          end case;
       end Subst_Self_Name;
 
@@ -558,6 +590,11 @@ package body Kurt.Mono is
                Visit_Type (T.Rng_Elem);   --  intrinsic; no instantiation
             when T_Dyn =>
                null;
+            when T_Fn =>
+               for I in T.Fn_Params.First_Index .. T.Fn_Params.Last_Index loop
+                  Visit_Type (T.Fn_Params.Element (I));
+               end loop;
+               Visit_Type (T.Fn_Ret);
             when T_Tuple =>
                for I in T.Elems.First_Index .. T.Elems.Last_Index loop
                   Visit_Type (T.Elems.Element (I));

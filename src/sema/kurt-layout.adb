@@ -546,6 +546,9 @@ package body Kurt.Layout is
          when T_Range =>
             --  §4.8: { start: T, end: T } aligns as T.
             return Align_Of (T.Rng_Elem);
+         when T_Fn =>
+            --  §4.10: a subroutine pointer is pointer-sized/aligned.
+            return Kurt.Address_Cells;
          when T_Dyn =>
             --  §9.5: a bare `dyn Trait` is unsized; only `&dyn Trait`
             --  (a fat ref) is sized. Align as a pointer pair.
@@ -632,6 +635,9 @@ package body Kurt.Layout is
             --  to it is the fat pair handled in Ref-size code. Report the
             --  fat-pair size so a stray query is harmless.
             return 16;
+         when T_Fn =>
+            --  §4.10: a subroutine pointer equals `(&raw void)@size`.
+            return Kurt.Address_Cells;
          when T_Tuple =>
             --  §4.7 / §4.11: positional fields, KSA-packed.
             declare

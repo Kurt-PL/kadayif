@@ -108,6 +108,34 @@ package body Kurt.Sema is
               & Image (T.Rng_Elem) & ">";
          when T_Dyn =>
             return "dyn " & SU.To_String (T.Trait_Name);
+         when T_Fn =>
+            declare
+               R : SU.Unbounded_String;
+            begin
+               if SU.Length (T.Fn_Extern) > 0 then
+                  SU.Append (R, "extern(" & SU.To_String (T.Fn_Extern) & ") ");
+               end if;
+               if T.Fn_Variadic then
+                  SU.Append (R, "variadic ");
+               end if;
+               if T.Fn_Airside then
+                  SU.Append (R, "airside ");
+               end if;
+               SU.Append (R, "fn(");
+               for I in T.Fn_Params.First_Index .. T.Fn_Params.Last_Index loop
+                  if I /= T.Fn_Params.First_Index then
+                     SU.Append (R, ", ");
+                  end if;
+                  SU.Append (R, Image (T.Fn_Params.Element (I)));
+               end loop;
+               SU.Append (R, ")");
+               if T.Fn_Never then
+                  SU.Append (R, " -> never");
+               elsif T.Fn_Ret /= null then
+                  SU.Append (R, " -> " & Image (T.Fn_Ret));
+               end if;
+               return SU.To_String (R);
+            end;
       end case;
    end Image;
 
@@ -310,6 +338,26 @@ package body Kurt.Sema is
          when T_Dyn =>
             return SU.To_String (A.Trait_Name)
               = SU.To_String (B.Trait_Name);
+         when T_Fn =>
+            --  §4.10: identity is the invocation interface, variadic status,
+            --  airside, the parameter types, and the return type.
+            if SU.To_String (A.Fn_Extern) /= SU.To_String (B.Fn_Extern)
+              or else A.Fn_Variadic /= B.Fn_Variadic
+              or else A.Fn_Airside /= B.Fn_Airside
+              or else A.Fn_Never /= B.Fn_Never
+              or else Natural (A.Fn_Params.Length)
+                        /= Natural (B.Fn_Params.Length)
+            then
+               return False;
+            end if;
+            for I in A.Fn_Params.First_Index .. A.Fn_Params.Last_Index loop
+               if not Same_Type (A.Fn_Params.Element (I),
+                                 B.Fn_Params.Element (I))
+               then
+                  return False;
+               end if;
+            end loop;
+            return Same_Type (A.Fn_Ret, B.Fn_Ret);
       end case;
    end Same_Type;
 
@@ -717,6 +765,33 @@ package body Kurt.Sema is
                               return T;
                            end if;
                         end loop;
+                        --  §4.10: a bare subroutine name used as a value is
+                        --  a subroutine pointer; its type is built from the
+                        --  signature. (As a call callee the name is resolved
+                        --  in E_Call, not here.)
+                        declare
+                           FS : Sig;
+                        begin
+                           if Find_Sig (Name, FS) then
+                              declare
+                                 FP : constant Type_Access :=
+                                   new AST_Type (Kind => T_Fn);
+                              begin
+                                 for I in FS.Params.First_Index ..
+                                          FS.Params.Last_Index
+                                 loop
+                                    FP.Fn_Params.Append
+                                      (FS.Params.Element (I).Ty);
+                                 end loop;
+                                 FP.Fn_Ret      := FS.Ret;
+                                 FP.Fn_Variadic := FS.Is_Variadic;
+                                 FP.Fn_Never    := FS.Is_Never;
+                                 E.P_Is_Fn_Ptr  := True;
+                                 E.Sem_Ty       := FP;
+                                 return FP;
+                              end;
+                           end if;
+                        end;
                         Error ("unknown identifier '" & Name & "'");
                      end if;
                      E.Sem_Ty := T;
@@ -1623,6 +1698,17 @@ package body Kurt.Sema is
                                & Image (Src) & "' and '"
                                & Image (E.Cast_Ty) & "' differ in size");
                      end if;
+                     E.Sem_Ty := E.Cast_Ty;
+                  elsif (Src /= null and then Src.Kind = T_Fn)
+                    or else (E.Cast_Ty /= null and then E.Cast_Ty.Kind = T_Fn)
+                  then
+                     --  §4.10: `as` shall not apply to or from a subroutine
+                     --  pointer; conversions go through `as!` in an airside
+                     --  block.
+                     Error ("`as` shall not convert to or from a subroutine "
+                            & "pointer ('" & Image (Src) & "' as '"
+                            & Image (E.Cast_Ty)
+                            & "'); use `as!` in an airside block (spec 4.10)");
                      E.Sem_Ty := E.Cast_Ty;
                   elsif (Is_Ref (E.Cast_Ty) or else Is_Uaddr (E.Cast_Ty))
                     and then (Is_Ref (Src) or else Is_Uaddr (Src))

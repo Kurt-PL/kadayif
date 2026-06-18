@@ -29,7 +29,8 @@ package Kurt.Parser is
    package Type_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Type_Access);
 
-   type Type_Kind is (T_Named, T_Ref, T_Tuple, T_Array, T_Dyn, T_Range);
+   type Type_Kind is
+     (T_Named, T_Ref, T_Tuple, T_Array, T_Dyn, T_Range, T_Fn);
    type Ref_Sigil is (R_Shared, R_Excl, R_Raw);
 
    --  §8.1 store-discipline modifier: `mut`, `atomic`, and `guard` are
@@ -70,6 +71,19 @@ package Kurt.Parser is
             --  no declaration, no monomorphisation.
             Rng_Inclusive : Boolean := False;
             Rng_Elem      : Type_Access;
+         when T_Fn =>
+            --  §4.10 subroutine pointer `[extern[(iface)]] [variadic]
+            --  [airside] fn (T…) [-> U]`. A pointer-sized value (not a
+            --  reference). Parameter names are informational only, so only
+            --  the parameter types are kept. Fn_Ret null => void (or never
+            --  when Fn_Never). Fn_Extern empty => the native invocation
+            --  interface (as do `extern` / `extern(native)`).
+            Fn_Params   : Type_Vectors.Vector;
+            Fn_Ret      : Type_Access;
+            Fn_Variadic : Boolean := False;
+            Fn_Airside  : Boolean := False;
+            Fn_Never    : Boolean := False;
+            Fn_Extern   : SU.Unbounded_String;
       end case;
    end record;
 
@@ -202,6 +216,10 @@ package Kurt.Parser is
             --  resolves it to the impl's value expression, which codegen
             --  lowers in place. Null for ordinary paths.
             P_Assoc_Val : Expr_Access := null;
+            --  §4.10: set by Kurt.Sema when this bare path names a
+            --  subroutine used as a value — a subroutine pointer. Codegen
+            --  then emits the subroutine's address rather than a load.
+            P_Is_Fn_Ptr : Boolean := False;
          when E_Field =>
             F_Recv : Expr_Access;
             F_Name : SU.Unbounded_String;
