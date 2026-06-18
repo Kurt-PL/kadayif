@@ -528,28 +528,38 @@ package body Kurt.Parser is
 
          when Kw_Cellbits =>
             --  §4.2.1: `cellbits[::exec|::xlat]` evaluates to a `uaddr`
-            --  value. Translation and execution environment cell widths
-            --  are both 8 on this host/target, so every form is 8 (and
-            --  the unqualified xlatime max(exec, xlat) is too).
+            --  value. `::exec` / `::xlat` name the execution / translation
+            --  cell widths; unqualified `cellbits` is `::exec` outside a
+            --  xlatime evaluation and max(exec, xlat) within one. On this
+            --  host/target exec = xlat, so every form yields the same
+            --  value. All three derive from the single source in Kurt.
             Advance (C);
-            if C.Cur.Kind = Punct_ColonColon then
-               Advance (C);
-               declare
-                  Q : constant String :=
-                    SU.To_String (Take_Ident (C, "cellbits qualifier"));
-               begin
-                  if Q /= "exec" and then Q /= "xlat" then
-                     raise Syntax_Error with
-                       "cellbits qualifier shall be 'exec' or 'xlat' "
-                       & "(spec 4.2.1) at line"
-                       & Positive'Image (C.Cur.Line);
-                  end if;
-               end;
-            end if;
-            E := new Expr_Node (Kind => E_Int_Lit);
-            E.Int_V      := 8;
-            E.Int_Suffix := SU.To_Unbounded_String ("uaddr");
-            return E;
+            declare
+               Val : Long_Long_Integer := Kurt.Cell_Bits_Exec;
+            begin
+               if C.Cur.Kind = Punct_ColonColon then
+                  Advance (C);
+                  declare
+                     Q : constant String :=
+                       SU.To_String (Take_Ident (C, "cellbits qualifier"));
+                  begin
+                     if Q = "exec" then
+                        Val := Kurt.Cell_Bits_Exec;
+                     elsif Q = "xlat" then
+                        Val := Kurt.Cell_Bits_Xlat;
+                     else
+                        raise Syntax_Error with
+                          "cellbits qualifier shall be 'exec' or 'xlat' "
+                          & "(spec 4.2.1) at line"
+                          & Positive'Image (C.Cur.Line);
+                     end if;
+                  end;
+               end if;
+               E := new Expr_Node (Kind => E_Int_Lit);
+               E.Int_V      := Val;
+               E.Int_Suffix := SU.To_Unbounded_String ("uaddr");
+               return E;
+            end;
 
          when Tok_Float_Lit =>
             E := new Expr_Node (Kind => E_Float_Lit);

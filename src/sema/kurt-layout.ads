@@ -15,7 +15,8 @@ package Kurt.Layout is
    --  Record the unit whose struct declarations subsequent queries use.
    procedure Register (U : Kurt.Parser.Translation_Unit);
 
-   --  Size in cells (host bytes; CELL_BITS = 8) of a type.
+   --  Size in cells of a type. A cell is Kurt.Cell_Bits_Exec bits wide;
+   --  on this target a cell is a host byte.
    function Size_Of (T : Kurt.Parser.Type_Access) return Natural;
 
    --  Alignment in cells.

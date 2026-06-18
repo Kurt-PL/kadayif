@@ -663,7 +663,8 @@ package body Kurt.Layout is
                elsif N = "fe11m52" then return 8;
                elsif N = "fe15m112" then return 16;
                elsif N = "fe19m236" then return 32;
-               elsif N = "uaddr" or else N = "saddr" then return 8;
+               elsif N = "uaddr" or else N = "saddr" then
+                  return Kurt.Address_Cells;
                elsif N = "bool" then return 1;
                elsif N = "void" then return 0;
                elsif Is_Verdict (N) then

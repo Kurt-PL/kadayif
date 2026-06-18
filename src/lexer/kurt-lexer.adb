@@ -359,11 +359,71 @@ package body Kurt.Lexer is
    end Scan_Int;
 
    ------------------------------------------------------------------
-   --  String literal (§3.4.5, §3.4.7).
-   --  Bootstrap escapes: \0 \n \t \r \\ \"
-   --  Per §3.4.5, an unescaped newline within a string literal is a TF.
-   --  Each character is mapped 1:1 to a cell (CELL_BITS=8 assumed for the
-   --  host target; the broader mapping rule in §3.4.5 is deferred).
+   --  §3.5.7 escape sequence. On entry the cursor is at the escape
+   --  selector character (the one after `\`); on return it is just past
+   --  the whole escape. Returns the resolved cell value. Shared by the
+   --  string- and character-literal scanners.
+   ------------------------------------------------------------------
+
+   function Scan_Escape (L : in out Lexer) return Character is
+      Sel : constant Character := Peek (L);
+   begin
+      Advance (L);  --  consume the selector
+      case Sel is
+         when '0'  => return Character'Val (0);
+         when 'a'  => return Character'Val (7);
+         when 'b'  => return Character'Val (8);
+         when 't'  => return L1.HT;
+         when 'n'  => return L1.LF;
+         when 'v'  => return Character'Val (11);
+         when 'f'  => return Character'Val (12);
+         when 'r'  => return L1.CR;
+         when '\'  => return '\';
+         when '''  => return ''';
+         when '"'  => return '"';
+         when 'x'  =>
+            --  §3.5.7: exactly ceil(cellbits::exec / 4) hex digits; the
+            --  value is a ui1 cell value and shall not exceed
+            --  2**cellbits::exec - 1. Both the digit count and the bound
+            --  derive from the single cellbits source in Kurt.
+            declare
+               V : Natural := 0;
+            begin
+               for I in 1 .. Kurt.Hex_Escape_Digits loop
+                  declare
+                     D : constant Integer := Digit_Value (Peek (L));
+                  begin
+                     if D not in 0 .. 15 then
+                        raise Translation_Failure
+                          with "\x requires exactly"
+                             & Integer'Image (Kurt.Hex_Escape_Digits)
+                             & " hexadecimal digits (§3.5.7) at line"
+                             & Positive'Image (L.Line);
+                     end if;
+                     V := V * 16 + D;
+                  end;
+                  Advance (L);
+               end loop;
+               if V > 2 ** Kurt.Cell_Bits_Exec - 1 then
+                  raise Translation_Failure
+                    with "\x escape value exceeds 2**cellbits - 1 "
+                       & "(§3.5.7) at line" & Positive'Image (L.Line);
+               end if;
+               return Character'Val (V);
+            end;
+         when others =>
+            raise Translation_Failure
+              with "unrecognised escape \" & Sel
+                 & " (§3.5.7) at line" & Positive'Image (L.Line);
+      end case;
+   end Scan_Escape;
+
+   ------------------------------------------------------------------
+   --  String literal (§3.5.5, §3.5.7).
+   --  Per §3.5.5, an unescaped line ending within a string literal is a
+   --  TF. Each character is mapped 1:1 to a cell (the C >= W partition
+   --  of §3.5.5, with character width equal to cellbits on this target;
+   --  the C < W partitioning is deferred).
    ------------------------------------------------------------------
 
    function Scan_String (L : in out Lexer) return Token is
@@ -394,44 +454,7 @@ package body Kurt.Lexer is
                   raise Translation_Failure
                     with "string ends with unfinished escape sequence";
                end if;
-               case Peek (L) is
-                  when '0'  => SU.Append (Bytes, Character'Val (0));
-                  when 'a'  => SU.Append (Bytes, Character'Val (7));
-                  when 'b'  => SU.Append (Bytes, Character'Val (8));
-                  when 't'  => SU.Append (Bytes, L1.HT);
-                  when 'n'  => SU.Append (Bytes, L1.LF);
-                  when 'v'  => SU.Append (Bytes, Character'Val (11));
-                  when 'f'  => SU.Append (Bytes, Character'Val (12));
-                  when 'r'  => SU.Append (Bytes, L1.CR);
-                  when '\'  => SU.Append (Bytes, '\');
-                  when '''  => SU.Append (Bytes, ''');
-                  when '"'  => SU.Append (Bytes, '"');
-                  when 'x'  =>
-                     --  §3.5.7: `\xHH` — exactly ceil(cellbits/4) = 2
-                     --  hex digits on this target. Consume 'x' and the
-                     --  first digit here; the shared Advance below
-                     --  consumes the second.
-                     Advance (L);
-                     declare
-                        H1 : constant Integer := Digit_Value (Peek (L));
-                        H2 : constant Integer := Digit_Value (Peek (L, 1));
-                     begin
-                        if H1 not in 0 .. 15 or else H2 not in 0 .. 15 then
-                           raise Translation_Failure
-                             with "\x requires exactly 2 hexadecimal "
-                                & "digits (§3.5.7) at line"
-                                & Positive'Image (L.Line);
-                        end if;
-                        SU.Append (Bytes, Character'Val (16 * H1 + H2));
-                     end;
-                     Advance (L);
-                  when others =>
-                     raise Translation_Failure
-                       with "unrecognised escape \" & Peek (L)
-                          & " (§3.5.7) at line"
-                          & Positive'Image (L.Line);
-               end case;
-               Advance (L);
+               SU.Append (Bytes, Scan_Escape (L));
             else
                SU.Append (Bytes, C);
                Advance (L);
@@ -531,41 +554,7 @@ package body Kurt.Lexer is
                raise Translation_Failure
                  with "character literal ends with unfinished escape";
             end if;
-            case Peek (L) is
-               when '0'  => V := Character'Val (0);
-               when 'a'  => V := Character'Val (7);
-               when 'b'  => V := Character'Val (8);
-               when 't'  => V := L1.HT;
-               when 'n'  => V := L1.LF;
-               when 'v'  => V := Character'Val (11);
-               when 'f'  => V := Character'Val (12);
-               when 'r'  => V := L1.CR;
-               when '\'  => V := '\';
-               when '''  => V := ''';
-               when '"'  => V := '"';
-               when 'x'  =>
-                  --  §3.5.7: `\xHH`. Consume 'x' and the first digit
-                  --  here; the shared Advance below takes the second.
-                  Advance (L);
-                  declare
-                     H1 : constant Integer := Digit_Value (Peek (L));
-                     H2 : constant Integer := Digit_Value (Peek (L, 1));
-                  begin
-                     if H1 not in 0 .. 15 or else H2 not in 0 .. 15 then
-                        raise Translation_Failure
-                          with "\x requires exactly 2 hexadecimal "
-                             & "digits (§3.5.7) at line"
-                             & Positive'Image (L.Line);
-                     end if;
-                     V := Character'Val (16 * H1 + H2);
-                  end;
-                  Advance (L);
-               when others =>
-                  raise Translation_Failure
-                    with "unrecognised escape \" & Peek (L)
-                       & " (§3.5.7) at line" & Positive'Image (L.Line);
-            end case;
-            Advance (L);
+            V := Scan_Escape (L);
          else
             V := C;
             Advance (L);
