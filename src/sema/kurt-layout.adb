@@ -653,10 +653,13 @@ package body Kurt.Layout is
                N : constant String := SU.To_String (T.Name);
                D : Struct_Decl;
             begin
+               --  §4.2.2: uiN/siN occupy N cells (N * cellbits bits).
                if N = "ui1" or else N = "si1" then return 1;
                elsif N = "ui2" or else N = "si2" then return 2;
                elsif N = "ui4" or else N = "si4" then return 4;
                elsif N = "ui8" or else N = "si8" then return 8;
+               elsif N = "ui16" or else N = "si16" then return 16;
+               elsif N = "ui32" or else N = "si32" then return 32;
                --  Floating-point types (§4): size = (1 + e + m) bits / 8.
                elsif N = "fe5m10" or else N = "fe8m7" then return 2;
                elsif N = "fe8m23" then return 4;

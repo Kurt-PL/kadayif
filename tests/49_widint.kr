@@ -1,0 +1,15 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §4.2.2 wide integer widths: uiN/siN occupy N cells (N * cellbits bits).
+// §4.11.1 numeric align == size.
+fn main() -> ui1 {
+    airside { posix::printf("u16 sz=%lu al=%lu\n\0".ptr,
+        ui16@size, ui16@align); }                                // 16 16
+    airside { posix::printf("u32 sz=%lu al=%lu\n\0".ptr,
+        ui32@size, ui32@align); }                                // 32 32
+    airside { posix::printf("s16 sz=%lu al=%lu\n\0".ptr,
+        si16@size, si16@align); }                                // 16 16
+    airside { posix::printf("s32 sz=%lu al=%lu\n\0".ptr,
+        si32@size, si32@align); }                                // 32 32
+    return 0;
+}
