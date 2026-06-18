@@ -25,6 +25,7 @@ package Kurt.Lexer is
       Kw_Fn,
       Kw_Return,
       Kw_As,
+      Kw_As_Bang,        --  `as!` airside reinterpret cast (§3.7, §6.8.11)
       Kw_Pub,
       Kw_Extern,
       Kw_Variadic,

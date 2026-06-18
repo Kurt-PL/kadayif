@@ -997,16 +997,12 @@ package body Kurt.Parser is
    function Parse_Cast (C : in out Cursor) return Expr_Access is
       E : Expr_Access := Parse_Unary (C);
    begin
-      while C.Cur.Kind = Kw_As loop
-         Advance (C);
+      while C.Cur.Kind = Kw_As or else C.Cur.Kind = Kw_As_Bang loop
          declare
             Next : constant Expr_Access := new Expr_Node (Kind => E_Cast);
-            Bang : Boolean := False;
+            Bang : constant Boolean := C.Cur.Kind = Kw_As_Bang;  --  §6.8.11
          begin
-            if C.Cur.Kind = Op_Bang then   --  `as!` reinterpret (§6.8.11)
-               Advance (C);
-               Bang := True;
-            end if;
+            Advance (C);   --  consume `as` / `as!`
             Next.Cast_Inner := E;
             Next.Cast_Bang  := Bang;
             if C.Cur.Kind = Op_Question and then not Bang then

@@ -145,6 +145,14 @@ package body Kurt.Lexer is
          elsif S = "never"    then T.Kind := Kw_Never;
          else                       T.Kind := Tok_Ident;
          end if;
+
+         --  §3.7 `as!` is a single token (maximal munch): the `!` must
+         --  follow `as` with no intervening whitespace.
+         if T.Kind = Kw_As and then not At_End (L) and then Peek (L) = '!'
+         then
+            Advance (L);
+            T.Kind := Kw_As_Bang;
+         end if;
       end;
       return T;
    end Scan_Ident;
@@ -323,6 +331,104 @@ package body Kurt.Lexer is
                T.Kind    := Tok_Float_Lit;
                T.Lexeme  := Buf;
                T.Float_V := Long_Float'Value (SU.To_String (Buf));
+               T.Line    := Start_Line;
+               T.Col     := Start_Col;
+               return T;
+            end if;
+         end;
+      end if;
+
+      --  §3.5.2 hexadecimal floating-point literal: `0x` hex digits with a
+      --  fractional part (`.` hex digits) and/or a binary exponent
+      --  (`p`/`P` decimal). Without either it stays an integer (the `fe…`
+      --  of a would-be suffix are hex digits, per §3.5.2).
+      if Base = 16 then
+         declare
+            Is_Float : Boolean := False;
+            Mant     : Long_Float := Long_Float (V);   --  integer part
+            Frac_W   : Long_Float := 1.0 / 16.0;       --  next frac weight
+            Exp      : Integer := 0;
+            Exp_Neg  : Boolean := False;
+         begin
+            --  Fractional part: `.` then at least one hex digit.
+            if not At_End (L) and then Peek (L) = '.'
+              and then Digit_Value (Peek (L, 1)) in 0 .. 15
+            then
+               Is_Float := True;
+               Advance (L);   --  consume '.'
+               loop
+                  exit when At_End (L);
+                  if Peek (L) = '_' then
+                     if Digit_Value (Peek (L, 1)) not in 0 .. 15 then
+                        raise Translation_Failure with
+                          "misplaced digit separator '_' (§3.5.8) at line"
+                          & Positive'Image (L.Line);
+                     end if;
+                     Advance (L);
+                  elsif Digit_Value (Peek (L)) in 0 .. 15 then
+                     Mant := Mant
+                       + Long_Float (Digit_Value (Peek (L))) * Frac_W;
+                     Frac_W := Frac_W / 16.0;
+                     Advance (L);
+                  else
+                     exit;
+                  end if;
+               end loop;
+            end if;
+            --  Binary exponent: `p`/`P` then optional sign then decimal.
+            if not At_End (L)
+              and then (Peek (L) = 'p' or else Peek (L) = 'P')
+              and then (Digit_Value (Peek (L, 1)) in 0 .. 9
+                        or else ((Peek (L, 1) = '+' or else Peek (L, 1) = '-')
+                                 and then Digit_Value (Peek (L, 2)) in 0 .. 9))
+            then
+               Is_Float := True;
+               Advance (L);   --  consume 'p'/'P'
+               if Peek (L) = '+' or else Peek (L) = '-' then
+                  Exp_Neg := Peek (L) = '-';
+                  Advance (L);
+               end if;
+               loop
+                  exit when At_End (L);
+                  if Peek (L) = '_' then
+                     if Digit_Value (Peek (L, 1)) not in 0 .. 9 then
+                        raise Translation_Failure with
+                          "misplaced digit separator '_' (§3.5.8) at line"
+                          & Positive'Image (L.Line);
+                     end if;
+                     Advance (L);
+                  elsif Digit_Value (Peek (L)) in 0 .. 9 then
+                     Exp := Exp * 10 + Digit_Value (Peek (L));
+                     Advance (L);
+                  else
+                     exit;
+                  end if;
+               end loop;
+               if Exp_Neg then
+                  Exp := -Exp;
+               end if;
+            end if;
+
+            if Is_Float then
+               --  §3.5.2: value = significand × 2**(binary exponent).
+               if not At_End (L)
+                 and then (Peek (L) = 'f' or else Peek (L) = 'b')
+               then
+                  declare
+                     Suf : SU.Unbounded_String;
+                  begin
+                     while not At_End (L)
+                       and then Is_Ident_Continue (Peek (L))
+                     loop
+                        SU.Append (Suf, Peek (L));
+                        Advance (L);
+                     end loop;
+                     T.Int_Suffix := Suf;
+                  end;
+               end if;
+               T.Kind    := Tok_Float_Lit;
+               T.Lexeme  := Buf;
+               T.Float_V := Mant * (2.0 ** Exp);
                T.Line    := Start_Line;
                T.Col     := Start_Col;
                return T;
@@ -704,7 +810,14 @@ package body Kurt.Lexer is
                end if;
             when '$' => Tok.Kind := Op_Dollar;    Advance (L);
             when '*' =>
-               if Peek (L, 1) = '|' and then Peek (L, 2) = '=' then
+               if Peek (L, 1) = '/' then
+                  --  §3.6: `*/` outside a block comment is a translation
+                  --  failure (Skip_Trivia consumes well-formed comments
+                  --  before tokenization, so a `*/` reaching here is stray).
+                  raise Translation_Failure
+                    with "'*/' outside a block comment (§3.6) at line"
+                       & Positive'Image (L.Line);
+               elsif Peek (L, 1) = '|' and then Peek (L, 2) = '=' then
                   Tok.Kind := Op_StarBarEq;       --  *|=  (§3.6, §6.7.2)
                   Advance (L); Advance (L); Advance (L);
                elsif Peek (L, 1) = '=' then
