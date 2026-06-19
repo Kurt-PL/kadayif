@@ -174,10 +174,19 @@ package body Kurt.Codegen is
       Ty     : Type_Access;
    end record;
 
-   --  §8.8.2 frame offsets of bindings transferred (moved) within the body;
-   --  their scope-exit destructors are skipped.
-   package Offset_Vec is new Ada.Containers.Vectors
-     (Index_Type => Positive, Element_Type => Natural);
+   --  §8.8.2/§8.11 runtime drop flag: a destruct binding carries a 1-cell
+   --  frame slot, set to 1 when the binding is initialised and cleared to 0
+   --  when it is transferred / `destruct`-ed / `undestruct`-ed. Scope-exit
+   --  destruction is guarded on the flag, so a binding moved on only some
+   --  control-flow paths is destroyed exactly once (conditional-move drop
+   --  flags). Bind_Off identifies the binding by its frame slot.
+   type Drop_Flag is record
+      Bind_Off : Natural;
+      Flag_Off : Natural;
+   end record;
+
+   package Flag_Vec is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Drop_Flag);
 
    package Binding_Pkg is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Binding);
@@ -426,12 +435,25 @@ package body Kurt.Codegen is
       Sret_Off     : Integer := -1;
       Pending_Sret : Integer := -1;
       Fn_Rets      : Fn_Ret_Pkg.Vector;
-      --  §8.8.2 frame offsets of bindings transferred (moved) in this body.
-      Moved_Offs   : Offset_Vec.Vector;
+      --  §8.8.2/§8.11 runtime drop flags for this body's destruct bindings,
+      --  and a counter for the unique skip labels of guarded drops.
+      Drop_Flags   : Flag_Vec.Vector;
+      Flag_Lbl     : Natural := 0;
       --  §8.11 16-byte frame slot for saving the return value (x0/x1) across
       --  scope-exit destructor calls (set in Emit_Fn's prologue).
       Ret_Scratch  : Natural := 0;
    end record;
+
+   --  Frame offset of the drop flag for the binding at Bind_Off, or -1.
+   function Flag_Off_Of (ST : Lower_State; Bind_Off : Natural) return Integer is
+   begin
+      for E of ST.Drop_Flags loop
+         if E.Bind_Off = Bind_Off then
+            return Integer (E.Flag_Off);
+         end if;
+      end loop;
+      return -1;
+   end Flag_Off_Of;
 
    function Lookup_Fn_Ret
      (ST : Lower_State; Name : String) return Type_Access
@@ -471,9 +493,12 @@ package body Kurt.Codegen is
    end Find_Binding;
 
    --  §8.8.2: if E is a transferred (moved) binding (Kurt.Sema set
-   --  P_Is_Move), record its frame offset so its scope-exit destructor is
-   --  skipped (the destruction obligation moved to the destination).
-   procedure Note_Move (ST : in out Lower_State; E : Expr_Access) is
+   --  P_Is_Move), clear its runtime drop flag at this point, so its
+   --  scope-exit destructor does not run (the obligation moved to the
+   --  destination). The clear is at the move's control-flow position, so a
+   --  conditional move clears the flag only on the path it occurs.
+   procedure Note_Move
+     (F : IO.File_Type; ST : in out Lower_State; E : Expr_Access) is
    begin
       if E /= null and then E.Kind = E_Path
         and then Natural (E.Segments.Length) = 1
@@ -484,16 +509,26 @@ package body Kurt.Codegen is
               Find_Binding (ST, SU.To_String (E.Segments.Last_Element));
          begin
             if Idx /= 0 then
-               ST.Moved_Offs.Append (ST.Bindings.Element (Idx).Offset);
+               declare
+                  FOff : constant Integer :=
+                    Flag_Off_Of (ST, ST.Bindings.Element (Idx).Offset);
+               begin
+                  if FOff >= 0 then
+                     IO.Put_Line (F, "    strb    wzr, [x29, #"
+                                     & Img (FOff) & "]");
+                  end if;
+               end;
             end if;
          end;
       end if;
    end Note_Move;
 
-   --  §8.4/§8.11 scope-exit destruction: run the destructor of each live
-   --  (non-moved) `with destruct` binding declared above index Keep, in
-   --  reverse declaration order (LIFO, innermost first). Used at the fn
-   --  epilogue (Keep = 0), at every inner-block exit (Keep = the block's
+   --  §8.4/§8.11 scope-exit destruction: run the destructor of each
+   --  `with destruct` binding declared above index Keep, in reverse
+   --  declaration order (LIFO, innermost first). Each drop is guarded by the
+   --  binding's runtime drop flag (cleared on transfer / destruct), so a
+   --  binding moved on only some paths is destroyed exactly once. Used at the
+   --  fn epilogue (Keep = 0), at every inner-block exit (Keep = the block's
    --  entry binding count), and at each `return` (Keep = 0, all in scope).
    --  Preserve_Ret saves/restores x0/x1 around the calls so a return value
    --  survives the destructor invocations.
@@ -505,16 +540,9 @@ package body Kurt.Codegen is
    begin
       for I in reverse (Keep + 1) .. Natural (ST.Bindings.Length) loop
          declare
-            B     : constant Binding := ST.Bindings.Element (I);
-            Moved : Boolean := False;
+            B : constant Binding := ST.Bindings.Element (I);
          begin
-            for O of ST.Moved_Offs loop
-               if O = B.Offset then
-                  Moved := True;
-               end if;
-            end loop;
-            if not Moved and then B.Ty /= null
-              and then B.Ty.Kind = T_Named
+            if B.Ty /= null and then B.Ty.Kind = T_Named
               and then Type_Has_Drop (SU.To_String (B.Ty.Name))
             then
                To_Drop.Append (B);
@@ -532,8 +560,29 @@ package body Kurt.Codegen is
                          & Img (ST.Ret_Scratch + 8) & "]");
       end if;
       for B of To_Drop loop
-         IO.Put_Line (F, "    add     x0, x29, #" & Img (B.Offset));
-         IO.Put_Line (F, "    bl      _" & SU.To_String (B.Ty.Name) & "$drop");
+         declare
+            FOff : constant Integer := Flag_Off_Of (ST, B.Offset);
+         begin
+            if FOff >= 0 then
+               declare
+                  Lbl : constant String := "Ldrop_"
+                    & SU.To_String (ST.Fn_Name) & "_" & Img (ST.Flag_Lbl);
+               begin
+                  ST.Flag_Lbl := ST.Flag_Lbl + 1;
+                  IO.Put_Line (F, "    ldrb    w9, [x29, #"
+                                  & Img (FOff) & "]");
+                  IO.Put_Line (F, "    cbz     w9, " & Lbl);
+                  IO.Put_Line (F, "    add     x0, x29, #" & Img (B.Offset));
+                  IO.Put_Line (F, "    bl      _"
+                                  & SU.To_String (B.Ty.Name) & "$drop");
+                  IO.Put_Line (F, Lbl & ":");
+               end;
+            else
+               IO.Put_Line (F, "    add     x0, x29, #" & Img (B.Offset));
+               IO.Put_Line (F, "    bl      _"
+                               & SU.To_String (B.Ty.Name) & "$drop");
+            end if;
+         end;
       end loop;
       if Preserve_Ret then
          IO.Put_Line (F, "    ldr     x0, [x29, #"
@@ -1028,6 +1077,24 @@ package body Kurt.Codegen is
                if SU.Length (P.Name) > 0 then
                   ST.Bindings.Append
                     ((Name => P.Name, Offset => Off, Ty => P.Ty));
+                  --  §8.4 a `destruct`-typed value parameter is destroyed when
+                  --  the call returns — unless it is moved out first. Arm its
+                  --  runtime drop flag (1 = live on entry) so a move-out
+                  --  (`return g;`) clears it and the drop runs exactly once.
+                  if P.Ty /= null and then P.Ty.Kind = T_Named
+                    and then Type_Has_Drop (SU.To_String (P.Ty.Name))
+                  then
+                     declare
+                        Flag : constant Natural := ST.Next_Offset;
+                     begin
+                        ST.Next_Offset := ST.Next_Offset + 8;
+                        IO.Put_Line (F, "    mov     w9, #1");
+                        IO.Put_Line (F, "    strb    w9, [x29, #"
+                                        & Img (Flag) & "]");
+                        ST.Drop_Flags.Append
+                          ((Bind_Off => Off, Flag_Off => Flag));
+                     end;
+                  end if;
                end if;
             end;
          end loop;

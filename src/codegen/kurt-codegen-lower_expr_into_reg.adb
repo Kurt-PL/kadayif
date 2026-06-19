@@ -97,7 +97,7 @@ is
       --  §8.8.2: a `destruct`-typed argument is transferred (moved) into the
       --  call; skip the source's scope-exit destructor.
       for K in E.C_Args.First_Index .. E.C_Args.Last_Index loop
-         Note_Move (ST, E.C_Args.Element (K));
+         Note_Move (F, ST, E.C_Args.Element (K));
       end loop;
 
       --  First pass: lay out the scratch region.
@@ -1068,7 +1068,7 @@ begin
                   end if;
                end;
             end if;
-            Note_Move (ST, Inner);
+            Note_Move (F, ST, Inner);
          end;
 
       when E_Int_Lit =>

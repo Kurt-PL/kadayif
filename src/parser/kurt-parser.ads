@@ -524,6 +524,14 @@ package Kurt.Parser is
       --  `self` is `$self_t`); empty when omitted.
       Has_Destruct   : Boolean := False;
       Destruct_Block : Stmt_Vectors.Vector;
+      --  §8.10 `with concurrent [!]transfer / [!]reference` context-safety
+      --  markers. The positive forms grant the property; the `!` forms block
+      --  propagation. A positive and its negation on the same type is a
+      --  translation failure (checked at the declaration).
+      Conc_Transfer    : Boolean := False;
+      Conc_No_Transfer : Boolean := False;
+      Conc_Reference   : Boolean := False;
+      Conc_No_Reference : Boolean := False;
    end record;
 
    package Struct_Vectors is new Ada.Containers.Vectors
@@ -554,6 +562,11 @@ package Kurt.Parser is
       --  §8.11 `with destruct [block]` (see Struct_Decl).
       Has_Destruct   : Boolean := False;
       Destruct_Block : Stmt_Vectors.Vector;
+      --  §8.10 `with concurrent` markers (see Struct_Decl).
+      Conc_Transfer    : Boolean := False;
+      Conc_No_Transfer : Boolean := False;
+      Conc_Reference   : Boolean := False;
+      Conc_No_Reference : Boolean := False;
    end record;
 
    package Enum_Vectors is new Ada.Containers.Vectors

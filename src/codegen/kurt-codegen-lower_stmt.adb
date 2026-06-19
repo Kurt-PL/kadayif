@@ -220,7 +220,7 @@ begin
                Lower_Expr_Into_Reg (F, S.R_Val, 0, ST);
          end case;
          --  §8.8.2: returning a binding transfers it (skip its drop).
-         Note_Move (ST, S.R_Val);
+         Note_Move (F, ST, S.R_Val);
          --  §8.4 destroy every binding live at this return point — exactly
          --  the in-scope set, since bindings declared after are not yet in
          --  ST.Bindings and inner-block locals declared before still are.
@@ -248,7 +248,7 @@ begin
             S.L_Init := null;
          end if;
          --  §8.8.2: initialising from a binding transfers it (skip its drop).
-         Note_Move (ST, S.L_Init);
+         Note_Move (F, ST, S.L_Init);
          declare
             Ty : Type_Access := S.L_Ty;
          begin
@@ -356,7 +356,7 @@ begin
                                  Sizeof (Kurt.Layout.Field_Type (SN, FN)));
                               --  §8.8.2 a transferred field source is not
                               --  dropped at its own scope exit.
-                              Note_Move (ST, FI.Val);
+                              Note_Move (F, ST, FI.Val);
                            end;
                         end loop;
 
@@ -463,7 +463,7 @@ begin
                               Store_Sized (Off + Natural (FO), Sizeof (FT));
                               --  §8.8.2 a transferred payload source is not
                               --  dropped at its own scope exit.
-                              Note_Move (ST, FI.Val);
+                              Note_Move (F, ST, FI.Val);
                            end;
                         end loop;
                      end;
@@ -670,6 +670,23 @@ begin
                else
                   ST.Bindings.Append
                     ((Name => S.L_Name, Offset => Off, Ty => Ty));
+                  --  §8.11 arm the runtime drop flag of an owned destruct
+                  --  binding: 1 = live (destroy at scope exit). A later
+                  --  transfer / destruct / undestruct clears it at runtime.
+                  if Ty /= null and then Ty.Kind = T_Named
+                    and then Type_Has_Drop (SU.To_String (Ty.Name))
+                  then
+                     declare
+                        Flag : constant Natural := ST.Next_Offset;
+                     begin
+                        ST.Next_Offset := ST.Next_Offset + 8;
+                        IO.Put_Line (F, "    mov     w9, #1");
+                        IO.Put_Line (F, "    strb    w9, [x29, #"
+                                        & Img (Flag) & "]");
+                        ST.Drop_Flags.Append
+                          ((Bind_Off => Off, Flag_Off => Flag));
+                     end;
+                  end if;
                end if;
             end;
          end;
@@ -681,7 +698,7 @@ begin
             return;
          end if;
          --  §8.8.2: assigning a binding transfers it (skip its drop).
-         Note_Move (ST, S.Asn_Rhs);
+         Note_Move (F, ST, S.Asn_Rhs);
          --  Bootstrap lvalue forms: single-segment path, or `*expr`.
          if S.Asn_Lhs.Kind = E_Path
            and then Natural (S.Asn_Lhs.Segments.Length) = 1

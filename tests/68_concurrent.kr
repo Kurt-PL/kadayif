@@ -1,0 +1,27 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.10 `with concurrent` context-safety markers parse in all their forms:
+// a single positive item, a braced list, and the `!` propagation blockers.
+// (A positive together with its own negation is a translation failure,
+// §8.10.1 — verified separately.) The markers are recorded on the type for a
+// future concurrency primitive; they impose no representation here.
+struct connection { fd: si4 } with concurrent transfer;
+
+struct atomic_config { version: si4, flags: ui4 }
+    with concurrent { transfer, reference };
+
+struct context_handle { id: uaddr } with concurrent !transfer;
+
+struct local_only { tag: si4 } with concurrent !reference;
+
+fn main() -> ui1 {
+    let c: connection     = connection { fd = 3 };
+    let a: atomic_config  = atomic_config { version = 1, flags = 255 };
+    let h: context_handle = context_handle { id = 4096uaddr };
+    let l: local_only     = local_only { tag = 7 };
+    airside {
+        posix::printf("fd=%d ver=%d flags=%u id=%lu tag=%d\n\0".ptr,
+                      c.fd, a.version, a.flags, h.id, l.tag);
+    }
+    return 0;
+}
