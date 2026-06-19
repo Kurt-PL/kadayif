@@ -1,0 +1,28 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.4.3 a returned reference shall not outlive its referent. These returns
+// are conforming: `pick` returns one of its reference parameters (whose
+// referents are the caller's and outlive the call), and `from_static`
+// returns a reference to a `static` (program lifetime). Returning a
+// reference to a local would be a translation failure (tested separately).
+static TABLE: si4 = 100;
+
+fn pick(a: &si4, b: &si4, first: bool) -> &si4 {
+    if first {
+        return a;            // OK — reference parameter
+    }
+    return b;                // OK — reference parameter
+}
+
+fn from_static() -> &si4 {
+    return &TABLE;           // OK — 'static referent
+}
+
+fn main() -> ui1 {
+    let x: si4 = 7;
+    let y: si4 = 9;
+    let p: &si4 = pick(&x, &y, true);   // p borrows x (outlives p here)
+    let q: &si4 = from_static();
+    airside { posix::printf("p=%d q=%d\n\0".ptr, *p, *q); }
+    return 0;
+}

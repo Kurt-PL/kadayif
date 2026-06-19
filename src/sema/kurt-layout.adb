@@ -107,6 +107,57 @@ package body Kurt.Layout is
       return False;
    end Find_Enum;
 
+   function Satisfies_Destruct (T : Type_Access) return Boolean is
+   begin
+      if T = null then
+         return False;
+      end if;
+      case T.Kind is
+         when T_Named =>
+            declare
+               N  : constant String := SU.To_String (T.Name);
+               SD : Struct_Decl;
+               ED : Enum_Decl;
+            begin
+               if Find_Struct (N, SD) then
+                  if SD.Has_Destruct then
+                     return True;
+                  end if;
+                  for F of SD.Fields loop
+                     if Satisfies_Destruct (F.Ty) then
+                        return True;
+                     end if;
+                  end loop;
+                  return False;
+               elsif Find_Enum (N, ED) then
+                  if ED.Has_Destruct then
+                     return True;
+                  end if;
+                  for V of ED.Variants loop
+                     for F of V.Payload loop
+                        if Satisfies_Destruct (F.Ty) then
+                           return True;
+                        end if;
+                     end loop;
+                  end loop;
+                  return False;
+               end if;
+               return False;
+            end;
+         when T_Array =>
+            return Satisfies_Destruct (T.Elem);
+         when T_Tuple =>
+            for E of T.Elems loop
+               if Satisfies_Destruct (E) then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         when others =>
+            return False;
+      end case;
+   end Satisfies_Destruct;
+
    function Is_Enum (Name : String) return Boolean is
       D : Enum_Decl;
    begin

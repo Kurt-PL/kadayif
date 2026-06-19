@@ -54,6 +54,8 @@ package body Kurt.Codegen is
          when E_Range =>
             Collect_Strings_In_Expr (E.Rg_Lo, Pool);
             Collect_Strings_In_Expr (E.Rg_Hi, Pool);
+         when E_Destruct =>
+            Collect_Strings_In_Expr (E.DT_Inner, Pool);
          when E_String_Lit =>
             Pool.Append ((Bytes => E.Str_Bytes));
          when E_Field =>
@@ -172,6 +174,11 @@ package body Kurt.Codegen is
       Ty     : Type_Access;
    end record;
 
+   --  §8.8.2 frame offsets of bindings transferred (moved) within the body;
+   --  their scope-exit destructors are skipped.
+   package Offset_Vec is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Natural);
+
    package Binding_Pkg is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Binding);
 
@@ -206,6 +213,140 @@ package body Kurt.Codegen is
    --  `@trap;` branches to the synthesised `_kurt_trap_handler`; otherwise
    --  it goes straight to the default divergence.
    Unit_Has_Trap_Handler : Boolean := False;
+
+   --  §8.11 type names with an emittable destructor `_<Name>$drop` (declared
+   --  `with destruct { … }`). Set by Emit; read at scope-exit drop emission.
+   Unit_Drop_Types : Path_Segments.Vector;
+
+   function Type_Has_Drop (Name : String) return Boolean is
+   begin
+      for I in Unit_Drop_Types.First_Index .. Unit_Drop_Types.Last_Index loop
+         if SU.To_String (Unit_Drop_Types.Element (I)) = Name then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Type_Has_Drop;
+
+   --  §8.11 destroy the object of type T living at [self+Off], where `self`
+   --  (an exclusive reference = object address) sits in frame slot Self_Off.
+   --  A named field delegates to its own `_<Name>$drop`; array elements and
+   --  tuple members are destroyed in turn (they have no synthesised drop of
+   --  their own). Only destruct-satisfying parts emit anything.
+   procedure Emit_Drop_At
+     (F : IO.File_Type; Self_Off, Off : Natural;
+      T : Kurt.Parser.Type_Access)
+   is
+   begin
+      if T = null or else not Kurt.Layout.Satisfies_Destruct (T) then
+         return;
+      end if;
+      case T.Kind is
+         when Kurt.Parser.T_Named =>
+            IO.Put_Line (F, "    ldr     x9, [x29, #" & Img (Self_Off) & "]");
+            IO.Put_Line (F, "    add     x0, x9, #" & Img (Off));
+            IO.Put_Line (F, "    bl      _"
+                            & SU.To_String (T.Name) & "$drop");
+         when Kurt.Parser.T_Array =>
+            for K in 0 .. T.Len - 1 loop
+               Emit_Drop_At (F, Self_Off,
+                             Off + K * Kurt.Layout.Size_Of (T.Elem), T.Elem);
+            end loop;
+         when Kurt.Parser.T_Tuple =>
+            for K in T.Elems.First_Index .. T.Elems.Last_Index loop
+               Emit_Drop_At
+                 (F, Self_Off,
+                  Off + Kurt.Layout.Tuple_Field_Offset
+                          (T, K - T.Elems.First_Index),
+                  T.Elems.Element (K));
+            end loop;
+         when others =>
+            null;
+      end case;
+   end Emit_Drop_At;
+
+   --  §8.11 field/payload destruction tail of a synthesised `<Tn>$drop`.
+   --  Struct: destroy each destruct-satisfying field in declaration order.
+   --  Enum: load the discriminant and destroy the active variant's payload.
+   procedure Emit_Field_Drops
+     (F : IO.File_Type; Tn : String; Self_Off : Natural)
+   is
+   begin
+      if Kurt.Layout.Is_Struct (Tn) then
+         for I in 1 .. Kurt.Layout.Struct_Field_Count (Tn) loop
+            declare
+               FN : constant String := Kurt.Layout.Struct_Field_Name (Tn, I);
+               FT : constant Kurt.Parser.Type_Access :=
+                      Kurt.Layout.Field_Type (Tn, FN);
+            begin
+               if Kurt.Layout.Satisfies_Destruct (FT) then
+                  Emit_Drop_At (F, Self_Off,
+                                Kurt.Layout.Field_Offset (Tn, FN), FT);
+               end if;
+            end;
+         end loop;
+      elsif Kurt.Layout.Is_Enum (Tn) then
+         declare
+            Disc_Size : constant Natural := Kurt.Layout.Enum_Disc_Size (Tn);
+            End_Lbl   : constant String  := "L" & Tn & "$drop_end";
+         begin
+            if Disc_Size = 0 then
+               return;   --  void discriminant: at most one (empty) variant
+            end if;
+            IO.Put_Line (F, "    ldr     x9, [x29, #" & Img (Self_Off) & "]");
+            case Disc_Size is
+               when 1      => IO.Put_Line (F, "    ldrb    w10, [x9]");
+               when 2      => IO.Put_Line (F, "    ldrh    w10, [x9]");
+               when others => IO.Put_Line (F, "    ldr     w10, [x9]");
+            end case;
+            for V in 1 .. Kurt.Layout.Variant_Count (Tn) loop
+               declare
+                  VNm : constant String := Kurt.Layout.Variant_Name (Tn, V);
+                  Has : Boolean := False;
+               begin
+                  for FNo in 1 .. Kurt.Layout.Variant_Field_Count (Tn, VNm)
+                  loop
+                     if Kurt.Layout.Satisfies_Destruct
+                          (Kurt.Layout.Variant_Field_Type (Tn, VNm, FNo))
+                     then
+                        Has := True;
+                     end if;
+                  end loop;
+                  if Has then
+                     declare
+                        VVal : constant Long_Long_Integer :=
+                          Kurt.Layout.Variant_Value (Tn, VNm);
+                        Skip : constant String :=
+                          "L" & Tn & "$drop_v" & Img (V);
+                     begin
+                        IO.Put_Line (F, "    mov     w11, #" & Img (VVal));
+                        IO.Put_Line (F, "    cmp     w10, w11");
+                        IO.Put_Line (F, "    b.ne    " & Skip);
+                        for FNo in 1 ..
+                          Kurt.Layout.Variant_Field_Count (Tn, VNm)
+                        loop
+                           declare
+                              FT2 : constant Kurt.Parser.Type_Access :=
+                                Kurt.Layout.Variant_Field_Type (Tn, VNm, FNo);
+                           begin
+                              if Kurt.Layout.Satisfies_Destruct (FT2) then
+                                 Emit_Drop_At
+                                   (F, Self_Off,
+                                    Kurt.Layout.Variant_Field_Offset
+                                      (Tn, VNm, FNo), FT2);
+                              end if;
+                           end;
+                        end loop;
+                        IO.Put_Line (F, "    b       " & End_Lbl);
+                        IO.Put_Line (F, Skip & ":");
+                     end;
+                  end if;
+               end;
+            end loop;
+            IO.Put_Line (F, End_Lbl & ":");
+         end;
+      end if;
+   end Emit_Field_Drops;
 
    --  Index of Name in Unit_Statics, or 0.
    function Find_Static (Name : String) return Natural is
@@ -248,6 +389,9 @@ package body Kurt.Codegen is
       Cont_Lbl  : SU.Unbounded_String;
       Break_Lbl : SU.Unbounded_String;
       Name      : SU.Unbounded_String;   --  §7.9 source label; empty = none
+      --  §8.4 binding count at the loop body's entry, so `break`/`continue`
+      --  destroy the body locals live at the jump before leaving the body.
+      Body_Entry : Natural := 0;
    end record;
 
    package Loop_Stack_Pkg is new Ada.Containers.Vectors
@@ -282,6 +426,11 @@ package body Kurt.Codegen is
       Sret_Off     : Integer := -1;
       Pending_Sret : Integer := -1;
       Fn_Rets      : Fn_Ret_Pkg.Vector;
+      --  §8.8.2 frame offsets of bindings transferred (moved) in this body.
+      Moved_Offs   : Offset_Vec.Vector;
+      --  §8.11 16-byte frame slot for saving the return value (x0/x1) across
+      --  scope-exit destructor calls (set in Emit_Fn's prologue).
+      Ret_Scratch  : Natural := 0;
    end record;
 
    function Lookup_Fn_Ret
@@ -320,6 +469,79 @@ package body Kurt.Codegen is
       end loop;
       return 0;
    end Find_Binding;
+
+   --  §8.8.2: if E is a transferred (moved) binding (Kurt.Sema set
+   --  P_Is_Move), record its frame offset so its scope-exit destructor is
+   --  skipped (the destruction obligation moved to the destination).
+   procedure Note_Move (ST : in out Lower_State; E : Expr_Access) is
+   begin
+      if E /= null and then E.Kind = E_Path
+        and then Natural (E.Segments.Length) = 1
+        and then E.P_Is_Move
+      then
+         declare
+            Idx : constant Natural :=
+              Find_Binding (ST, SU.To_String (E.Segments.Last_Element));
+         begin
+            if Idx /= 0 then
+               ST.Moved_Offs.Append (ST.Bindings.Element (Idx).Offset);
+            end if;
+         end;
+      end if;
+   end Note_Move;
+
+   --  §8.4/§8.11 scope-exit destruction: run the destructor of each live
+   --  (non-moved) `with destruct` binding declared above index Keep, in
+   --  reverse declaration order (LIFO, innermost first). Used at the fn
+   --  epilogue (Keep = 0), at every inner-block exit (Keep = the block's
+   --  entry binding count), and at each `return` (Keep = 0, all in scope).
+   --  Preserve_Ret saves/restores x0/x1 around the calls so a return value
+   --  survives the destructor invocations.
+   procedure Emit_Binding_Drops
+     (F : IO.File_Type; ST : in out Lower_State;
+      Keep : Natural; Preserve_Ret : Boolean)
+   is
+      To_Drop : Binding_Pkg.Vector;
+   begin
+      for I in reverse (Keep + 1) .. Natural (ST.Bindings.Length) loop
+         declare
+            B     : constant Binding := ST.Bindings.Element (I);
+            Moved : Boolean := False;
+         begin
+            for O of ST.Moved_Offs loop
+               if O = B.Offset then
+                  Moved := True;
+               end if;
+            end loop;
+            if not Moved and then B.Ty /= null
+              and then B.Ty.Kind = T_Named
+              and then Type_Has_Drop (SU.To_String (B.Ty.Name))
+            then
+               To_Drop.Append (B);
+            end if;
+         end;
+      end loop;
+
+      if To_Drop.Is_Empty then
+         return;
+      end if;
+      if Preserve_Ret then
+         IO.Put_Line (F, "    str     x0, [x29, #"
+                         & Img (ST.Ret_Scratch) & "]");
+         IO.Put_Line (F, "    str     x1, [x29, #"
+                         & Img (ST.Ret_Scratch + 8) & "]");
+      end if;
+      for B of To_Drop loop
+         IO.Put_Line (F, "    add     x0, x29, #" & Img (B.Offset));
+         IO.Put_Line (F, "    bl      _" & SU.To_String (B.Ty.Name) & "$drop");
+      end loop;
+      if Preserve_Ret then
+         IO.Put_Line (F, "    ldr     x0, [x29, #"
+                         & Img (ST.Ret_Scratch) & "]");
+         IO.Put_Line (F, "    ldr     x1, [x29, #"
+                         & Img (ST.Ret_Scratch + 8) & "]");
+      end if;
+   end Emit_Binding_Drops;
 
    ----------------------------------------------------------------------
    --  Layout queries (single-sourced in Kurt.Layout, §4.11)
@@ -751,6 +973,9 @@ package body Kurt.Codegen is
       ST.Epilogue_Lbl :=
         SU.To_Unbounded_String ("Lret_" & SU.To_String (Fn.Header.Name));
 
+      ST.Ret_Scratch := ST.Next_Offset;
+      ST.Next_Offset := ST.Next_Offset + 16;
+
       --  AAPCS64: an indirect-class (sret) return arrives as a pointer in
       --  x8. Preserve it across the body for the S_Return copy.
       if Classify_Agg (ST.Ret_Ty) = Indirect then
@@ -822,6 +1047,44 @@ package body Kurt.Codegen is
 
       --  Epilogue
       IO.Put_Line (F, SU.To_String (ST.Epilogue_Lbl) & ":");
+
+      --  §8.4/§8.11 scope-exit destruction (fall-through path): destroy the
+      --  remaining in-scope bindings — the fn-level scope, since every inner
+      --  block drops and discards its own locals at its textual end. Each
+      --  `return` performs the equivalent drop inline for the bindings live
+      --  at that point and branches past this to the bare epilogue.
+      Emit_Binding_Drops (F, ST, Keep => 0, Preserve_Ret => True);
+
+      --  §8.11 field destruction tail: when this subroutine is a synthesised
+      --  `<T>$drop`, destroy `self`'s destruct-satisfying fields after the
+      --  user `with destruct` block has run. `self` is a reference, so its
+      --  own scope exit triggers no further destruction — only its fields do.
+      declare
+         Nm : constant String := SU.To_String (Fn.Header.Name);
+      begin
+         if Nm'Length > 5
+           and then Nm (Nm'Last - 4 .. Nm'Last) = "$drop"
+         then
+            declare
+               Tn       : constant String := Nm (Nm'First .. Nm'Last - 5);
+               Self_Off : Integer := -1;
+            begin
+               for B of ST.Bindings loop
+                  if SU.To_String (B.Name) = "self" then
+                     Self_Off := B.Offset;
+                  end if;
+               end loop;
+               if Self_Off >= 0 then
+                  Emit_Field_Drops (F, Tn, Natural (Self_Off));
+               end if;
+            end;
+         end if;
+      end;
+
+      --  Bare epilogue: a `return` branches here after running its own
+      --  inline scope-exit drops, so the fall-through drops above are not
+      --  re-run on the return path.
+      IO.Put_Line (F, SU.To_String (ST.Epilogue_Lbl) & "_bare:");
       IO.Put_Line (F, "    ldp     x29, x30, [sp]");
       IO.Put_Line (F, "    add     sp, sp, #" & Img (Frame_Bytes));
       IO.Put_Line (F, "    ret");
@@ -848,6 +1111,25 @@ package body Kurt.Codegen is
       --  `_kurt_trap_handler` so string-pool collection, return-type
       --  classification, and lowering all treat it uniformly.
       All_Fns  : Fn_Vectors.Vector := U.Fns;
+
+      --  §8.11: synthesise a destructor `<Nm>$drop` for a `with destruct {
+      --  block }` type. Its `self` is `$self_t` — an exclusive reference to
+      --  the object — so the block's `self.field` accesses go through it.
+      procedure Add_Drop (Nm : String; Block : Stmt_Vectors.Vector) is
+         D : Fn_Decl;
+         P : Param;
+      begin
+         Unit_Drop_Types.Append (SU.To_Unbounded_String (Nm));
+         P.Name       := SU.To_Unbounded_String ("self");
+         P.Ty         := new AST_Type (Kind => T_Ref);
+         P.Ty.Sigil   := R_Excl;
+         P.Ty.Target  := new AST_Type (Kind => T_Named);
+         P.Ty.Target.Name := SU.To_Unbounded_String (Nm);
+         D.Header.Name := SU.To_Unbounded_String (Nm & "$drop");
+         D.Header.Params.Append (P);
+         D.Body_Stmts := Block;
+         All_Fns.Append (D);
+      end Add_Drop;
    begin
       --  §9.5-6: publish trait metadata for the dispatch machinery.
       Unit_Traits := U.Traits;
@@ -867,6 +1149,45 @@ package body Kurt.Codegen is
             All_Fns.Append (H);
          end;
       end if;
+
+      --  §8.11: emit a destructor for every type that satisfies `destruct`
+      --  — whether by an explicit `with destruct { … }` block or by
+      --  propagation through a field/payload that itself satisfies destruct.
+      --  Propagation-only types carry an empty user block; their `$drop`
+      --  body is purely the field-destruction tail (Emit_Field_Drops).
+      Unit_Drop_Types.Clear;
+      for I in U.Structs.First_Index .. U.Structs.Last_Index loop
+         declare
+            S    : constant Struct_Decl := U.Structs.Element (I);
+            Need : Boolean := S.Has_Destruct;
+         begin
+            for Fld of S.Fields loop
+               if Kurt.Layout.Satisfies_Destruct (Fld.Ty) then
+                  Need := True;
+               end if;
+            end loop;
+            if Need then
+               Add_Drop (SU.To_String (S.Name), S.Destruct_Block);
+            end if;
+         end;
+      end loop;
+      for I in U.Enums.First_Index .. U.Enums.Last_Index loop
+         declare
+            E    : constant Enum_Decl := U.Enums.Element (I);
+            Need : Boolean := E.Has_Destruct;
+         begin
+            for V of E.Variants loop
+               for Fld of V.Payload loop
+                  if Kurt.Layout.Satisfies_Destruct (Fld.Ty) then
+                     Need := True;
+                  end if;
+               end loop;
+            end loop;
+            if Need then
+               Add_Drop (SU.To_String (E.Name), E.Destruct_Block);
+            end if;
+         end;
+      end loop;
 
       --  Return-type table for every internal fn, so call sites can
       --  classify aggregate returns (AAPCS64).

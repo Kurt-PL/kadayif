@@ -3,6 +3,7 @@ with Ada.Strings.Unbounded;
 with Ada.Containers.Vectors;
 
 with Kurt.Layout;
+with Kurt.Borrow;
 
 package body Kurt.Sema is
 
@@ -10,6 +11,8 @@ package body Kurt.Sema is
    package SU renames Ada.Strings.Unbounded;
 
    use Kurt.Parser;
+   use type Kurt.Borrow.Node_Id;
+   use type Kurt.Borrow.Perm_State;
 
    ----------------------------------------------------------------------
    --  Built-in type constructors (§4). The bootstrap models types with
@@ -42,6 +45,7 @@ package body Kurt.Sema is
    function Mk_Raw_Ref (Target : Type_Access) return Type_Access is
      (new AST_Type'(Kind => T_Ref, Sigil => R_Raw,
                     R_Volatile => False, R_Store => RS_None,
+                    R_Life => SU.Null_Unbounded_String,
                     Target => Target));
 
    function Mk_Ref
@@ -51,6 +55,7 @@ package body Kurt.Sema is
       Target   : Type_Access) return Type_Access is
      (new AST_Type'(Kind => T_Ref, Sigil => Sigil,
                     R_Volatile => Volatile, R_Store => Store,
+                    R_Life => SU.Null_Unbounded_String,
                     Target => Target));
 
    --  Integer type holding a discriminant of the given cell width and
@@ -396,6 +401,16 @@ package body Kurt.Sema is
    package SBind_Vec is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => SBinding);
 
+   --  §8.8.2 a binding invalidated by a transfer (move) of a `destruct`
+   --  value. Depth is the scope length at the move, for liveness pruning.
+   type Moved_Bind is record
+      Name  : SU.Unbounded_String;
+      Depth : Natural := 0;
+   end record;
+
+   package Moved_Vec is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Moved_Bind);
+
    ----------------------------------------------------------------------
    procedure Check
      (U           : in out Kurt.Parser.Translation_Unit;
@@ -405,6 +420,10 @@ package body Kurt.Sema is
       Sigs    : Sig_Vec.Vector;
       Scope   : SBind_Vec.Vector;
       Cur_Ret : Type_Access;
+      --  §8.2/§8.3 reference derivation tree for the body being analysed.
+      Borrows : Kurt.Borrow.Tree;
+      --  §8.8.2 bindings invalidated by a transfer (move).
+      Moved   : Moved_Vec.Vector;
       --  §6.1.8/§2.6: airside nesting depth for the statement being
       --  checked. Raised inside an `airside { … }` block and for the whole
       --  body of an `airside fn`. `uninit` is valid only when this is > 0.
@@ -681,6 +700,49 @@ package body Kurt.Sema is
          return False;
       end Generic_Arith_OK;
 
+      --  §8.11.1 destruct-satisfaction (declared + propagation) is computed
+      --  once in Kurt.Layout, which holds the unit's struct/enum decls.
+      function Satisfies_Destruct (T : Type_Access) return Boolean
+        renames Kurt.Layout.Satisfies_Destruct;
+
+      function Is_Moved (Name : String) return Boolean is
+      begin
+         for M of Moved loop
+            if SU.To_String (M.Name) = Name then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Is_Moved;
+
+      procedure Mark_Moved (Name : String) is
+      begin
+         if not Is_Moved (Name) then
+            Moved.Append
+              ((Name  => SU.To_Unbounded_String (Name),
+                Depth => Natural (Scope.Length)));
+         end if;
+      end Mark_Moved;
+
+      --  §8.8.2: if E is a bare binding of a `destruct` type used as a
+      --  transfer source, invalidate it (use-after-move becomes a failure).
+      procedure Maybe_Move (E : Expr_Access) is
+      begin
+         if E /= null and then E.Kind = E_Path
+           and then Natural (E.Segments.Length) = 1
+         then
+            declare
+               Name : constant String :=
+                 SU.To_String (E.Segments.Last_Element);
+            begin
+               if Satisfies_Destruct (Lookup_Scope (Name)) then
+                  Mark_Moved (Name);
+                  E.P_Is_Move := True;   --  codegen skips its scope-exit drop
+               end if;
+            end;
+         end if;
+      end Maybe_Move;
+
       --------------------------------------------------------------------
       --  Infer a type for E, attach it to E.Sem_Ty, and return it.
       --  Expected flows downward (mainly to steer integer-literal type).
@@ -739,6 +801,12 @@ package body Kurt.Sema is
                        SU.To_String (E.Segments.Last_Element);
                      T    : Type_Access := Lookup_Scope (Name);
                   begin
+                     --  §8.8.2: a binding shall not be used after it has been
+                     --  transferred (moved).
+                     if Is_Moved (Name) then
+                        Error ("use of '" & Name & "' after it was "
+                               & "transferred (moved) (spec 8.8.2)");
+                     end if;
                      if T = null then
                         --  §5.3: a const name is replaced by its
                         --  translation-time value at each use site.
@@ -760,6 +828,15 @@ package body Kurt.Sema is
                            if SU.To_String (U.Statics.Element (I).Name)
                              = Name
                            then
+                              --  §2.6: `static mut` access (read as well as
+                              --  store) is an airside-only operation.
+                              if U.Statics.Element (I).Is_Mut
+                                and then In_Airside = 0
+                              then
+                                 Error ("access to `static mut` '" & Name
+                                        & "' is permitted only in an "
+                                        & "`airside` region (spec 2.6)");
+                              end if;
                               T := U.Statics.Element (I).Ty;
                               E.Sem_Ty := T;
                               return T;
@@ -1168,6 +1245,9 @@ package body Kurt.Sema is
                               end if;
                            end;
                         end;
+                        --  §8.8.2: passing a `destruct`-typed binding as an
+                        --  argument transfers it.
+                        Maybe_Move (E.C_Args.Element (I));
                      end loop;
                      --  §7.11: a call to a `-> never` subroutine is a
                      --  diverging expression; its type is `never`.
@@ -1417,6 +1497,13 @@ package body Kurt.Sema is
                   IT : constant Type_Access := Infer (E.D_Inner, null);
                begin
                   if Is_Ref (IT) then
+                     --  §2.6: dereferencing a `&raw` reference is an
+                     --  airside-only operation. `&`/`$` derefs are landside.
+                     if IT.Sigil = R_Raw and then In_Airside = 0 then
+                        Error ("dereference of a `&raw` reference is "
+                               & "permitted only in an `airside` region "
+                               & "(spec 2.6)");
+                     end if;
                      E.Sem_Ty := IT.Target;
                   else
                      Error ("dereference of non-reference type '"
@@ -1463,6 +1550,9 @@ package body Kurt.Sema is
                                      & Image (FT) & "' but got '"
                                      & Image (VT) & "'");
                            end if;
+                           --  §8.8.2 aggregate field init from a binding is a
+                           --  transfer when the field type satisfies destruct.
+                           Maybe_Move (FI.Val);
                         end;
                      end loop;
 
@@ -1542,6 +1632,9 @@ package body Kurt.Sema is
                                      & Image (FT) & "' but got '"
                                      & Image (VT) & "'");
                            end if;
+                           --  §8.8.2 payload init from a binding is a transfer
+                           --  when the payload type satisfies destruct.
+                           Maybe_Move (FI.Val);
                         end;
                      end loop;
                   end if;
@@ -1734,6 +1827,11 @@ package body Kurt.Sema is
                         E.Sem_Ty := Mk_Named ("saddr");
                      end if;
                   elsif E.Cast_Bang then
+                     --  §2.6: `as!` is an airside-only operation.
+                     if In_Airside = 0 then
+                        Error ("`as!` (bitwise reinterpret) is permitted only "
+                               & "in an `airside` region (spec 2.6)");
+                     end if;
                      --  §6.8.11: bitwise reinterpret between equal-size types.
                      if Src /= null
                        and then Kurt.Layout.Size_Of (Src)
@@ -2224,6 +2322,36 @@ package body Kurt.Sema is
                       & "assignment to a binding (spec 6.1.8)");
                E.Sem_Ty := Expected;
                return Expected;
+
+            when E_Destruct =>
+               --  §8.4/§8.11: `destruct(e)` runs e's destructor now;
+               --  `undestruct(e)` reclaims e's storage without running it
+               --  (airside only). Both consume the operand binding — a
+               --  later use is a use-after-transfer failure. The result is
+               --  `void`.
+               declare
+                  IT      : constant Type_Access := Infer (E.DT_Inner, null);
+                  Is_Bind : constant Boolean :=
+                    E.DT_Inner /= null and then E.DT_Inner.Kind = E_Path
+                    and then Natural (E.DT_Inner.Segments.Length) = 1;
+                  Word    : constant String :=
+                    (if E.DT_Undo then "`undestruct`" else "`destruct`");
+               begin
+                  if not Is_Bind then
+                     Error (Word & " operand shall be a binding (bootstrap)");
+                  elsif not Satisfies_Destruct (IT) then
+                     Error (Word & " requires an operand whose type satisfies "
+                            & "`destruct` (spec 8.11)");
+                  end if;
+                  if E.DT_Undo and then In_Airside = 0 then
+                     Error ("`undestruct` shall appear only inside an "
+                            & "`airside` block or `airside fn` body "
+                            & "(spec 8.4)");
+                  end if;
+                  Maybe_Move (E.DT_Inner);
+                  E.Sem_Ty := Mk_Named ("void");
+                  return E.Sem_Ty;
+               end;
          end case;
       end Infer;
 
@@ -2263,10 +2391,209 @@ package body Kurt.Sema is
       --------------------------------------------------------------------
       procedure Check_Stmt (S : Stmt_Access);
 
+      --  §8.2/§8.3: map a reference sigil + store modifier to its initial
+      --  permission state. `&raw` is untracked (§8.2.2): Tracked is False.
+      procedure Borrow_State
+        (Sigil   : Ref_Sigil;
+         Store   : Ref_Store;
+         State   : out Kurt.Borrow.Perm_State;
+         Tracked : out Boolean)
+      is
+      begin
+         Tracked := True;
+         case Sigil is
+            when R_Raw =>
+               Tracked := False;
+               State   := Kurt.Borrow.Shared_RO;
+            when R_Excl =>
+               State := Kurt.Borrow.Idle;            --  $T
+            when R_Shared =>
+               case Store is
+                  when RS_None => State := Kurt.Borrow.Shared_RO;
+                  when RS_Mut  => State := Kurt.Borrow.Shared_RW;
+                  when RS_Atomic | RS_Guard =>
+                     State := Kurt.Borrow.Atomic_Ref;
+               end case;
+         end case;
+      end Borrow_State;
+
+      --  §8.2: when `Name` is bound to `&x`/`$x`/`&mut x` (etc.) of a simple
+      --  named place, register the reference in the derivation tree and apply
+      --  the §8.3 aliasing constraint at creation.
+      procedure Register_Borrow (Name : String; Init : Expr_Access) is
+      begin
+         if Init = null or else Init.Kind /= E_Ref
+           or else Init.Rf_Place.Kind /= E_Path
+           or else Natural (Init.Rf_Place.Segments.Length) /= 1
+         then
+            return;
+         end if;
+         declare
+            Place : constant String :=
+              SU.To_String (Init.Rf_Place.Segments.Last_Element);
+            St    : Kurt.Borrow.Perm_State;
+            Tr    : Boolean;
+         begin
+            Borrow_State (Init.Rf_Sigil, Init.Rf_Store, St, Tr);
+            if not Tr then
+               return;
+            end if;
+            --  §8.3 Constraint: a new reference to a place already held by a
+            --  `$T` at Assert_Excl provably aliases the exclusive reference.
+            if Kurt.Borrow.Has_Asserted_Excl (Borrows, Place) then
+               Error ("reference to '" & Place & "' aliases an exclusive "
+                      & "'$' reference that has asserted exclusivity "
+                      & "(spec 8.3)");
+            end if;
+            declare
+               Ignore : constant Kurt.Borrow.Node_Id :=
+                 Kurt.Borrow.Create
+                   (Borrows, Referent => Place, Bound_To => Name,
+                    State => St, Scope_Len => Natural (Scope.Length));
+               pragma Unreferenced (Ignore);
+            begin
+               null;
+            end;
+         end;
+      end Register_Borrow;
+
+      --  §8.3: a store through `*binding` whose binding holds a tracked
+      --  reference. An exclusive store asserts exclusivity; if the place is
+      --  aliased by another live reference, that is a provable violation.
+      procedure Register_Store (Lhs : Expr_Access) is
+      begin
+         if Lhs.Kind /= E_Deref
+           or else Lhs.D_Inner.Kind /= E_Path
+           or else Natural (Lhs.D_Inner.Segments.Length) /= 1
+         then
+            return;
+         end if;
+         declare
+            Name : constant String :=
+              SU.To_String (Lhs.D_Inner.Segments.Last_Element);
+            N    : constant Kurt.Borrow.Node_Id :=
+              Kurt.Borrow.Of_Binding (Borrows, Name);
+         begin
+            if N = Kurt.Borrow.No_Node then
+               return;
+            end if;
+            Kurt.Borrow.Record_Store (Borrows, N);
+            if Kurt.Borrow.Is_Exclusive
+                 (Kurt.Borrow.State_Of (Borrows, N))
+              and then Kurt.Borrow.Has_Live_Alias (Borrows, N)
+            then
+               Error ("store through exclusive '$' reference '" & Name
+                      & "' whose referent is aliased by a live reference "
+                      & "(spec 8.3)");
+            end if;
+            --  §8.3 the store is a foreign event for every other reference to
+            --  the same place: apply the permission-state transition (after
+            --  the alias check above, which is the mandatory diagnostic).
+            --  An atomic store goes through an `atomic`/`guard` reference.
+            Kurt.Borrow.Apply_Foreign_Store
+              (Borrows, N,
+               Atomic => Kurt.Borrow.State_Of (Borrows, N) =
+                         Kurt.Borrow.Atomic_Ref);
+         end;
+      end Register_Store;
+
+      --  §8.4 a place outlives the call iff its storage has program lifetime
+      --  ('static / 'const): a top-level `static`/`static mut` or a `const`.
+      --  A local `let`/`mut` binding or a value parameter dies when the call
+      --  returns, so a reference to it shall not be returned.
+      function Outlives_Call (Place : String) return Boolean is
+         Dummy : Boolean;
+      begin
+         if Find_Static_Decl (Place, Dummy) then
+            return True;
+         end if;
+         for I in U.Consts.First_Index .. U.Consts.Last_Index loop
+            if SU.To_String (U.Consts.Element (I).Name) = Place then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Outlives_Call;
+
+      --  §8.4.3 escape verification: a returned landside reference shall not
+      --  outlive its referent. The referent must have program lifetime; a
+      --  reference to a local or to a value parameter escapes its scope.
+      --  Provenance of a returned reference binding comes from the derivation
+      --  tree (`let r = &local; return r;` is caught the same as `return
+      --  &local;`). `&raw` is unmanaged (airside responsibility) and exempt.
+      procedure Check_Return_Escape (E : Expr_Access) is
+      begin
+         if E = null then
+            return;
+         end if;
+         case E.Kind is
+            when E_Ref =>
+               if E.Rf_Sigil /= R_Raw
+                 and then E.Rf_Place /= null
+                 and then E.Rf_Place.Kind = E_Path
+                 and then Natural (E.Rf_Place.Segments.Length) >= 1
+               then
+                  declare
+                     Root : constant String :=
+                       SU.To_String (E.Rf_Place.Segments.First_Element);
+                  begin
+                     if not Outlives_Call (Root) then
+                        Error ("returns a reference to '" & Root
+                               & "', which does not outlive the call; its "
+                               & "referent escapes its scope (spec 8.4.3)");
+                     end if;
+                  end;
+               end if;
+            when E_Path =>
+               if Natural (E.Segments.Length) = 1 then
+                  declare
+                     Name : constant String :=
+                       SU.To_String (E.Segments.Last_Element);
+                     N    : constant Kurt.Borrow.Node_Id :=
+                       Kurt.Borrow.Of_Binding (Borrows, Name);
+                  begin
+                     --  A tracked local reference: check what it points to.
+                     --  No node ⇒ a reference parameter (its referent is the
+                     --  caller's, which outlives the call) or an untracked
+                     --  chain — conservatively permitted.
+                     if N /= Kurt.Borrow.No_Node then
+                        declare
+                           Ref : constant String :=
+                             Kurt.Borrow.Referent_Of (Borrows, N);
+                        begin
+                           if not Outlives_Call (Ref) then
+                              Error ("returns reference '" & Name
+                                     & "' pointing to '" & Ref
+                                     & "', which does not outlive the call "
+                                     & "(spec 8.4.3)");
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end if;
+            when E_Cast =>
+               --  A reference cast preserves the referent (§6.8.8).
+               Check_Return_Escape (E.Cast_Inner);
+            when others =>
+               null;  --  call results etc.: the callee's signature is
+                      --  verified at its own definition.
+         end case;
+      end Check_Return_Escape;
+
       procedure Check_Block (Stmts : Stmt_Vectors.Vector) is
+         Entry_Len : constant Natural := Natural (Scope.Length);
       begin
          for I in Stmts.First_Index .. Stmts.Last_Index loop
             Check_Stmt (Stmts.Element (I));
+         end loop;
+         --  §8.2 liveness: references bound inside this block lapse at its
+         --  end (their bindings leave scope).
+         Kurt.Borrow.Kill_Above (Borrows, Entry_Len);
+         --  §8.8.2: moved-binding records for this block's bindings lapse too.
+         for I in reverse 1 .. Natural (Moved.Length) loop
+            if Moved.Element (I).Depth > Entry_Len then
+               Moved.Delete (I);
+            end if;
          end loop;
       end Check_Block;
 
@@ -2282,6 +2609,15 @@ package body Kurt.Sema is
                             & Image (Cur_Ret) & "' but expression is '"
                             & Image (RT) & "'");
                   end if;
+                  --  §8.4.3: a returned landside reference shall not outlive
+                  --  its referent (no reference to a local / value parameter).
+                  if Cur_Ret /= null and then Cur_Ret.Kind = T_Ref
+                    and then Cur_Ret.Sigil /= R_Raw
+                  then
+                     Check_Return_Escape (S.R_Val);
+                  end if;
+                  --  §8.8.2: returning a `destruct`-typed binding transfers it.
+                  Maybe_Move (S.R_Val);
                end;
 
             when S_Expr =>
@@ -2355,6 +2691,10 @@ package body Kurt.Sema is
                                & "' needs a type annotation or initialiser");
                      end if;
                      Scope.Append ((Name => S.L_Name, Ty => Ty));
+                     Register_Borrow (SU.To_String (S.L_Name), S.L_Init);
+                     --  §8.8.2: initialising from a `destruct`-typed binding
+                     --  transfers it (the source is invalidated).
+                     Maybe_Move (S.L_Init);
                   end if;
                end;
 
@@ -2374,6 +2714,11 @@ package body Kurt.Sema is
                   LT : constant Type_Access := Infer (S.Asn_Lhs, null);
                   RT : constant Type_Access := Infer (S.Asn_Rhs, LT);
                begin
+                  --  §8.3: a store through an exclusive reference asserts
+                  --  exclusivity; flag a provable alias.
+                  Register_Store (S.Asn_Lhs);
+                  --  §8.8.2: assigning a `destruct`-typed binding transfers it.
+                  Maybe_Move (S.Asn_Rhs);
                   if not Assignable (LT, RT) then
                      Error ("assignment type mismatch: place is '"
                             & Image (LT) & "' but value is '"
@@ -3010,6 +3355,8 @@ package body Kurt.Sema is
          begin
             Cur_Generics := Fn.Header.Generic_Params;
             Scope.Clear;
+            Kurt.Borrow.Clear (Borrows);
+            Moved.Clear;
             for J in Fn.Header.Params.First_Index ..
                      Fn.Header.Params.Last_Index
             loop
@@ -3049,12 +3396,45 @@ package body Kurt.Sema is
                       & "(spec 4.10/7.11)");
             end if;
          end Check_Fn;
+         --  §8.11: type- and borrow-check each `with destruct { … }` block
+         --  as codegen will lower it — with `self` bound to an exclusive
+         --  reference to the object being destroyed (`$self_t`). Synthesised
+         --  here so the block is held to the same rules as any subroutine.
+         procedure Check_Destruct (Nm : String; Block : Stmt_Vectors.Vector) is
+            D : Fn_Decl;
+            P : Param;
+         begin
+            if Block.Is_Empty then
+               return;
+            end if;
+            P.Name           := SU.To_Unbounded_String ("self");
+            P.Ty             := new AST_Type (Kind => T_Ref);
+            P.Ty.Sigil       := R_Excl;
+            P.Ty.Target      := new AST_Type (Kind => T_Named);
+            P.Ty.Target.Name := SU.To_Unbounded_String (Nm);
+            D.Header.Name    := SU.To_Unbounded_String (Nm & "$destruct");
+            D.Header.Params.Append (P);
+            D.Body_Stmts     := Block;
+            Check_Fn (D);
+         end Check_Destruct;
       begin
          for I in U.Fns.First_Index .. U.Fns.Last_Index loop
             Check_Fn (U.Fns.Element (I));
          end loop;
          for I in U.Gen_Fns.First_Index .. U.Gen_Fns.Last_Index loop
             Check_Fn (U.Gen_Fns.Element (I));
+         end loop;
+         for I in U.Structs.First_Index .. U.Structs.Last_Index loop
+            if U.Structs.Element (I).Has_Destruct then
+               Check_Destruct (SU.To_String (U.Structs.Element (I).Name),
+                               U.Structs.Element (I).Destruct_Block);
+            end if;
+         end loop;
+         for I in U.Enums.First_Index .. U.Enums.Last_Index loop
+            if U.Enums.Element (I).Has_Destruct then
+               Check_Destruct (SU.To_String (U.Enums.Element (I).Name),
+                               U.Enums.Element (I).Destruct_Block);
+            end if;
          end loop;
       end;
 

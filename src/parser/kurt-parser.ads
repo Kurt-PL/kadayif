@@ -49,6 +49,11 @@ package Kurt.Parser is
             --  §8.1 modifiers between the sigil and the referent type.
             R_Volatile : Boolean   := False;
             R_Store    : Ref_Store := RS_None;
+            --  §8.4 optional lifetime annotation `&'name T` (`'static`,
+            --  `'const`, or a user/inferred name). Lifetimes are a
+            --  compile-time discipline with no representation, so the
+            --  bootstrap records the name for diagnostics and erases it.
+            R_Life     : SU.Unbounded_String := SU.Null_Unbounded_String;
             Target     : Type_Access;
          when T_Tuple =>
             --  §4.7 anonymous tuple `.{T, T, …}` (positional fields).
@@ -138,6 +143,7 @@ package Kurt.Parser is
       E_Slice_Cast,   --  implicit `&[T; N] → &[T]` coercion (§4.6)
       E_Type_Intrinsic,  --  `T@size` / `T@align` / `T@offset(f)` (§6.12)
       E_Uninit,           --  `uninit` uninitialized value (§6.1.8)
+      E_Destruct,         --  `destruct(e)` / `undestruct(e)` (§8.4, §8.11)
       E_Range);           --  `a..b` / `a..=b` range literal (§4.8)
       --  Note: Kurt has no `[]` indexing operator (§6.2). Element access
       --  is `*(arr.ptr + i)` (raw reference arithmetic, §8.6.4) or the
@@ -220,6 +226,10 @@ package Kurt.Parser is
             --  subroutine used as a value — a subroutine pointer. Codegen
             --  then emits the subroutine's address rather than a load.
             P_Is_Fn_Ptr : Boolean := False;
+            --  §8.8.2: set by Kurt.Sema when this bare binding is a transfer
+            --  (move) source. Codegen skips the source's scope-exit
+            --  destructor (the destruction obligation moved).
+            P_Is_Move : Boolean := False;
          when E_Field =>
             F_Recv : Expr_Access;
             F_Name : SU.Unbounded_String;
@@ -304,6 +314,12 @@ package Kurt.Parser is
             TI_Field : SU.Unbounded_String;   --  TI_Offset only
          when E_Uninit =>
             null;   --  §6.1.8: no payload; type comes from the assignment
+         when E_Destruct =>
+            --  §8.4/§8.11: `destruct(e)` runs e's destructor immediately;
+            --  `undestruct(e)` reclaims storage without running it (airside).
+            --  Both consume (invalidate) the operand binding; type is void.
+            DT_Inner : Expr_Access;
+            DT_Undo  : Boolean := False;   --  True for `undestruct`
          when E_Range =>
             --  §4.8 range literal: low/high bounds and exclusivity. Its type
             --  is the intrinsic T_Range, resolved by sema from the operands.
@@ -503,6 +519,11 @@ package Kurt.Parser is
       Fields         : Struct_Field_Vectors.Vector;
       Repr_Packed    : Boolean := False;   --  §4.11.4 `with repr(packed)`
       Align_N        : Natural := 0;       --  §4.11.5 `with align(N)`; 0=none
+      --  §8.11 `with destruct [block]`: an uncopyable type with transfer
+      --  semantics. Destruct_Block is the optional destructor body (its
+      --  `self` is `$self_t`); empty when omitted.
+      Has_Destruct   : Boolean := False;
+      Destruct_Block : Stmt_Vectors.Vector;
    end record;
 
    package Struct_Vectors is new Ada.Containers.Vectors
@@ -530,6 +551,9 @@ package Kurt.Parser is
       Is_Contract    : Boolean := False;       --  declared `with contract`
       Discrim_Ty     : Type_Access := null;    --  `with discrim(T)` (§4.11.3)
       Variants       : Enum_Variant_Vectors.Vector;
+      --  §8.11 `with destruct [block]` (see Struct_Decl).
+      Has_Destruct   : Boolean := False;
+      Destruct_Block : Stmt_Vectors.Vector;
    end record;
 
    package Enum_Vectors is new Ada.Containers.Vectors

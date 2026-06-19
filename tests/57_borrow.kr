@@ -1,0 +1,12 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.2/§8.3 a conforming exclusive reference: `$x` is the sole live
+// reference to x, so storing through it (asserting exclusivity) and
+// reading back through it raise no aliasing diagnostic.
+fn main() -> ui1 {
+    mut x: si4 = 10;
+    let a: $si4 = $x;
+    airside { *a = 42; }
+    airside { posix::printf("via_a=%d\n\0".ptr, *a); }   // 42
+    return 0;
+}

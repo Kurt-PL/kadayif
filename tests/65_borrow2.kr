@@ -1,0 +1,31 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.2/§8.3 conforming reference shapes the derivation tree must accept:
+//   - an exclusive `$` reference is fine while it is the sole live reference;
+//     once its scope ends the node is no longer live, so later references to
+//     the same place are not foreign aliases of it;
+//   - multiple shared `&` references coexist (SharedRO);
+//   - multiple `&mut` references coexist (SharedRW, §8.2.1).
+fn main() -> ui1 {
+    mut x: si4 = 10;
+
+    // Exclusive store through `$`, confined to its own scope (it lapses out
+    // of use at the block end, so it does not alias the references below).
+    if true {
+        let e: $si4 = $x;
+        *e = 20;                  // Idle -> AssertExcl, the sole reference
+    }
+
+    // Multiple shared references coexist (SharedRO).
+    let r1: &si4 = &x;
+    let r2: &si4 = &x;
+    airside { posix::printf("r1=%d r2=%d\n\0".ptr, *r1, *r2); }
+
+    // Multiple &mut references coexist (SharedRW); store through one.
+    let m1: &mut si4 = &mut x;
+    let m2: &mut si4 = &mut x;
+    *m1 = 30;
+    airside { posix::printf("m2=%d\n\0".ptr, *m2); }
+
+    return 0;
+}

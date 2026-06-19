@@ -15,7 +15,7 @@ fn main() -> ui1 {
     bump();
     bump();
     airside { posix::printf("cnt=%lu\n\0".ptr, counter); }
-    counter = 9;
+    airside { counter = 9; }                  // §2.6 static mut: airside-only
     airside { posix::printf("cnt2=%lu\n\0".ptr, counter); }
     return 0;
 }

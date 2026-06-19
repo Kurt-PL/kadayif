@@ -1,0 +1,17 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.11 a `with destruct` destructor runs at scope exit in reverse
+// declaration order (LIFO). §8.8.2 a transferred (moved) binding is not
+// destroyed at its source, so its value is destroyed exactly once.
+struct guard { id: si4 } with destruct {
+    airside { posix::printf("drop %d\n\0".ptr, self.id); }
+};
+
+fn main() -> ui1 {
+    let a: guard = guard { id = 1 };
+    let b: guard = guard { id = 2 };
+    let m: guard = guard { id = 9 };
+    let n: guard = m;            // transfer m -> n; m is not dropped
+    airside { posix::printf("body\n\0".ptr); }
+    return 0;                    // drops: n(9), b(2), a(1); m skipped
+}

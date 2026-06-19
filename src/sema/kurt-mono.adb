@@ -326,6 +326,9 @@ package body Kurt.Mono is
             R.TI_Field := E.TI_Field;
          when E_Uninit =>
             null;
+         when E_Destruct =>
+            R.DT_Inner := C (E.DT_Inner);
+            R.DT_Undo  := E.DT_Undo;
          when E_Range =>
             R.Rg_Lo        := C (E.Rg_Lo);
             R.Rg_Hi        := C (E.Rg_Hi);
@@ -768,6 +771,8 @@ package body Kurt.Mono is
             when E_Range =>
                Visit_Expr (E.Rg_Lo);
                Visit_Expr (E.Rg_Hi);
+            when E_Destruct =>
+               Visit_Expr (E.DT_Inner);
             when E_Variant_New =>
                for I in E.VN_Fields.First_Index ..
                         E.VN_Fields.Last_Index

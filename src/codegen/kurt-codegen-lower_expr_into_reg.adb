@@ -94,6 +94,12 @@ is
       end if;
       ST.Pending_Sret := -1;
 
+      --  §8.8.2: a `destruct`-typed argument is transferred (moved) into the
+      --  call; skip the source's scope-exit destructor.
+      for K in E.C_Args.First_Index .. E.C_Args.Last_Index loop
+         Note_Move (ST, E.C_Args.Element (K));
+      end loop;
+
       --  First pass: lay out the scratch region.
       --    [0 .. Var_Bytes)              variadic args (8 bytes each)
       --    [Var_Bytes .. +Fix_Bytes)     fixed-arg slots (8 or 16 bytes)
@@ -1033,6 +1039,37 @@ begin
          --  if one reaches here the target register simply keeps its
          --  current (indeterminate) contents — no instruction is emitted.
          null;
+
+      when E_Destruct =>
+         --  §8.4/§8.11: `destruct(g)` runs g's destructor immediately;
+         --  `undestruct(g)` reclaims g's storage without running it. Either
+         --  way g is consumed, so its scope-exit drop is suppressed
+         --  (Note_Move records the offset; sema set P_Is_Move on the inner).
+         declare
+            Inner : constant Expr_Access := E.DT_Inner;
+            Idx   : constant Natural :=
+              (if Inner /= null and then Inner.Kind = E_Path
+                 and then Natural (Inner.Segments.Length) = 1
+               then Find_Binding
+                      (ST, SU.To_String (Inner.Segments.Last_Element))
+               else 0);
+         begin
+            if Idx /= 0 and then not E.DT_Undo then
+               declare
+                  B : constant Binding := ST.Bindings.Element (Idx);
+               begin
+                  if B.Ty /= null and then B.Ty.Kind = T_Named
+                    and then Type_Has_Drop (SU.To_String (B.Ty.Name))
+                  then
+                     IO.Put_Line (F, "    add     x0, x29, #"
+                                     & Img (B.Offset));
+                     IO.Put_Line (F, "    bl      _"
+                                     & SU.To_String (B.Ty.Name) & "$drop");
+                  end if;
+               end;
+            end if;
+            Note_Move (ST, Inner);
+         end;
 
       when E_Int_Lit =>
          --  Width follows the inferred type; values wider than 16 bits

@@ -1,0 +1,31 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.4 a loop body is a scope: its `with destruct` locals are destroyed at
+// each iteration's end — including when the iteration ends early via
+// `continue` (before the condition re-test) or `break` (leaving the loop).
+struct guard { id: si4 } with destruct {
+    airside { posix::printf("drop %d\n\0".ptr, self.id); }
+};
+
+fn main() -> ui1 {
+    mut i: si4 = 0;
+    while i < 5 {
+        let g: guard = guard { id = i };
+        i += 1;
+        if i == 2 {
+            airside { posix::printf("cont\n\0".ptr); }
+            continue;                 // drops g(1), re-tests condition
+        }
+        if i == 4 {
+            airside { posix::printf("brk\n\0".ptr); }
+            break;                    // drops g(3), leaves the loop
+        }
+        airside { posix::printf("iter %d\n\0".ptr, i); }
+    }                                 // fall-through end: drops this iter's g
+    airside { posix::printf("done\n\0".ptr); }
+    return 0;
+    // i=0: g(0), iter 1, drop 0
+    // i=1: g(1), cont,  drop 1
+    // i=2: g(2), iter 3, drop 2
+    // i=3: g(3), brk,   drop 3
+}

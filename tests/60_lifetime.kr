@@ -1,0 +1,22 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.4 lifetime annotations on reference types. Lifetimes are a
+// compile-time discipline with no representation, so the bootstrap parses
+// and erases them — `'static`, `'const`, and named/inferred lifetimes alike.
+struct view { header: &'header [ui1], body: &'body [ui1] }
+    with lifetime { 'header, 'body };
+
+// §8.4.1 explicit input/output annotations + §8.4.3 a single-chain
+// `with lifetime 'x 'y` on the subroutine (asserts 'x outlives 'y).
+fn pick(a: &'x ui4, b: &'y ui4) -> &'x ui4 with lifetime 'x 'y {
+    return a;
+}
+
+fn main() -> ui1 {
+    let p: ui4 = 7;
+    let q: ui4 = 9;
+    let r: &'static ui4 = pick(&p, &q);   // 'static annotation on a local
+    let c: &'const ui4  = r;              // 'const: same erased type
+    airside { posix::printf("r=%d c=%d\n\0".ptr, *r, *c); }
+    return 0;
+}

@@ -1,0 +1,23 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.4 a destruct local declared inside an `if let` then-block is destroyed
+// at the block's end — while the payload alias binding (`v`, projecting into
+// the scrutinee's storage) is NOT destroyed there (that would double-free).
+struct guard { id: si4 } with destruct {
+    airside { posix::printf("drop %d\n\0".ptr, self.id); }
+};
+
+enum Box { Some { v: si4 } = 1, None = 2 }
+
+fn main() -> ui1 {
+    let b: Box = Box::Some { v = 5 };
+    if let Box::Some { v } = b {
+        let g: guard = guard { id = v };   // block-own destruct local
+        airside { posix::printf("got %d\n\0".ptr, v); }
+    } else {
+        let h: guard = guard { id = 99 };  // not reached
+        airside { posix::printf("none\n\0".ptr); }
+    }                                       // then-block end: drop 5
+    airside { posix::printf("after\n\0".ptr); }
+    return 0;
+}

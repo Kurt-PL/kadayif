@@ -1,0 +1,36 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.11 destruct propagation: a type with no `with destruct` of its own
+// still satisfies `destruct` when a field/payload does, and the implicit
+// destructor destroys those parts. Struct fields go in DECLARATION order;
+// bindings within a scope go in reverse declaration order (LIFO).
+struct guard { id: si4 } with destruct {
+    airside { posix::printf("drop %d\n\0".ptr, self.id); }
+};
+
+// propagation-only: no destructor body, yet holds two guards.
+struct pair { x: guard, y: guard }
+
+// own destructor + a guard field: the block runs first, then the field.
+struct wrapped { g: guard } with destruct {
+    airside { posix::printf("wrap\n\0".ptr); }
+};
+
+// enum whose active variant carries a destruct payload.
+enum box { Empty, Full { guard } }
+
+fn main() -> ui1 {
+    let g1: guard = guard { id = 1 };
+    let g2: guard = guard { id = 2 };
+    let g3: guard = guard { id = 3 };
+    let g4: guard = guard { id = 4 };
+    let p: pair    = pair { x = g1, y = g2 };   // g1,g2 transferred into p
+    let w: wrapped = wrapped { g = g3 };        // g3 transferred into w
+    let b: box     = box::Full { g4 };          // g4 transferred into b
+    airside { posix::printf("body\n\0".ptr); }
+    return 0;
+    // g1..g4 are moved, so not dropped. LIFO over live bindings: b, w, p.
+    //   b -> payload guard(4):            drop 4
+    //   w -> block, then field guard(3):  wrap, drop 3
+    //   p -> fields x(1), y(2) in order:  drop 1, drop 2
+}

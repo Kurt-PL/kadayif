@@ -160,6 +160,52 @@ package body Kurt.Parser is
       end loop;
    end Parse_Ref_Modifiers;
 
+   --  §8.4.3 `with lifetime` ordering constraints, on a subroutine or a
+   --  composite-type declaration:
+   --      with lifetime 'a 'b              (single chain, braces optional)
+   --      with lifetime { 'a 'b, 'c 'd }   (multiple chains)
+   --  Lifetimes are a compile-time discipline with no representation, so the
+   --  bootstrap validates the shape and erases it. Pre: the current token is
+   --  `with` and the following identifier is `lifetime`.
+   procedure Parse_Lifetime_Clause (C : in out Cursor) is
+      procedure Parse_Chain is
+      begin
+         if C.Cur.Kind /= Tok_Label then
+            raise Syntax_Error with
+              "expected a lifetime ('name) in a 'with lifetime' chain at "
+              & "line" & Positive'Image (C.Cur.Line);
+         end if;
+         while C.Cur.Kind = Tok_Label loop
+            Advance (C);
+         end loop;
+      end Parse_Chain;
+   begin
+      Advance (C);   --  'with'
+      Advance (C);   --  'lifetime'
+      if C.Cur.Kind = Punct_LBrace then
+         Advance (C);
+         loop
+            Parse_Chain;
+            exit when C.Cur.Kind /= Punct_Comma;
+            Advance (C);                            --  ','
+            exit when C.Cur.Kind = Punct_RBrace;    --  trailing comma
+         end loop;
+         Expect (C, Punct_RBrace, "'}' to close 'with lifetime'");
+      else
+         Parse_Chain;
+      end if;
+   end Parse_Lifetime_Clause;
+
+   --  Whether the cursor sits at a `with lifetime` clause (`lifetime` is an
+   --  ordinary identifier, so this distinguishes it from `with destruct`
+   --  etc. by lookahead).
+   function At_Lifetime_Clause (C : in out Cursor) return Boolean is
+   begin
+      return C.Cur.Kind = Kw_With
+        and then Peek_Tok (C).Kind = Tok_Ident
+        and then SU.To_String (Peek_Tok (C).Lexeme) = "lifetime";
+   end At_Lifetime_Clause;
+
    function Parse_Type (C : in out Cursor) return Type_Access is
       Node : Type_Access;
    begin
@@ -173,6 +219,11 @@ package body Kurt.Parser is
             Advance (C);
             Node.Sigil := R_Raw;
          end if;
+         --  §8.4 optional lifetime annotation, e.g. `&'static T`.
+         if C.Cur.Kind = Tok_Label then
+            Node.R_Life := C.Cur.Lexeme;
+            Advance (C);
+         end if;
          Parse_Ref_Modifiers (C, Node.R_Volatile, Node.R_Store);
          Node.Target := Parse_Type (C);
          return Node;
@@ -180,6 +231,11 @@ package body Kurt.Parser is
          Advance (C);
          Node := new AST_Type (Kind => T_Ref);
          Node.Sigil := R_Excl;
+         --  §8.4 optional lifetime annotation, e.g. `$'a T`.
+         if C.Cur.Kind = Tok_Label then
+            Node.R_Life := C.Cur.Lexeme;
+            Advance (C);
+         end if;
          --  §8.1: `$` is inherently storable — only `volatile` may follow.
          Parse_Ref_Modifiers (C, Node.R_Volatile, Node.R_Store);
          if Node.R_Store /= RS_None then
@@ -665,6 +721,26 @@ package body Kurt.Parser is
             return E;
 
          when Tok_Ident =>
+            --  §8.4/§8.11: `destruct(e)` and `undestruct(e)` are reserved
+            --  expression forms (the words are keywords by the EBNF rule of
+            --  §3.4.1). Intercept them before the generic path/call parse.
+            if (SU.To_String (C.Cur.Lexeme) = "destruct"
+                or else SU.To_String (C.Cur.Lexeme) = "undestruct")
+              and then Peek_Tok (C).Kind = Punct_LParen
+            then
+               declare
+                  Undo : constant Boolean :=
+                    SU.To_String (C.Cur.Lexeme) = "undestruct";
+               begin
+                  Advance (C);   --  the keyword
+                  Expect (C, Punct_LParen, "'(' after destruct/undestruct");
+                  E := new Expr_Node (Kind => E_Destruct);
+                  E.DT_Undo  := Undo;
+                  E.DT_Inner := Parse_Expr (C);
+                  Expect (C, Punct_RParen, "')' to close destruct/undestruct");
+                  return E;
+               end;
+            end if;
             E := new Expr_Node (Kind => E_Path);
             E.Segments.Append (C.Cur.Lexeme);
             Advance (C);
@@ -1687,6 +1763,11 @@ package body Kurt.Parser is
       else
          H.Return_Type := null;
       end if;
+
+      --  §8.4.3 optional `with lifetime` ordering clause on the subroutine.
+      if At_Lifetime_Clause (C) then
+         Parse_Lifetime_Clause (C);
+      end if;
    end Parse_Fn_Header;
 
    function Parse_Fn_Decl (C : in out Cursor) return Fn_Decl is
@@ -2081,6 +2162,12 @@ package body Kurt.Parser is
                   D.Align_N := Natural (C.Cur.Int_V);
                   Advance (C);
                   Expect (C, Punct_RParen, "')'");
+               elsif Item = "destruct" then
+                  --  §8.11 `with destruct [block]`.
+                  D.Has_Destruct := True;
+                  if C.Cur.Kind = Punct_LBrace then
+                     Parse_Block_Stmts (C, D.Destruct_Block);
+                  end if;
                else
                   --  Skip a balanced unrecognised item.
                   declare
@@ -2319,6 +2406,12 @@ package body Kurt.Parser is
                         Expect (C, Punct_LParen, "'('");
                         D.Discrim_Ty := Parse_Type (C);
                         Expect (C, Punct_RParen, "')'");
+                     elsif Item = "destruct" then
+                        --  §8.11 `with destruct [block]`.
+                        D.Has_Destruct := True;
+                        if C.Cur.Kind = Punct_LBrace then
+                           Parse_Block_Stmts (C, D.Destruct_Block);
+                        end if;
                      else
                         --  Unrecognised with-item: skip balanced tokens up
                         --  to the next ',' or '}'. The bootstrap does not
@@ -2367,6 +2460,16 @@ package body Kurt.Parser is
             Expect (C, Punct_LParen, "'('");
             D.Discrim_Ty := Parse_Type (C);
             Expect (C, Punct_RParen, "')'");
+         elsif C.Cur.Kind = Tok_Ident
+           and then SU.To_String (C.Cur.Lexeme) = "destruct"
+         then
+            --  §8.11 bare `with destruct [block]`.
+            Advance (C);
+            D.Has_Destruct := True;
+            if C.Cur.Kind = Punct_LBrace then
+               Parse_Block_Stmts (C, D.Destruct_Block);
+               Is_Braced := True;   --  the block terminates it; no ';'
+            end if;
          else
             raise Syntax_Error with
               "expected 'contract' or '{' after 'with', got " & Image (C.Cur)

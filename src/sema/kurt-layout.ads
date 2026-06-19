@@ -25,6 +25,12 @@ package Kurt.Layout is
    --  Whether Name denotes a registered struct type.
    function Is_Struct (Name : String) return Boolean;
 
+   --  §8.11.1: whether T satisfies `destruct` — declared `with destruct`, or
+   --  by propagation through struct fields / enum payloads / array elements
+   --  / tuple members. References and other forms do not propagate.
+   function Satisfies_Destruct
+     (T : Kurt.Parser.Type_Access) return Boolean;
+
    --  §4.7 tuple positional-field queries (structural; no named decl).
    function Tuple_Field_Offset
      (T : Kurt.Parser.Type_Access; Index : Natural) return Natural;

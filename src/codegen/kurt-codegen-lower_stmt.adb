@@ -29,6 +29,7 @@ is
         & SU.To_String (Label) & "'";
    end Target_Loop;
 
+
    --  Store the value currently in x9/w9 to [x29, Off] using the width
    --  implied by Sz cells.
    procedure Store_Sized (Off : Natural; Sz : Natural) is
@@ -165,6 +166,23 @@ is
            "codegen: unsupported tuple initialiser";
       end if;
    end Store_Tuple_Init;
+
+   --  §8.4 lower a brace-delimited statement list as a lexical scope: the
+   --  block's `with destruct` locals are destroyed (LIFO) at its textual
+   --  end — before any enclosing-scope object — and then leave scope so the
+   --  fn epilogue does not destroy them again. An early `return` inside the
+   --  block runs its own inline drops (it never reaches this textual end).
+   procedure Lower_Scoped (Stmts : Stmt_Vectors.Vector) is
+      Entry_Len : constant Natural := Natural (ST.Bindings.Length);
+   begin
+      for I in Stmts.First_Index .. Stmts.Last_Index loop
+         Lower_Stmt (F, Stmts.Element (I), ST);
+      end loop;
+      Emit_Binding_Drops (F, ST, Keep => Entry_Len, Preserve_Ret => False);
+      while Natural (ST.Bindings.Length) > Entry_Len loop
+         ST.Bindings.Delete_Last;
+      end loop;
+   end Lower_Scoped;
 begin
    case S.Kind is
       when S_Return =>
@@ -201,16 +219,23 @@ begin
             when Not_Agg | One_Reg =>
                Lower_Expr_Into_Reg (F, S.R_Val, 0, ST);
          end case;
-         IO.Put_Line (F, "    b       " & SU.To_String (ST.Epilogue_Lbl));
+         --  §8.8.2: returning a binding transfers it (skip its drop).
+         Note_Move (ST, S.R_Val);
+         --  §8.4 destroy every binding live at this return point — exactly
+         --  the in-scope set, since bindings declared after are not yet in
+         --  ST.Bindings and inner-block locals declared before still are.
+         --  The return value (x0/x1) is preserved across the drops; then
+         --  branch to the bare epilogue (which performs no further drops).
+         Emit_Binding_Drops (F, ST, Keep => 0, Preserve_Ret => True);
+         IO.Put_Line (F, "    b       "
+                         & SU.To_String (ST.Epilogue_Lbl) & "_bare");
 
       when S_Expr =>
          --  Evaluate for effect into a scratch register; result ignored.
          Lower_Expr_Into_Reg (F, S.E_Val, 9, ST);
 
       when S_Airside_Block =>
-         for I in S.A_Stmts.First_Index .. S.A_Stmts.Last_Index loop
-            Lower_Stmt (F, S.A_Stmts.Element (I), ST);
-         end loop;
+         Lower_Scoped (S.A_Stmts);
 
       when S_Let | S_Mut =>
          --  Allocate a slot, evaluate the initialiser (if any), store it,
@@ -222,6 +247,8 @@ begin
          if S.L_Init /= null and then S.L_Init.Kind = E_Uninit then
             S.L_Init := null;
          end if;
+         --  §8.8.2: initialising from a binding transfers it (skip its drop).
+         Note_Move (ST, S.L_Init);
          declare
             Ty : Type_Access := S.L_Ty;
          begin
@@ -327,6 +354,9 @@ begin
                               Store_Sized
                                 (Off + Kurt.Layout.Field_Offset (SN, FN),
                                  Sizeof (Kurt.Layout.Field_Type (SN, FN)));
+                              --  §8.8.2 a transferred field source is not
+                              --  dropped at its own scope exit.
+                              Note_Move (ST, FI.Val);
                            end;
                         end loop;
 
@@ -431,6 +461,9 @@ begin
                            begin
                               Lower_Expr_Into_Reg (F, FI.Val, 9, ST);
                               Store_Sized (Off + Natural (FO), Sizeof (FT));
+                              --  §8.8.2 a transferred payload source is not
+                              --  dropped at its own scope exit.
+                              Note_Move (ST, FI.Val);
                            end;
                         end loop;
                      end;
@@ -647,6 +680,8 @@ begin
          if S.Asn_Rhs.Kind = E_Uninit then
             return;
          end if;
+         --  §8.8.2: assigning a binding transfers it (skip its drop).
+         Note_Move (ST, S.Asn_Rhs);
          --  Bootstrap lvalue forms: single-segment path, or `*expr`.
          if S.Asn_Lhs.Kind = E_Path
            and then Natural (S.Asn_Lhs.Segments.Length) = 1
@@ -874,18 +909,17 @@ begin
               ((Cont_Lbl  => SU.To_Unbounded_String
                                (if Has_Then then L_Thn else L_Top),
                 Break_Lbl => SU.To_Unbounded_String (L_End),
-                Name      => S.W_Label));
+                Name      => S.W_Label,
+                Body_Entry => Natural (ST.Bindings.Length)));
             IO.Put_Line (F, L_Top & ":");
             Lower_Expr_Into_Reg (F, S.W_Cond, 10, ST);
             IO.Put_Line (F, "    cbz     w10, " & L_End);
-            for I in S.W_Body.First_Index .. S.W_Body.Last_Index loop
-               Lower_Stmt (F, S.W_Body.Element (I), ST);
-            end loop;
+            --  §8.4: each iteration's body locals are destroyed at the body's
+            --  end (before the loop-back), so every pass cleans up its own.
+            Lower_Scoped (S.W_Body);
             if Has_Then then
                IO.Put_Line (F, L_Thn & ":");
-               for I in S.W_Then.First_Index .. S.W_Then.Last_Index loop
-                  Lower_Stmt (F, S.W_Then.Element (I), ST);
-               end loop;
+               Lower_Scoped (S.W_Then);
             end if;
             IO.Put_Line (F, "    b       " & L_Top);
             IO.Put_Line (F, L_End & ":");
@@ -954,19 +988,28 @@ begin
                             Ty     => Kurt.Layout.Variant_Field_Type
                                         (B.Ty, VN, K)));
                      end loop;
-                     for I in S.SI_Then.First_Index .. S.SI_Then.Last_Index
-                     loop
-                        Lower_Stmt (F, S.SI_Then.Element (I), ST);
-                     end loop;
+                     declare
+                        --  §8.4 destroy the then-block's OWN destruct locals
+                        --  at block end — but never the payload aliases, which
+                        --  project into the scrutinee's storage (destroying
+                        --  them would double-free with the scrutinee).
+                        After_Payload : constant Natural :=
+                          Natural (ST.Bindings.Length);
+                     begin
+                        for I in S.SI_Then.First_Index .. S.SI_Then.Last_Index
+                        loop
+                           Lower_Stmt (F, S.SI_Then.Element (I), ST);
+                        end loop;
+                        Emit_Binding_Drops
+                          (F, ST, Keep => After_Payload,
+                           Preserve_Ret => False);
+                     end;
                      while Natural (ST.Bindings.Length) > Saved loop
                         ST.Bindings.Delete_Last;
                      end loop;
                      IO.Put_Line (F, "    b       " & L_End);
                      IO.Put_Line (F, L_Else & ":");
-                     for I in S.SI_Else.First_Index .. S.SI_Else.Last_Index
-                     loop
-                        Lower_Stmt (F, S.SI_Else.Element (I), ST);
-                     end loop;
+                     Lower_Scoped (S.SI_Else);
                      IO.Put_Line (F, L_End & ":");
                   end;
                end;
@@ -1019,10 +1062,20 @@ begin
                                (B.Ty, Succ_V, 1),
                          Ty     => Kurt.Layout.Variant_Field_Type
                                      (B.Ty, Succ_V, 1)));
-                     for I in S.SI_Then.First_Index .. S.SI_Then.Last_Index
-                     loop
-                        Lower_Stmt (F, S.SI_Then.Element (I), ST);
-                     end loop;
+                     declare
+                        --  §8.4 drop only the block's own locals at block end;
+                        --  the payload alias projects into the scrutinee.
+                        After_Payload : constant Natural :=
+                          Natural (ST.Bindings.Length);
+                     begin
+                        for I in S.SI_Then.First_Index .. S.SI_Then.Last_Index
+                        loop
+                           Lower_Stmt (F, S.SI_Then.Element (I), ST);
+                        end loop;
+                        Emit_Binding_Drops
+                          (F, ST, Keep => After_Payload,
+                           Preserve_Ret => False);
+                     end;
                      while Natural (ST.Bindings.Length) > Saved loop
                         ST.Bindings.Delete_Last;
                      end loop;
@@ -1040,10 +1093,18 @@ begin
                             Ty     => Kurt.Layout.Variant_Field_Type
                                         (B.Ty, Fail_V, 1)));
                      end if;
-                     for I in S.SI_Else.First_Index .. S.SI_Else.Last_Index
-                     loop
-                        Lower_Stmt (F, S.SI_Else.Element (I), ST);
-                     end loop;
+                     declare
+                        After_Payload : constant Natural :=
+                          Natural (ST.Bindings.Length);
+                     begin
+                        for I in S.SI_Else.First_Index .. S.SI_Else.Last_Index
+                        loop
+                           Lower_Stmt (F, S.SI_Else.Element (I), ST);
+                        end loop;
+                        Emit_Binding_Drops
+                          (F, ST, Keep => After_Payload,
+                           Preserve_Ret => False);
+                     end;
                      while Natural (ST.Bindings.Length) > Saved loop
                         ST.Bindings.Delete_Last;
                      end loop;
@@ -1053,14 +1114,10 @@ begin
             else
                Lower_Expr_Into_Reg (F, S.SI_Cond, 10, ST);
                IO.Put_Line (F, "    cbz     w10, " & L_Else);
-               for I in S.SI_Then.First_Index .. S.SI_Then.Last_Index loop
-                  Lower_Stmt (F, S.SI_Then.Element (I), ST);
-               end loop;
+               Lower_Scoped (S.SI_Then);
                IO.Put_Line (F, "    b       " & L_End);
                IO.Put_Line (F, L_Else & ":");
-               for I in S.SI_Else.First_Index .. S.SI_Else.Last_Index loop
-                  Lower_Stmt (F, S.SI_Else.Element (I), ST);
-               end loop;
+               Lower_Scoped (S.SI_Else);
                IO.Put_Line (F, L_End & ":");
             end if;
          end;
@@ -1145,6 +1202,11 @@ begin
             --  yet propagated in the bootstrap; the value is discarded.
             Lower_Expr_Into_Reg (F, S.Brk_Val, 9, ST);
          end if;
+         --  §8.4 destroy every body local live at this jump, across all
+         --  scopes down to the targeted loop's body (it leaves the loop).
+         Emit_Binding_Drops
+           (F, ST, Keep => Target_Loop (ST, S.Brk_Label).Body_Entry,
+            Preserve_Ret => False);
          IO.Put_Line (F, "    b       "
                          & SU.To_String
                              (Target_Loop (ST, S.Brk_Label).Break_Lbl));
@@ -1153,6 +1215,11 @@ begin
          if ST.Loops.Is_Empty then
             raise Program_Error with "codegen: 'continue' outside a loop";
          end if;
+         --  §8.4 destroy the body locals live at this jump before re-testing
+         --  the condition (the current iteration's scope ends here).
+         Emit_Binding_Drops
+           (F, ST, Keep => Target_Loop (ST, S.Cont_Label).Body_Entry,
+            Preserve_Ret => False);
          IO.Put_Line (F, "    b       "
                          & SU.To_String
                              (Target_Loop (ST, S.Cont_Label).Cont_Lbl));

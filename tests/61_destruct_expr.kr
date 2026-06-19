@@ -1,0 +1,20 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.4/§8.11 `destruct(e)` runs the destructor immediately and invalidates
+// the binding; `undestruct(e)` reclaims the storage WITHOUT running the
+// destructor (airside only). Both suppress the scope-exit destructor.
+struct guard { id: si4 } with destruct {
+    airside { posix::printf("drop %d\n\0".ptr, self.id); }
+};
+
+fn main() -> ui1 {
+    let a: guard = guard { id = 1 };
+    let b: guard = guard { id = 2 };
+    destruct(a);                          // runs now: drop 1; a invalidated
+    airside { posix::printf("mid\n\0".ptr); }
+    airside { undestruct(b); }            // no destructor; b invalidated
+    let c: guard = guard { id = 3 };
+    return 0;                             // scope exit: only c -> drop 3
+    //   a: consumed by destruct (already dropped) -> skipped
+    //   b: consumed by undestruct (no destructor)  -> skipped
+}

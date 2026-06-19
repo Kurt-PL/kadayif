@@ -16,10 +16,14 @@ fn main() -> ui1 {
     let version_off: uaddr = test_pad@offset(version);
     
     // We cannot access s.? directly (which causes a translation failure).
-    // Instead, we inspect the padding memory at offset 4 via raw pointer arithmetic.
-    let s_ptr: &raw test_pad = &raw s;
-    let pad_ptr: &raw ui4 = (s_ptr as uaddr + 4) as &raw ui4;
-    let pad_val: ui4 = *pad_ptr;
+    // Instead, we inspect the padding memory at offset 4 via raw pointer
+    // arithmetic — a `&raw` dereference, which is airside-only (§2.6).
+    mut pad_val: ui4 = 0;
+    airside {
+        let s_ptr: &raw test_pad = &raw s;
+        let pad_ptr: &raw ui4 = (s_ptr as uaddr + 4) as &raw ui4;
+        pad_val = *pad_ptr;
+    }
 
     airside {
         posix::printf("sz=%lu magic=%lu version=%lu pad=%X\n\0".ptr,

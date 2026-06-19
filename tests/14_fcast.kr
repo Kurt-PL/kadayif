@@ -19,10 +19,12 @@ fn main() -> ui1 {
     let d2: fe11m52 = s as fe11m52;
     airside { posix::printf("rt=%.5f\n\0".ptr, d2); }                // 3.14159
 
-    // as! reinterpret: 1.0 -> 0x3FF0000000000000
-    let bits: uaddr = 1.0 as! uaddr;
+    // as! reinterpret: 1.0 -> 0x3FF0000000000000 (airside-only, §2.6)
+    mut bits: uaddr = 0;
+    airside { bits = 1.0 as! uaddr; }
     airside { posix::printf("bits=%llx\n\0".ptr, bits); }
-    let back: fe11m52 = bits as! fe11m52;
+    mut back: fe11m52 = 0.0;
+    airside { back = bits as! fe11m52; }
     airside { posix::printf("back=%.1f\n\0".ptr, back); }
     return 0;
 }
