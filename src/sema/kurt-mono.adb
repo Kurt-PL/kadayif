@@ -1,4 +1,6 @@
 with Ada.Strings.Unbounded;
+with Ada.Strings.Fixed;
+with Ada.Strings;
 
 package body Kurt.Mono is
 
@@ -326,6 +328,16 @@ package body Kurt.Mono is
             R.TI_Field := E.TI_Field;
          when E_Uninit =>
             null;
+         when E_Closure =>
+            --  §9.9 closures are lowered to their own subroutine; copy the
+            --  fields directly (shallow over the body, which is shared).
+            R.Clo_Params   := E.Clo_Params;
+            R.Clo_Ret      := E.Clo_Ret;
+            R.Clo_Body     := E.Clo_Body;
+            R.Clo_Xfer     := E.Clo_Xfer;
+            R.Clo_Fn_Name  := E.Clo_Fn_Name;
+            R.Clo_Caps     := E.Clo_Caps;
+            R.Clo_Env_Name := E.Clo_Env_Name;
          when E_Destruct =>
             R.DT_Inner := C (E.DT_Inner);
             R.DT_Undo  := E.DT_Undo;
@@ -408,6 +420,7 @@ package body Kurt.Mono is
       Gen_Structs : Struct_Vectors.Vector;
       Gen_Enums   : Enum_Vectors.Vector;
       Generated   : Path_Segments.Vector;  --  mangled names already emitted
+      Clo_Seq     : Natural := 0;          --  §9.9 closure-lift counter
 
       function Already_Generated (Name : String) return Boolean is
       begin
@@ -632,6 +645,197 @@ package body Kurt.Mono is
       procedure Visit_Stmt (S : Stmt_Access);
       procedure Visit_Expr (E : Expr_Access);
 
+      ----------------------------------------------------------------
+      --  §9.9.3 capture analysis (syntactic, names only)
+      ----------------------------------------------------------------
+
+      function In_Set
+        (V : Path_Segments.Vector; S : SU.Unbounded_String) return Boolean
+      is
+         Target : constant String := SU.To_String (S);
+      begin
+         for I in V.First_Index .. V.Last_Index loop
+            if SU.To_String (V.Element (I)) = Target then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end In_Set;
+
+      procedure Add_Once
+        (V : in out Path_Segments.Vector; S : SU.Unbounded_String) is
+      begin
+         if not In_Set (V, S) then
+            V.Append (S);
+         end if;
+      end Add_Once;
+
+      function Is_Top_Level (S : SU.Unbounded_String) return Boolean is
+         N : constant String := SU.To_String (S);
+      begin
+         for F of U.Fns loop
+            if SU.To_String (F.Header.Name) = N then return True; end if;
+         end loop;
+         for F of U.Gen_Fns loop
+            if SU.To_String (F.Header.Name) = N then return True; end if;
+         end loop;
+         for Cn of U.Consts loop
+            if SU.To_String (Cn.Name) = N then return True; end if;
+         end loop;
+         for St of U.Statics loop
+            if SU.To_String (St.Name) = N then return True; end if;
+         end loop;
+         return False;
+      end Is_Top_Level;
+
+      --  Accumulate the single-segment names read (Used) and the names a
+      --  block binds (Bound). A capture is a Used name that is neither Bound
+      --  nor a closure parameter nor a top-level declaration.
+      procedure Scan_Expr
+        (E : Expr_Access; Used, Bound : in out Path_Segments.Vector);
+
+      procedure Scan_Stmts
+        (V : Stmt_Vectors.Vector; Used, Bound : in out Path_Segments.Vector)
+      is
+      begin
+         for I in V.First_Index .. V.Last_Index loop
+            declare
+               S : constant Stmt_Access := V.Element (I);
+            begin
+               case S.Kind is
+                  when S_Return    => Scan_Expr (S.R_Val, Used, Bound);
+                  when S_Expr      => Scan_Expr (S.E_Val, Used, Bound);
+                  when S_Express   => Scan_Expr (S.Xp_Val, Used, Bound);
+                  when S_Airside_Block =>
+                     Scan_Stmts (S.A_Stmts, Used, Bound);
+                  when S_Let | S_Mut =>
+                     Scan_Expr (S.L_Init, Used, Bound);
+                     Add_Once (Bound, S.L_Name);
+                     for J in S.L_Tuple_Names.First_Index ..
+                              S.L_Tuple_Names.Last_Index
+                     loop
+                        Add_Once (Bound, S.L_Tuple_Names.Element (J));
+                     end loop;
+                  when S_Assign =>
+                     Scan_Expr (S.Asn_Lhs, Used, Bound);
+                     Scan_Expr (S.Asn_Rhs, Used, Bound);
+                  when S_While =>
+                     Scan_Expr (S.W_Cond, Used, Bound);
+                     Scan_Stmts (S.W_Body, Used, Bound);
+                     Scan_Stmts (S.W_Then, Used, Bound);
+                  when S_If =>
+                     Scan_Expr (S.SI_Cond, Used, Bound);
+                     if SU.Length (S.SI_Succ_Bind) > 0 then
+                        Add_Once (Bound, S.SI_Succ_Bind);
+                     end if;
+                     if SU.Length (S.SI_Fail_Bind) > 0 then
+                        Add_Once (Bound, S.SI_Fail_Bind);
+                     end if;
+                     for J in S.SI_Let_Pat.Bindings.First_Index ..
+                              S.SI_Let_Pat.Bindings.Last_Index
+                     loop
+                        Add_Once (Bound, S.SI_Let_Pat.Bindings.Element (J));
+                     end loop;
+                     Scan_Stmts (S.SI_Then, Used, Bound);
+                     Scan_Stmts (S.SI_Else, Used, Bound);
+                  when S_Extract =>
+                     Scan_Expr (S.X_Expr, Used, Bound);
+                     Add_Once (Bound, S.X_Bind);
+                     if SU.Length (S.X_Err) > 0 then
+                        Add_Once (Bound, S.X_Err);
+                     end if;
+                     Scan_Stmts (S.X_Else, Used, Bound);
+                  when S_Break     => Scan_Expr (S.Brk_Val, Used, Bound);
+                  when S_Continue | S_Fence | S_Trap => null;
+               end case;
+            end;
+         end loop;
+      end Scan_Stmts;
+
+      procedure Scan_Expr
+        (E : Expr_Access; Used, Bound : in out Path_Segments.Vector) is
+      begin
+         if E = null then
+            return;
+         end if;
+         case E.Kind is
+            when E_Int_Lit | E_Float_Lit | E_Bool_Lit | E_String_Lit
+               | E_Uninit | E_Type_Intrinsic =>
+               null;
+            when E_Path =>
+               if Natural (E.Segments.Length) = 1 then
+                  Add_Once (Used, E.Segments.First_Element);
+               end if;
+            when E_Field   => Scan_Expr (E.F_Recv, Used, Bound);
+            when E_Call =>
+               Scan_Expr (E.C_Callee, Used, Bound);
+               for I in E.C_Args.First_Index .. E.C_Args.Last_Index loop
+                  Scan_Expr (E.C_Args.Element (I), Used, Bound);
+               end loop;
+            when E_If =>
+               Scan_Expr (E.I_Cond, Used, Bound);
+               Scan_Expr (E.I_Then, Used, Bound);
+               Scan_Expr (E.I_Else, Used, Bound);
+            when E_Binary =>
+               Scan_Expr (E.B_Lhs, Used, Bound);
+               Scan_Expr (E.B_Rhs, Used, Bound);
+            when E_Deref    => Scan_Expr (E.D_Inner, Used, Bound);
+            when E_Struct_Lit =>
+               for I in E.SL_Fields.First_Index .. E.SL_Fields.Last_Index loop
+                  Scan_Expr (E.SL_Fields.Element (I).Val, Used, Bound);
+               end loop;
+            when E_Variant_New =>
+               for I in E.VN_Fields.First_Index .. E.VN_Fields.Last_Index loop
+                  Scan_Expr (E.VN_Fields.Element (I).Val, Used, Bound);
+               end loop;
+            when E_Match =>
+               Scan_Expr (E.M_Scrut, Used, Bound);
+               for I in E.M_Arms.First_Index .. E.M_Arms.Last_Index loop
+                  declare
+                     A : constant Match_Arm := E.M_Arms.Element (I);
+                  begin
+                     for J in A.Pat.Bindings.First_Index ..
+                              A.Pat.Bindings.Last_Index
+                     loop
+                        Add_Once (Bound, A.Pat.Bindings.Element (J));
+                     end loop;
+                     Scan_Expr (A.Arm_Body, Used, Bound);
+                  end;
+               end loop;
+            when E_Cast      => Scan_Expr (E.Cast_Inner, Used, Bound);
+            when E_Unary     => Scan_Expr (E.U_Operand, Used, Bound);
+            when E_Tuple_Lit =>
+               for I in E.TL_Elems.First_Index .. E.TL_Elems.Last_Index loop
+                  Scan_Expr (E.TL_Elems.Element (I), Used, Bound);
+               end loop;
+            when E_Question  => Scan_Expr (E.Q_Inner, Used, Bound);
+            when E_Ref       => Scan_Expr (E.Rf_Place, Used, Bound);
+            when E_CAS =>
+               Scan_Expr (E.CAS_Tgt, Used, Bound);
+               Scan_Expr (E.CAS_Exp, Used, Bound);
+               Scan_Expr (E.CAS_New, Used, Bound);
+            when E_Array_Lit =>
+               for I in E.AL_Elems.First_Index .. E.AL_Elems.Last_Index loop
+                  Scan_Expr (E.AL_Elems.Element (I), Used, Bound);
+               end loop;
+            when E_Dyn_Cast   => Scan_Expr (E.DC_Inner, Used, Bound);
+            when E_Slice_Cast => Scan_Expr (E.SC_Inner, Used, Bound);
+            when E_Destruct   => Scan_Expr (E.DT_Inner, Used, Bound);
+            when E_Range =>
+               Scan_Expr (E.Rg_Lo, Used, Bound);
+               Scan_Expr (E.Rg_Hi, Used, Bound);
+            when E_Closure =>
+               --  A nested closure's params are bound within it; its free
+               --  references to our scope are uses we must also satisfy.
+               for J in E.Clo_Params.First_Index ..
+                        E.Clo_Params.Last_Index
+               loop
+                  Add_Once (Bound, E.Clo_Params.Element (J).Name);
+               end loop;
+               Scan_Stmts (E.Clo_Body, Used, Bound);
+         end case;
+      end Scan_Expr;
+
       procedure Visit_Block (V : Stmt_Vectors.Vector) is
       begin
          for I in V.First_Index .. V.Last_Index loop
@@ -734,7 +938,7 @@ package body Kurt.Mono is
                Visit_Expr (E.F_Recv);
             when E_Call =>
                Visit_Expr (E.C_Callee);
-               --  §5.9.2 explicit instantiation `f.<T, …>(args)`.
+               --  §5.9.2 explicit instantiation `f.<T, ...>(args)`.
                if E.C_Callee.Kind = E_Path
                  and then Natural (E.C_Callee.Segments.Length) = 1
                  and then not E.C_Callee.P_Type_Args.Is_Empty
@@ -773,6 +977,103 @@ package body Kurt.Mono is
                Visit_Expr (E.Rg_Hi);
             when E_Destruct =>
                Visit_Expr (E.DT_Inner);
+            when E_Closure =>
+               --  §9.9 lift the closure to a fresh top-level subroutine so it
+               --  follows the normal sema/codegen path. The expression keeps
+               --  a pointer to it (Clo_Fn_Name). A non-capturing closure
+               --  behaves exactly like a subroutine value (fn pointer). A
+               --  capturing closure additionally gets an anonymous capture
+               --  struct `$clo_N$env` (one field per captured binding) and a
+               --  hidden first parameter `self : &$clo_N$env`; references to
+               --  the captures are reached by prefixing the body with
+               --  `let cap = self.cap;` (capture by copy, §9.9.3).
+               Clo_Seq := Clo_Seq + 1;
+               declare
+                  Nm : constant String :=
+                    "$clo_" & Ada.Strings.Fixed.Trim
+                                (Natural'Image (Clo_Seq), Ada.Strings.Left);
+                  D     : Fn_Decl;
+                  Used  : Path_Segments.Vector;
+                  Bound : Path_Segments.Vector;
+               begin
+                  E.Clo_Fn_Name := SU.To_Unbounded_String (Nm);
+                  --  capture set = used − bound − params − top-level
+                  Scan_Stmts (E.Clo_Body, Used, Bound);
+                  for P of E.Clo_Params loop
+                     Add_Once (Bound, P.Name);
+                  end loop;
+                  E.Clo_Caps.Clear;
+                  for I in Used.First_Index .. Used.Last_Index loop
+                     declare
+                        Cap : constant SU.Unbounded_String :=
+                          Used.Element (I);
+                     begin
+                        if not In_Set (Bound, Cap)
+                          and then not Is_Top_Level (Cap)
+                        then
+                           E.Clo_Caps.Append ((Name => Cap, Ty => null));
+                        end if;
+                     end;
+                  end loop;
+
+                  D.Header.Name := E.Clo_Fn_Name;
+                  D.Header.Is_Closure := True;
+
+                  if not E.Clo_Caps.Is_Empty then
+                     --  Capturing: synthesise the env struct, the `self`
+                     --  parameter, and the capture-loading prefix.
+                     E.Clo_Env_Name := SU.To_Unbounded_String (Nm & "$env");
+                     declare
+                        Env   : Struct_Decl;
+                        Self_T : constant Type_Access :=
+                          new AST_Type (Kind => T_Ref);
+                        Prefix : Stmt_Vectors.Vector;
+                     begin
+                        Self_T.Sigil  := R_Shared;
+                        Self_T.Target := new AST_Type (Kind => T_Named);
+                        Self_T.Target.Name := E.Clo_Env_Name;
+                        D.Header.Params.Append
+                          ((Name => SU.To_Unbounded_String ("self"),
+                            Ty   => Self_T));
+                        for C of E.Clo_Caps loop
+                           Env.Fields.Append
+                             ((Name => C.Name, Ty => null, Default => null));
+                           declare
+                              LS : constant Stmt_Access :=
+                                new Stmt_Node (Kind => S_Let);
+                              FE : constant Expr_Access :=
+                                new Expr_Node (Kind => E_Field);
+                              SR : constant Expr_Access :=
+                                new Expr_Node (Kind => E_Path);
+                           begin
+                              SR.Segments.Append
+                                (SU.To_Unbounded_String ("self"));
+                              FE.F_Recv := SR;
+                              FE.F_Name := C.Name;
+                              LS.L_Name := C.Name;
+                              LS.L_Ty   := null;
+                              LS.L_Init := FE;
+                              Prefix.Append (LS);
+                           end;
+                        end loop;
+                        Env.Name     := E.Clo_Env_Name;
+                        Env.Clo_Lift := E.Clo_Fn_Name;
+                        U.Structs.Append (Env);
+                        for S of E.Clo_Body loop
+                           Prefix.Append (S);
+                        end loop;
+                        E.Clo_Body := Prefix;
+                     end;
+                  end if;
+
+                  for P of E.Clo_Params loop
+                     D.Header.Params.Append ((Name => P.Name, Ty => P.Ty));
+                  end loop;
+                  D.Header.Return_Type := E.Clo_Ret;   --  null => inferred
+                  D.Body_Stmts := E.Clo_Body;
+                  Visit_Block (E.Clo_Body);            --  nested closures
+                  U.Fns.Append (D);
+               end;
             when E_Variant_New =>
                for I in E.VN_Fields.First_Index ..
                         E.VN_Fields.Last_Index

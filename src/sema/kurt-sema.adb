@@ -350,6 +350,8 @@ package body Kurt.Sema is
               or else A.Fn_Variadic /= B.Fn_Variadic
               or else A.Fn_Airside /= B.Fn_Airside
               or else A.Fn_Never /= B.Fn_Never
+              or else A.Fn_Invocable /= B.Fn_Invocable
+              or else A.Fn_Xfer /= B.Fn_Xfer
               or else Natural (A.Fn_Params.Length)
                         /= Natural (B.Fn_Params.Length)
             then
@@ -374,6 +376,43 @@ package body Kurt.Sema is
       end if;
       if Target = null or else Source = null then
          return True;  --  unknown; a separate diagnostic already fired
+      end if;
+      --  §9.9.2 invocable-type coercion ladder. A more permissive target
+      --  accepts a less-capturing source when the parameter and return types
+      --  match: `fn(T)->U`  ⊑  `/.T/->U`  ⊑  `xfer /.T/->U`. The plain
+      --  subroutine pointer flows into either invocable type; a non-`xfer`
+      --  invocable flows into the `xfer` form; never the reverse (a capturing
+      --  value shall not narrow to a subroutine pointer).
+      if Target.Kind = T_Fn and then Source.Kind = T_Fn
+        and then (Target.Fn_Invocable /= Source.Fn_Invocable
+                  or else Target.Fn_Xfer /= Source.Fn_Xfer)
+      then
+         declare
+            --  Rank: plain fn = 0, `/.T/` = 1, `xfer /.T/` = 2.
+            function Rank (T : Type_Access) return Natural is
+              (if not T.Fn_Invocable then 0 elsif not T.Fn_Xfer then 1 else 2);
+            Match : Boolean :=
+              Natural (Target.Fn_Params.Length)
+                = Natural (Source.Fn_Params.Length)
+              and then SU.To_String (Target.Fn_Extern)
+                         = SU.To_String (Source.Fn_Extern)
+              and then Target.Fn_Variadic = Source.Fn_Variadic
+              and then Target.Fn_Airside = Source.Fn_Airside
+              and then Same_Type (Target.Fn_Ret, Source.Fn_Ret);
+         begin
+            if Match then
+               for I in Target.Fn_Params.First_Index ..
+                        Target.Fn_Params.Last_Index
+               loop
+                  if not Same_Type (Target.Fn_Params.Element (I),
+                                    Source.Fn_Params.Element (I))
+                  then
+                     Match := False;
+                  end if;
+               end loop;
+            end if;
+            return Match and then Rank (Source) <= Rank (Target);
+         end;
       end if;
       return Same_Type (Target, Source);
    end Assignable;
@@ -425,7 +464,7 @@ package body Kurt.Sema is
       --  §8.8.2 bindings invalidated by a transfer (move).
       Moved   : Moved_Vec.Vector;
       --  §6.1.8/§2.6: airside nesting depth for the statement being
-      --  checked. Raised inside an `airside { … }` block and for the whole
+      --  checked. Raised inside an `airside { ... }` block and for the whole
       --  body of an `airside fn`. `uninit` is valid only when this is > 0.
       In_Airside : Natural := 0;
       --  §7.9: loop labels currently in scope, innermost last. A `break`/
@@ -724,6 +763,31 @@ package body Kurt.Sema is
          end if;
       end Mark_Moved;
 
+      --  §9.9.3: an aggregate capture (struct / tuple / array / payload enum)
+      --  must be bound into the closure body by reference to its env field —
+      --  it cannot be loaded as a register value, and a `with destruct`
+      --  capture must not be copied into a second owner.
+      function Cap_By_Ref (T : Type_Access) return Boolean is
+      begin
+         if T = null then
+            return False;
+         end if;
+         case T.Kind is
+            when T_Tuple | T_Array =>
+               return True;
+            when T_Named =>
+               declare
+                  N : constant String := SU.To_String (T.Name);
+               begin
+                  return Kurt.Layout.Is_Struct (N)
+                    or else (Kurt.Layout.Is_Enum (N)
+                             and then Kurt.Layout.Enum_Has_Payload (N));
+               end;
+            when others =>
+               return False;
+         end case;
+      end Cap_By_Ref;
+
       --  §8.8.2: if E is a bare binding of a `destruct` type used as a
       --  transfer source, invalidate it (use-after-move becomes a failure).
       procedure Maybe_Move (E : Expr_Access) is
@@ -981,7 +1045,7 @@ package body Kurt.Sema is
                      --  §4.8 range fields `start` / `end`, both type T.
                      E.Sem_Ty := RTD.Rng_Elem;
                   elsif RT /= null and then RT.Kind = T_Tuple then
-                     --  §6.2.2 tuple field by index `.0`, `.1`, …
+                     --  §6.2.2 tuple field by index `.0`, `.1`, ...
                      declare
                         Idx : constant Integer := Integer'Value (FN);
                      begin
@@ -1144,7 +1208,7 @@ package body Kurt.Sema is
                end if;
 
                --  §5.9: an un-instantiated generic invocation
-               --  `f.<T, …>(args)` can only appear inside a template —
+               --  `f.<T, ...>(args)` can only appear inside a template —
                --  Kurt.Mono rewrites every concrete call site to the
                --  instance name. Check the arguments abstractly; the
                --  result type would need substitution and is left
@@ -1261,8 +1325,64 @@ package body Kurt.Sema is
                      --  through a subroutine-pointer-typed callee value.
                      declare
                         CT : constant Type_Access := Infer (Callee, null);
+                        --  §9.9 a capturing-closure value (its type is the
+                        --  anonymous env struct) is invoked through its lifted
+                        --  subroutine, with the env address as hidden `self`.
+                        Clo_Lift : SU.Unbounded_String;
                      begin
-                        if CT /= null and then CT.Kind = T_Fn then
+                        if CT /= null and then CT.Kind = T_Named then
+                           for SI in U.Structs.First_Index ..
+                                     U.Structs.Last_Index
+                           loop
+                              if SU.To_String (U.Structs.Element (SI).Name)
+                                = SU.To_String (CT.Name)
+                              then
+                                 Clo_Lift := U.Structs.Element (SI).Clo_Lift;
+                              end if;
+                           end loop;
+                        end if;
+                        if SU.Length (Clo_Lift) > 0 then
+                           --  Closure call: check args against the lifted
+                           --  subroutine's parameters after `self`.
+                           E.C_Clo_Lift := Clo_Lift;
+                           declare
+                              LS : Sig;
+                              Has : constant Boolean :=
+                                Find_Sig (SU.To_String (Clo_Lift), LS);
+                           begin
+                              for I in E.C_Args.First_Index ..
+                                       E.C_Args.Last_Index
+                              loop
+                                 declare
+                                    --  +1: skip the hidden `self` parameter.
+                                    Pidx : constant Natural :=
+                                      LS.Params.First_Index + 1
+                                        + (I - E.C_Args.First_Index);
+                                    Exp  : Type_Access := null;
+                                 begin
+                                    if Has and then Pidx <= LS.Params.Last_Index
+                                    then
+                                       Exp := LS.Params.Element (Pidx).Ty;
+                                    end if;
+                                    declare
+                                       Arg_Ty : constant Type_Access :=
+                                         Infer (E.C_Args.Element (I), Exp);
+                                    begin
+                                       if Exp /= null
+                                         and then not Assignable (Exp, Arg_Ty)
+                                       then
+                                          Error ("argument" & Integer'Image
+                                                   (I - E.C_Args.First_Index + 1)
+                                                 & " to closure: expected '"
+                                                 & Image (Exp) & "' but got '"
+                                                 & Image (Arg_Ty) & "'");
+                                       end if;
+                                    end;
+                                 end;
+                              end loop;
+                              E.Sem_Ty := (if Has then LS.Ret else null);
+                           end;
+                        elsif CT /= null and then CT.Kind = T_Fn then
                            E.C_Indirect := True;
                            for I in E.C_Args.First_Index ..
                                     E.C_Args.Last_Index
@@ -2055,7 +2175,7 @@ package body Kurt.Sema is
                end;
 
             when E_Tuple_Lit =>
-               --  §6.1.7: type is .{T1, …, TN} from element types. When an
+               --  §6.1.7: type is .{T1, ..., TN} from element types. When an
                --  expected tuple type is in context, steer each element.
                declare
                   Tup : constant Type_Access :=
@@ -2322,6 +2442,173 @@ package body Kurt.Sema is
                       & "assignment to a binding (spec 6.1.8)");
                E.Sem_Ty := Expected;
                return Expected;
+
+            when E_Closure =>
+               --  §9.9 the value type of a *non-capturing* closure is the
+               --  invocable signature `fn(param types) -> return type` (it is
+               --  a plain subroutine pointer). A *capturing* closure's value
+               --  type is its anonymous capture struct `$clo_N$env`: each
+               --  field holds a copy of a captured binding, and the value is
+               --  invoked through the lifted subroutine `$clo_N(self, ...)`.
+               --  The body is checked via the subroutine Kurt.Mono lifted it
+               --  to; the return type is the explicit `-> U` or inferred from
+               --  the body's first return (params pushed temporarily).
+               declare
+                  RT    : Type_Access := E.Clo_Ret;
+                  Saved : constant Natural := Natural (Scope.Length);
+                  FT    : constant Type_Access :=
+                    new AST_Type (Kind => T_Fn);
+               begin
+                  --  §9.9.3 resolve each capture's type from the creating
+                  --  scope and finalise the anonymous capture struct (whose
+                  --  fields Kurt.Mono left untyped), then re-register the
+                  --  layout so the lifted subroutine and the closure value
+                  --  see the completed struct.
+                  if not E.Clo_Caps.Is_Empty then
+                     for K in E.Clo_Caps.First_Index ..
+                              E.Clo_Caps.Last_Index
+                     loop
+                        declare
+                           CN : constant String :=
+                             SU.To_String (E.Clo_Caps.Element (K).Name);
+                           CT : constant Type_Access := Lookup_Scope (CN);
+                           C  : Closure_Param := E.Clo_Caps.Element (K);
+                        begin
+                           if CT = null then
+                              Error ("closure captures '" & CN & "', whose "
+                                     & "type cannot be determined in the "
+                                     & "enclosing scope (spec 9.9.3)");
+                           end if;
+                           C.Ty := CT;
+                           E.Clo_Caps.Replace_Element (K, C);
+                           --  §9.9.2/§9.9.3: capturing a `with destruct`
+                           --  binding transfers ownership into the closure and
+                           --  shall be declared `xfer`. The captured binding is
+                           --  invalidated in the enclosing scope; the env type
+                           --  acquires `with destruct` (it now has a
+                           --  destruct-satisfying field) and its destructor
+                           --  destroys the moved value at scope exit.
+                           if Satisfies_Destruct (CT) then
+                              if not E.Clo_Xfer then
+                                 Error ("closure captures the `with destruct` "
+                                        & "binding '" & CN & "'; it shall be "
+                                        & "declared `xfer` (spec 9.9.2)");
+                              end if;
+                              Mark_Moved (CN);
+                           end if;
+                           --  An aggregate capture (struct / tuple / array /
+                           --  payload enum) lives in memory and cannot become
+                           --  a register value, and a `with destruct` capture
+                           --  must not be re-copied into an owned local (that
+                           --  would double-destroy). So bind the body's view
+                           --  of it by reference to the env field, rewriting
+                           --  the prefix `let cap = self.cap;` (synthesised by
+                           --  Kurt.Mono) into `let cap = &self.cap;`. Scalar
+                           --  copyable captures keep their by-copy local.
+                           if Cap_By_Ref (CT)
+                             and then K - E.Clo_Caps.First_Index
+                                        < Integer (E.Clo_Body.Length)
+                           then
+                              declare
+                                 PS : constant Stmt_Access :=
+                                   E.Clo_Body.Element
+                                     (E.Clo_Body.First_Index
+                                        + (K - E.Clo_Caps.First_Index));
+                                 Ref : constant Expr_Access :=
+                                   new Expr_Node (Kind => E_Ref);
+                                 RT2 : constant Type_Access :=
+                                   new AST_Type (Kind => T_Ref);
+                              begin
+                                 if PS.Kind = S_Let
+                                   and then PS.L_Init /= null
+                                   and then PS.L_Init.Kind = E_Field
+                                 then
+                                    Ref.Rf_Sigil := R_Shared;
+                                    Ref.Rf_Place := PS.L_Init;
+                                    PS.L_Init := Ref;
+                                    RT2.Sigil  := R_Shared;
+                                    RT2.Target := CT;
+                                    PS.L_Ty := RT2;
+                                 end if;
+                              end;
+                           end if;
+                        end;
+                     end loop;
+                     for SI in U.Structs.First_Index ..
+                               U.Structs.Last_Index
+                     loop
+                        if SU.To_String (U.Structs.Element (SI).Name)
+                          = SU.To_String (E.Clo_Env_Name)
+                        then
+                           declare
+                              SD : Struct_Decl := U.Structs.Element (SI);
+                           begin
+                              for K in SD.Fields.First_Index ..
+                                       SD.Fields.Last_Index
+                              loop
+                                 declare
+                                    FF : Struct_Field := SD.Fields.Element (K);
+                                 begin
+                                    FF.Ty := E.Clo_Caps.Element (K).Ty;
+                                    SD.Fields.Replace_Element (K, FF);
+                                 end;
+                              end loop;
+                              U.Structs.Replace_Element (SI, SD);
+                           end;
+                        end if;
+                     end loop;
+                     Kurt.Layout.Register (U);
+                  end if;
+
+                  for P of E.Clo_Params loop
+                     Scope.Append ((Name => P.Name, Ty => P.Ty));
+                  end loop;
+                  if RT = null then
+                     for S of E.Clo_Body loop
+                        if S.Kind = S_Return and then S.R_Val /= null then
+                           RT := Infer (S.R_Val, null);
+                           exit;
+                        end if;
+                     end loop;
+                  end if;
+                  while Natural (Scope.Length) > Saved loop
+                     Scope.Delete_Last;
+                  end loop;
+                  if RT = null then
+                     RT := Mk_Named ("void");
+                  end if;
+
+                  --  Propagate the return type (resolved here, where the
+                  --  captures are in scope) onto the lifted subroutine, so its
+                  --  own Check_Fn does not re-infer it before the
+                  --  capture-loading prefix `let`s have entered scope.
+                  for FI in U.Fns.First_Index .. U.Fns.Last_Index loop
+                     if SU.To_String (U.Fns.Element (FI).Header.Name)
+                       = SU.To_String (E.Clo_Fn_Name)
+                       and then U.Fns.Element (FI).Header.Return_Type = null
+                     then
+                        declare
+                           LF : Fn_Decl := U.Fns.Element (FI);
+                        begin
+                           LF.Header.Return_Type := RT;
+                           U.Fns.Replace_Element (FI, LF);
+                        end;
+                     end if;
+                  end loop;
+
+                  if not E.Clo_Caps.Is_Empty then
+                     --  Capturing: the value is the anonymous env struct.
+                     E.Sem_Ty := Mk_Named (SU.To_String (E.Clo_Env_Name));
+                     return E.Sem_Ty;
+                  end if;
+
+                  for P of E.Clo_Params loop
+                     FT.Fn_Params.Append (P.Ty);
+                  end loop;
+                  FT.Fn_Ret := RT;
+                  E.Sem_Ty := FT;
+                  return FT;
+               end;
 
             when E_Destruct =>
                --  §8.4/§8.11: `destruct(e)` runs e's destructor now;
@@ -2888,7 +3175,7 @@ package body Kurt.Sema is
                In_Airside := In_Airside - 1;
 
             when S_Extract =>
-               --  §7: `let v <- e else err { … }`. e is a contract value;
+               --  §7: `let v <- e else err { ... }`. e is a contract value;
                --  v binds the success payload for the rest of the block,
                --  err binds the failure payload inside the else block.
                declare
@@ -3330,7 +3617,7 @@ package body Kurt.Sema is
                     and then Stmts_Diverge (S.SI_Then)
                     and then Stmts_Diverge (S.SI_Else);
                when S_While =>
-                  --  `loop { … }` desugars to `while true`; with no escaping
+                  --  `loop { ... }` desugars to `while true`; with no escaping
                   --  break/express it never transfers control onward.
                   return Cond_Is_True (S.W_Cond)
                     and then not Has_Escape (S.W_Body);
@@ -3369,10 +3656,24 @@ package body Kurt.Sema is
                end;
             end loop;
 
-            if Fn.Header.Return_Type = null then
-               Cur_Ret := Mk_Named ("void");
-            else
+            if Fn.Header.Return_Type /= null then
                Cur_Ret := Fn.Header.Return_Type;
+            elsif Fn.Header.Is_Closure then
+               --  §9.9 a closure that omits `-> U` infers its return type
+               --  from its body's first `return` (params already in scope).
+               declare
+                  RT : Type_Access := null;
+               begin
+                  for S of Fn.Body_Stmts loop
+                     if S.Kind = S_Return and then S.R_Val /= null then
+                        RT := Infer (S.R_Val, null);
+                        exit;
+                     end if;
+                  end loop;
+                  Cur_Ret := (if RT /= null then RT else Mk_Named ("void"));
+               end;
+            else
+               Cur_Ret := Mk_Named ("void");
             end if;
 
             --  §5.1.1: the whole body of an `airside fn` is an airside
@@ -3396,7 +3697,7 @@ package body Kurt.Sema is
                       & "(spec 4.10/7.11)");
             end if;
          end Check_Fn;
-         --  §8.11: type- and borrow-check each `with destruct { … }` block
+         --  §8.11: type- and borrow-check each `with destruct { ... }` block
          --  as codegen will lower it — with `self` bound to an exclusive
          --  reference to the object being destroyed (`$self_t`). Synthesised
          --  here so the block is held to the same rules as any subroutine.

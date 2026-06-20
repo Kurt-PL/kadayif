@@ -1,6 +1,6 @@
 --  Expression lowering (subunit of Kurt.Codegen).
 --  Computes the value of E into x<Target_Reg>. Sees all of the parent
---  body's declarations (helpers, Lower_State, Lower_Imm, Lower_Stmt …).
+--  body's declarations (helpers, Lower_State, Lower_Imm, Lower_Stmt ...).
 
 separate (Kurt.Codegen)
 procedure Lower_Expr_Into_Reg
@@ -1040,6 +1040,18 @@ begin
          --  current (indeterminate) contents — no instruction is emitted.
          null;
 
+      when E_Closure =>
+         --  §9.9 a non-capturing closure is its lifted subroutine's address
+         --  (a subroutine pointer) — the same value a bare `fn` name yields.
+         declare
+            Lbl : constant String :=
+              "_" & SU.To_String (E.Clo_Fn_Name);
+         begin
+            IO.Put_Line (F, "    adrp    " & Xreg & ", " & Lbl & "@PAGE");
+            IO.Put_Line (F, "    add     " & Xreg & ", " & Xreg
+                            & ", " & Lbl & "@PAGEOFF");
+         end;
+
       when E_Destruct =>
          --  §8.4/§8.11: `destruct(g)` runs g's destructor immediately;
          --  `undestruct(g)` reclaims g's storage without running it. Either
@@ -1274,6 +1286,35 @@ begin
          end;
 
       when E_Call =>
+         --  §9.9 a capturing-closure call: invoke the lifted subroutine
+         --  `$clo_N` directly, passing the address of the closure binding
+         --  (its env struct) as the hidden first `self` argument. Reuse the
+         --  normal call machinery by synthesising that prepended argument.
+         if SU.Length (E.C_Clo_Lift) > 0 then
+            declare
+               E2  : constant Expr_Access := new Expr_Node (Kind => E_Call);
+               LP  : constant Expr_Access := new Expr_Node (Kind => E_Path);
+               Env : constant Expr_Access := new Expr_Node (Kind => E_Ref);
+               ETy : constant Type_Access := new AST_Type (Kind => T_Ref);
+            begin
+               LP.Segments.Append (E.C_Clo_Lift);
+               ETy.Sigil  := R_Raw;
+               ETy.Target := Type_Of_Expr (E.C_Callee, ST);
+               Env.Rf_Sigil := R_Raw;
+               Env.Rf_Place := E.C_Callee;
+               Env.Sem_Ty   := ETy;
+               E2.C_Callee := LP;
+               E2.C_Args.Append (Env);
+               for K in E.C_Args.First_Index .. E.C_Args.Last_Index loop
+                  E2.C_Args.Append (E.C_Args.Element (K));
+               end loop;
+               Lower_Call (E2);
+               if Target_Reg /= 0 then
+                  IO.Put_Line (F, "    mov     " & Xreg & ", x0");
+               end if;
+               return;
+            end;
+         end if;
          --  §9.5: a method call whose receiver is `&dyn Trait` dispatches
          --  dynamically; sema leaves such calls with an E_Field callee.
          if E.C_Callee.Kind = E_Field
@@ -1496,15 +1537,30 @@ begin
                     SU.To_String (E.Rf_Place.F_Name);
                   Off   : Natural;
                begin
-                  if B.Ty /= null and then B.Ty.Kind = T_Tuple then
-                     Off := B.Offset + Kurt.Layout.Tuple_Field_Offset
-                       (B.Ty, Natural'Value (FName));
+                  if B.Ty /= null and then B.Ty.Kind = T_Ref
+                    and then B.Ty.Target /= null
+                    and then B.Ty.Target.Kind = T_Named
+                  then
+                     --  §6.2.5 field through a reference (e.g. a closure's
+                     --  `&self.cap`): the field address is the loaded
+                     --  reference plus the field offset.
+                     IO.Put_Line (F, "    ldr     " & Xreg & ", [x29, #"
+                                     & Img (B.Offset) & "]");
+                     IO.Put_Line (F, "    add     " & Xreg & ", " & Xreg
+                                     & ", #" & Img (Kurt.Layout.Field_Offset
+                                       (SU.To_String (B.Ty.Target.Name),
+                                        FName)));
                   else
-                     Off := B.Offset + Kurt.Layout.Field_Offset
-                       (SU.To_String (B.Ty.Name), FName);
+                     if B.Ty /= null and then B.Ty.Kind = T_Tuple then
+                        Off := B.Offset + Kurt.Layout.Tuple_Field_Offset
+                          (B.Ty, Natural'Value (FName));
+                     else
+                        Off := B.Offset + Kurt.Layout.Field_Offset
+                          (SU.To_String (B.Ty.Name), FName);
+                     end if;
+                     IO.Put_Line (F, "    add     " & Xreg & ", x29, #"
+                                     & Img (Off));
                   end if;
-                  IO.Put_Line (F, "    add     " & Xreg & ", x29, #"
-                                  & Img (Off));
                end;
             end;
          elsif E.Rf_Place.Kind = E_Deref then

@@ -195,6 +195,10 @@ procedure Main is
       Kurt.Mono.Monomorphize (Unit);   --  section 5.9.3 specialise generics
       Kurt.Layout.Register (Unit);     --  section 4.11 KSA layout
       Kurt.Sema.Check (Unit, Errors);  --  section 10.2 stages 3-4
+      --  §9.9.3: Kurt.Sema completes each anonymous closure-capture struct
+      --  (filling field types from the creating scope); re-register so codegen
+      --  sees the finalised layout.
+      Kurt.Layout.Register (Unit);
       if Errors = 0 and then Emit then
          Kurt.Codegen.Emit (Unit, Out_Path);   --  section 10.2 stage 5
       end if;

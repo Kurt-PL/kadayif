@@ -1,0 +1,28 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.9.2 invocable type syntax. `/.T/ -> U` accepts subroutine pointer
+// values and non-`xfer` closures, and is invocable any number of times.
+// `fn(T) -> U` coerces into `/.T/ -> U` (a subroutine pointer is a value of
+// the invocable type). Like `fn`, the bootstrap represents it pointer-sized,
+// so the call lowers to an indirect `blr`.
+fn twice(g: /.si4/ -> si4, x: si4) -> si4 {
+    return g(x) + g(x);
+}
+
+fn triple(n: si4) -> si4 {
+    return n * 3;
+}
+
+fn main() -> ui1 {
+    // a named subroutine passed where `/.si4/ -> si4` is expected
+    let a: si4 = twice(triple, 5);             // (5*3)+(5*3) = 30
+    // a non-capturing closure passed to the same invocable parameter
+    let b: si4 = twice(/.x: si4/ <- x + 1, 9); // (9+1)+(9+1) = 20
+    // hold an invocable-typed binding, then invoke it directly
+    let f: /.si4/ -> si4 = /.x: si4/ <- x * x;
+    let c: si4 = f(7);                          // 49
+    airside {
+        posix::printf("a=%d b=%d c=%d\n\0".ptr, a, b, c);
+    }
+    return 0;
+}

@@ -36,7 +36,7 @@ package Kurt.Lexer is
       Kw_Then,
       Kw_Else,
       Kw_While,
-      Kw_Loop,           --  `loop { … }` (§7.5.2)
+      Kw_Loop,           --  `loop { ... }` (§7.5.2)
       Kw_Break,
       Kw_Continue,
       Kw_Express,        --  `express` block-level exit-with-value (§7.8)

@@ -1,0 +1,22 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.9.3 `xfer` closures. A closure that references a `with destruct` binding
+// transfers ownership of it into the closure's anonymous capture struct and
+// shall be declared `xfer`. The captured binding is invalidated in the
+// enclosing scope (a later use would be a translation failure), and the env
+// type acquires `with destruct`: the captured value is destroyed exactly once
+// — here by the env's destructor at scope exit.
+struct guard { id: si4 } with destruct {
+    airside { posix::printf("drop %d\n\0".ptr, self.id); }
+};
+
+fn main() -> ui1 {
+    let g: guard = guard { id = 42 };
+    // `g` (with destruct) is transferred into the closure; `xfer` required.
+    let run = xfer /.k: si4/ -> si4 {
+        return g.id + k;     // reads the captured guard
+    };
+    let r: si4 = run(8);     // 42 + 8 = 50
+    airside { posix::printf("r=%d\n\0".ptr, r); }
+    return 0;                // env destructor drops the captured guard (42) once
+}

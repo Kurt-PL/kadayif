@@ -391,6 +391,100 @@ begin
                            end;
                         end loop;
                      end;
+                  elsif S.L_Init.Kind = E_Closure then
+                     --  §9.9.3 capturing closure: the binding holds the
+                     --  anonymous env struct. Materialise it by copying each
+                     --  captured binding's current value into its field
+                     --  (capture by copy), exactly like a struct literal.
+                     Zero_Fill (Off, Sizeof (Ty));
+                     declare
+                        SN : constant String := SU.To_String (Ty.Name);
+                     begin
+                        for C of S.L_Init.Clo_Caps loop
+                           declare
+                              CN  : constant String := SU.To_String (C.Name);
+                              FT  : constant Type_Access :=
+                                Kurt.Layout.Field_Type (SN, CN);
+                              FOf : constant Natural :=
+                                Off + Kurt.Layout.Field_Offset (SN, CN);
+                              P   : constant Expr_Access :=
+                                new Expr_Node (Kind => E_Path);
+                              BI  : constant Natural := Find_Binding (ST, CN);
+                           begin
+                              P.Segments.Append (C.Name);
+                              if Is_Aggregate_Type (FT) and then BI /= 0 then
+                                 --  An aggregate capture is copied by memory
+                                 --  from its frame slot (it cannot live in a
+                                 --  register).
+                                 Emit_Mem_Copy
+                                   (F, "x29", ST.Bindings.Element (BI).Offset,
+                                    "x29", FOf, Sizeof (FT));
+                              else
+                                 Lower_Expr_Into_Reg (F, P, 9, ST);
+                                 Store_Sized (FOf, Sizeof (FT));
+                              end if;
+                              --  §9.9.3 a `with destruct` capture is *moved*
+                              --  into the env: clear the source binding's
+                              --  drop flag so it is destroyed once — by the
+                              --  env's destructor at scope exit, not here.
+                              --  (A copyable capture is duplicated, not moved.)
+                              if Kurt.Layout.Satisfies_Destruct (FT) then
+                                 P.P_Is_Move := True;
+                                 Note_Move (F, ST, P);
+                              end if;
+                           end;
+                        end loop;
+                     end;
+                  elsif S.L_Init.Kind = E_Field
+                    and then S.L_Init.F_Recv.Kind = E_Path
+                    and then Natural (S.L_Init.F_Recv.Segments.Length) = 1
+                  then
+                     --  Aggregate copy from a struct field — including a field
+                     --  reached through a reference, e.g. a capturing closure's
+                     --  `let cap = self.cap;` (self is `&env`). Copy Sizeof(Ty)
+                     --  bytes from the field's address into the binding's slot.
+                     declare
+                        RN : constant String := SU.To_String
+                          (S.L_Init.F_Recv.Segments.Last_Element);
+                        FN : constant String := SU.To_String (S.L_Init.F_Name);
+                        RI : constant Natural := Find_Binding (ST, RN);
+                     begin
+                        if RI = 0 then
+                           raise Program_Error with
+                             "codegen: unknown binding '" & RN & "'";
+                        end if;
+                        declare
+                           RB : constant Binding := ST.Bindings.Element (RI);
+                        begin
+                           if RB.Ty /= null and then RB.Ty.Kind = T_Ref
+                             and then RB.Ty.Target /= null
+                             and then RB.Ty.Target.Kind = T_Named
+                           then
+                              declare
+                                 SN  : constant String :=
+                                   SU.To_String (RB.Ty.Target.Name);
+                              begin
+                                 IO.Put_Line (F, "    ldr     x10, [x29, #"
+                                                 & Img (RB.Offset) & "]");
+                                 Emit_Mem_Copy
+                                   (F, "x10",
+                                    Kurt.Layout.Field_Offset (SN, FN),
+                                    "x29", Off, Sizeof (Ty));
+                              end;
+                           else
+                              declare
+                                 SN : constant String :=
+                                   SU.To_String (RB.Ty.Name);
+                              begin
+                                 Emit_Mem_Copy
+                                   (F, "x29",
+                                    RB.Offset
+                                      + Kurt.Layout.Field_Offset (SN, FN),
+                                    "x29", Off, Sizeof (Ty));
+                              end;
+                           end if;
+                        end;
+                     end;
                   elsif S.L_Init.Kind = E_Range then
                      --  §4.8 range literal: store `start` at offset 0 and
                      --  `end` at size(T), the two T-typed fields in place.
@@ -1140,7 +1234,7 @@ begin
          end;
 
       when S_Extract =>
-         --  §7: `let v <- e else err { … }`. Branch on e's discriminant;
+         --  §7: `let v <- e else err { ... }`. Branch on e's discriminant;
          --  on failure bind err and run the (diverging) else block, on
          --  success bind v as a slot+offset alias for the rest of scope.
          declare

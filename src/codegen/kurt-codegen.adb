@@ -56,6 +56,9 @@ package body Kurt.Codegen is
             Collect_Strings_In_Expr (E.Rg_Hi, Pool);
          when E_Destruct =>
             Collect_Strings_In_Expr (E.DT_Inner, Pool);
+         when E_Closure =>
+            null;  --  §9.9 the body's strings are collected when the
+                   --  synthesised closure subroutine is itself processed
          when E_String_Lit =>
             Pool.Append ((Bytes => E.Str_Bytes));
          when E_Field =>
@@ -224,7 +227,7 @@ package body Kurt.Codegen is
    Unit_Has_Trap_Handler : Boolean := False;
 
    --  §8.11 type names with an emittable destructor `_<Name>$drop` (declared
-   --  `with destruct { … }`). Set by Emit; read at scope-exit drop emission.
+   --  `with destruct { ... }`). Set by Emit; read at scope-exit drop emission.
    Unit_Drop_Types : Path_Segments.Vector;
 
    function Type_Has_Drop (Name : String) return Boolean is
@@ -1218,7 +1221,7 @@ package body Kurt.Codegen is
       end if;
 
       --  §8.11: emit a destructor for every type that satisfies `destruct`
-      --  — whether by an explicit `with destruct { … }` block or by
+      --  — whether by an explicit `with destruct { ... }` block or by
       --  propagation through a field/payload that itself satisfies destruct.
       --  Propagation-only types carry an empty user block; their `$drop`
       --  body is purely the field-destruction tail (Emit_Field_Drops).

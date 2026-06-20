@@ -374,6 +374,48 @@ package body Kurt.Parser is
             Node.Fn_Ret := null;
          end if;
          return Node;
+      elsif C.Cur.Kind = Op_Slash
+        or else (C.Cur.Kind = Tok_Ident
+                 and then SU.To_String (C.Cur.Lexeme) = "xfer"
+                 and then Peek_Tok (C).Kind = Op_Slash)
+      then
+         --  §9.9.2 invocable type: `[xfer] /. T, ... / [ -> ( type | never ) ]`.
+         --  Like `fn(T) -> U` it is a pointer-sized value; Fn_Invocable marks
+         --  it, Fn_Xfer the consuming `xfer /.T/ -> U` form.
+         Node := new AST_Type (Kind => T_Fn);
+         Node.Fn_Invocable := True;
+         if C.Cur.Kind = Tok_Ident then
+            Advance (C);   --  'xfer'
+            Node.Fn_Xfer := True;
+         end if;
+         Expect (C, Op_Slash, "'/.' to open an invocable type");
+         Expect (C, Punct_Dot, "'.' after '/' to open an invocable type");
+         while C.Cur.Kind /= Op_Slash loop
+            --  Optional informational `name :` prefix (no semantic effect).
+            if C.Cur.Kind = Tok_Ident
+              and then Peek_Tok (C).Kind = Punct_Colon
+            then
+               Advance (C);   --  name
+               Advance (C);   --  ':'
+            end if;
+            Node.Fn_Params.Append (Parse_Type (C));
+            exit when C.Cur.Kind /= Punct_Comma;
+            Advance (C);       --  ','  (trailing comma tolerated)
+         end loop;
+         Expect (C, Op_Slash, "'/' to close the invocable parameter list");
+         if C.Cur.Kind = Punct_Arrow then
+            Advance (C);
+            if C.Cur.Kind = Kw_Never then
+               Advance (C);
+               Node.Fn_Never := True;
+               Node.Fn_Ret   := null;
+            else
+               Node.Fn_Ret := Parse_Type (C);
+            end if;
+         else
+            Node.Fn_Ret := null;
+         end if;
+         return Node;
       elsif C.Cur.Kind = Punct_LBracket then
          --  §4.6 array type: `[T; N]` fixed-size (Len = N) or `[T]`
          --  unsized slice (Len = 0, only valid as a reference target).
@@ -395,7 +437,7 @@ package body Kurt.Parser is
          Expect (C, Punct_RBracket, "']' to close array type");
          return Node;
       elsif C.Cur.Kind = Punct_Dot then
-         --  Tuple type `.{ T, T, … }` (§4.7).
+         --  Tuple type `.{ T, T, ... }` (§4.7).
          Advance (C);
          Expect (C, Punct_LBrace, "'{' after '.' in tuple type");
          Node := new AST_Type (Kind => T_Tuple);
@@ -463,7 +505,7 @@ package body Kurt.Parser is
    end Parse_Type;
 
    --  Optional generic parameter clause on a subroutine (§5.9):
-   --  `.< T [: bound { '+' bound }], … >`. Bounds are builtin bound
+   --  `.< T [: bound { '+' bound }], ... >`. Bounds are builtin bound
    --  names (§9.8) recorded for the type-erasure check in Kurt.Sema.
    procedure Parse_Opt_Generic_Params_Bounded
      (C : in out Cursor; Params : out Generic_Param_Vectors.Vector)
@@ -630,6 +672,10 @@ package body Kurt.Parser is
 
    function Parse_Expr (C : in out Cursor) return Expr_Access;
 
+   --  §9.9 closure expression (body defined after Parse_Block_Stmts).
+   function Parse_Closure
+     (C : in out Cursor; Xfer : Boolean) return Expr_Access;
+
    function Token_To_Binop (K : Token_Kind; Op : out Binary_Op) return Boolean is
    begin
       case K is
@@ -693,6 +739,10 @@ package body Kurt.Parser is
             E.Int_Suffix := C.Cur.Int_Suffix;
             Advance (C);
             return E;
+
+         when Op_Slash =>
+            --  §9.9 closure `/.params/ ...` (the opening `/.`).
+            return Parse_Closure (C, Xfer => False);
 
          when Kw_Uninit =>
             --  §6.1.8: uninitialized value. Its type is supplied by the
@@ -761,7 +811,7 @@ package body Kurt.Parser is
             return E;
 
          when Punct_Dot =>
-            --  Tuple literal `.{ e, e, … }` (§6.1.7).
+            --  Tuple literal `.{ e, e, ... }` (§6.1.7).
             Advance (C);
             Expect (C, Punct_LBrace, "'{' after '.' in tuple literal");
             E := new Expr_Node (Kind => E_Tuple_Lit);
@@ -783,6 +833,14 @@ package body Kurt.Parser is
             return E;
 
          when Tok_Ident =>
+            --  §9.9 `xfer /.params/ ...` consuming closure: the `xfer` keyword
+            --  immediately precedes the `/.` opener.
+            if SU.To_String (C.Cur.Lexeme) = "xfer"
+              and then Peek_Tok (C).Kind = Op_Slash
+            then
+               Advance (C);   --  'xfer'
+               return Parse_Closure (C, Xfer => True);
+            end if;
             --  §8.4/§8.11: `destruct(e)` and `undestruct(e)` are reserved
             --  expression forms (the words are keywords by the EBNF rule of
             --  §3.4.1). Intercept them before the generic path/call parse.
@@ -816,9 +874,9 @@ package body Kurt.Parser is
                E.Segments.Append (C.Cur.Lexeme);
                Advance (C);
             end loop;
-            --  Explicit generic arguments `path.< T, … >` (§5.9.2). On a
+            --  Explicit generic arguments `path.< T, ... >` (§5.9.2). On a
             --  callee path they drive monomorphisation (Kurt.Mono); on a
-            --  literal path (`Box.<si4> { … }`) the concrete type comes
+            --  literal path (`Box.<si4> { ... }`) the concrete type comes
             --  from context, so the captured args are simply unused.
             if C.Cur.Kind = Punct_Dot
               and then Peek_Tok (C).Kind = Op_Lt
@@ -958,7 +1016,7 @@ package body Kurt.Parser is
             return E;
 
          when Kw_Match =>
-            --  §7: match scrut { pattern = expr, … }
+            --  §7: match scrut { pattern = expr, ... }
             --  Bootstrap: expression-bodied arms only.
             Advance (C);
             E := new Expr_Node (Kind => E_Match);
@@ -1337,6 +1395,60 @@ package body Kurt.Parser is
       Expect (C, Punct_RBrace, "'}'");
    end Parse_Block_Stmts;
 
+   --  §9.9 closure: `[xfer] '/.' [ name [: T] {',' ...} ] '/' tail`, where the
+   --  tail is `-> T { block }`, `{ block }`, or `<- expr`. The `xfer` keyword
+   --  (if present) is already consumed by the caller. The opening `/.` lexes
+   --  as `/` then `.`; the closing `/` is a lone `/`.
+   function Parse_Closure
+     (C : in out Cursor; Xfer : Boolean) return Expr_Access
+   is
+      E : constant Expr_Access := new Expr_Node (Kind => E_Closure);
+   begin
+      E.Clo_Xfer := Xfer;
+      Expect (C, Op_Slash, "'/.' to open a closure");
+      Expect (C, Punct_Dot, "'.' after '/' to open a closure");
+      if C.Cur.Kind /= Op_Slash then
+         loop
+            declare
+               PName : constant SU.Unbounded_String :=
+                 Take_Ident (C, "closure parameter name");
+               PTy   : Type_Access := null;
+            begin
+               if C.Cur.Kind = Punct_Colon then
+                  Advance (C);
+                  PTy := Parse_Type (C);
+               end if;
+               E.Clo_Params.Append ((Name => PName, Ty => PTy));
+            end;
+            exit when C.Cur.Kind /= Punct_Comma;
+            Advance (C);
+         end loop;
+      end if;
+      Expect (C, Op_Slash, "'/' to close the closure parameter list");
+
+      if C.Cur.Kind = Punct_Arrow then
+         Advance (C);
+         E.Clo_Ret := Parse_Type (C);
+         Parse_Block_Stmts (C, E.Clo_Body);
+      elsif C.Cur.Kind = Punct_LBrace then
+         Parse_Block_Stmts (C, E.Clo_Body);
+      elsif C.Cur.Kind = Punct_LArrow then
+         --  Short form `/.p/ <- e` desugars to `{ return e; }`.
+         Advance (C);
+         declare
+            R : constant Stmt_Access := new Stmt_Node (Kind => S_Return);
+         begin
+            R.R_Val := Parse_Expr (C);
+            E.Clo_Body.Append (R);
+         end;
+      else
+         raise Syntax_Error with
+           "expected '->', '{', or '<-' in a closure tail at line"
+           & Positive'Image (C.Cur.Line);
+      end if;
+      return E;
+   end Parse_Closure;
+
    function Parse_Stmt (C : in out Cursor) return Stmt_Access is
       S : Stmt_Access;
    begin
@@ -1357,7 +1469,7 @@ package body Kurt.Parser is
 
          when Dir_At_Trap =>
             --  §7.10 `@trap;` termination primitive (statement position).
-            --  The `@trap { … }` handler form is a top-level declaration,
+            --  The `@trap { ... }` handler form is a top-level declaration,
             --  parsed in Parse_Unit, so here a `;` always follows.
             Advance (C);
             S := new Stmt_Node (Kind => S_Trap);
@@ -1398,7 +1510,7 @@ package body Kurt.Parser is
             --  §5.2 binding  OR  §7 contract extraction  OR  §4.7 tuple
             --  destructuring:
             --      let v = expr ;
-            --      let v <- expr else [err] { … } ;
+            --      let v <- expr else [err] { ... } ;
             --      let .{ a, b } = expr ;
             Advance (C);
             if C.Cur.Kind = Punct_Dot then
@@ -1529,7 +1641,7 @@ package body Kurt.Parser is
 
          when Kw_If =>
             --  Two surface forms share the `if` keyword:
-            --    block-form statement   if cond { ... } [else { ... } | else if …]
+            --    block-form statement   if cond { ... } [else { ... } | else if ...]
             --    inline expression      if cond then a else b      (as a stmt)
             --  Disambiguate after the condition: '{' => statement.
             Advance (C);
@@ -1563,7 +1675,7 @@ package body Kurt.Parser is
                end if;
                Expect (C, Punct_Eq, "'=' in if-let");
                --  Suppress trailing struct-literal parsing so the then-block
-               --  `{` is not read as `scrutinee { … }`.
+               --  `{` is not read as `scrutinee { ... }`.
                S.SI_Cond := Parse_Cond (C);
                Parse_Block_Stmts (C, S.SI_Then);
                Expect (C, Kw_Else, "'else' in if-let (spec 7.3.3)");
@@ -1952,7 +2064,7 @@ package body Kurt.Parser is
       TI : Trait_Impl;        --  populated only for `impl Type as Trait`
    begin
       Expect (C, Kw_Impl, "'impl'");
-      --  §9.1 / §9.4: optional `impl(P [: bound]…)` generic parameter list,
+      --  §9.1 / §9.4: optional `impl(P [: bound]...)` generic parameter list,
       --  immediately after `impl` and before the target type.
       if C.Cur.Kind = Punct_LParen then
          Advance (C);
@@ -1980,7 +2092,7 @@ package body Kurt.Parser is
       end if;
       Ty_Name := Take_Ident (C, "impl type name");
       TI.Ty_Name := Ty_Name;
-      --  The target's own generic clause `Owner.<P…>` binds the impl
+      --  The target's own generic clause `Owner.<P...>` binds the impl
       --  parameters to the owner; the names are recorded in Impl_Params,
       --  so the clause itself is consumed and discarded here.
       declare
@@ -1992,7 +2104,7 @@ package body Kurt.Parser is
       if C.Cur.Kind = Kw_As then
          Advance (C);
          TI.Trait_Name := Take_Ident (C, "trait name");
-         --  A trait may carry its own generic clause `as Trait.<…>`.
+         --  A trait may carry its own generic clause `as Trait.<...>`.
          declare
             Dummy : Generic_Param_Vectors.Vector;
          begin
@@ -2086,7 +2198,7 @@ package body Kurt.Parser is
          Advance (C);
          Expect (C, Punct_LBrace, "'{' after 'with' on a trait");
          --  Expect `self_t : Trait { '+' Trait }`. (The bootstrap models
-         --  only the single `self_t: …` form.)
+         --  only the single `self_t: ...` form.)
          declare
             Head : constant SU.Unbounded_String :=
               Take_Ident (C, "'self_t' in supertrait bound");
@@ -2285,7 +2397,7 @@ package body Kurt.Parser is
 
    --  enum_declaration = "enum" IDENT "{" variant { "," variant } "}"
    --  variant = IDENT [ "=" integer_literal ]    (§5.6, unit variants)
-   --  Discriminants default to 0,1,2,… continuing from the last value.
+   --  Discriminants default to 0,1,2,... continuing from the last value.
    function Parse_Enum_Decl (C : in out Cursor) return Enum_Decl is
       D    : Enum_Decl;
       Next : Long_Long_Integer := 0;
@@ -2301,8 +2413,8 @@ package body Kurt.Parser is
             begin
                V.Name := Take_Ident (C, "variant name");
                --  Optional payload (§5.6):
-               --     struct variant: `{ ident: type, … }`  (named fields)
-               --     tuple  variant: `{ [pub|mut|airside]* type, … }`
+               --     struct variant: `{ ident: type, ... }`  (named fields)
+               --     tuple  variant: `{ [pub|mut|airside]* type, ... }`
                --                                          (positional)
                --  Disambiguated by the first non-modifier token sequence:
                --  `ident ':'` -> struct, otherwise -> tuple.
@@ -2335,7 +2447,7 @@ package body Kurt.Parser is
                                  Expect (C, Punct_Colon, "':'");
                                  Fld.Ty := Parse_Type (C);
                               else
-                                 --  Synthetic positional name "0", "1", …
+                                 --  Synthetic positional name "0", "1", ...
                                  declare
                                     Im : constant String := Idx'Image;
                                  begin
@@ -2437,9 +2549,9 @@ package body Kurt.Parser is
 
       --  Optional `with` clause (§5.10).
       --     `with contract`                       — bare contract clause
-      --     `with { item, item, … }`              — with-block (§4.5, §5.10)
+      --     `with { item, item, ... }`              — with-block (§4.5, §5.10)
       --  Items recognised by the bootstrap: `contract [-> type]`, `discrim
-      --  (type)`. Other items (repr, align, …) are parsed-and-discarded.
+      --  (type)`. Other items (repr, align, ...) are parsed-and-discarded.
       if C.Cur.Kind = Kw_With then
        declare
          Is_Braced : Boolean := False;
@@ -2487,7 +2599,7 @@ package body Kurt.Parser is
                      else
                         --  Unrecognised with-item: skip balanced tokens up
                         --  to the next ',' or '}'. The bootstrap does not
-                        --  semantically use repr/align/lifetime/…
+                        --  semantically use repr/align/lifetime/...
                         declare
                            Depth : Natural := 0;
                         begin
@@ -2599,7 +2711,7 @@ package body Kurt.Parser is
    begin
       Advance (C);
       while C.Cur.Kind /= Tok_EOF loop
-         --  §5.16: skip any `@[ … ]@` annotations preceding a declaration.
+         --  §5.16: skip any `@[ ... ]@` annotations preceding a declaration.
          --  Their content is opaque and unrecognised ones are ignored.
          while C.Cur.Kind = Dir_At_LBracket loop
             Advance (C);
@@ -2640,7 +2752,7 @@ package body Kurt.Parser is
             when Dir_At_Dyn =>
                U.Dyns.Append (Parse_Dyn_Decl (C));
             when Dir_At_Trap =>
-               --  §7.10.1 `@trap { … }` handler. At most one per
+               --  §7.10.1 `@trap { ... }` handler. At most one per
                --  translation unit.
                if U.Has_Trap_Handler then
                   raise Syntax_Error with

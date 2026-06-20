@@ -56,7 +56,7 @@ package Kurt.Parser is
             R_Life     : SU.Unbounded_String := SU.Null_Unbounded_String;
             Target     : Type_Access;
          when T_Tuple =>
-            --  §4.7 anonymous tuple `.{T, T, …}` (positional fields).
+            --  §4.7 anonymous tuple `.{T, T, ...}` (positional fields).
             Elems : Type_Vectors.Vector;
          when T_Array =>
             --  §4.6 array. `Len > 0` is the fixed-size array `[T; N]`;
@@ -78,7 +78,7 @@ package Kurt.Parser is
             Rng_Elem      : Type_Access;
          when T_Fn =>
             --  §4.10 subroutine pointer `[extern[(iface)]] [variadic]
-            --  [airside] fn (T…) [-> U]`. A pointer-sized value (not a
+            --  [airside] fn (T...) [-> U]`. A pointer-sized value (not a
             --  reference). Parameter names are informational only, so only
             --  the parameter types are kept. Fn_Ret null => void (or never
             --  when Fn_Never). Fn_Extern empty => the native invocation
@@ -89,6 +89,15 @@ package Kurt.Parser is
             Fn_Airside  : Boolean := False;
             Fn_Never    : Boolean := False;
             Fn_Extern   : SU.Unbounded_String;
+            --  §9.9.2 invocable type syntax. Fn_Invocable distinguishes
+            --  `/.T/ -> U` (accepts subroutine pointers and non-`xfer`
+            --  closures, invocable any number of times) from the plain
+            --  subroutine-pointer `fn(T) -> U`. Fn_Xfer marks the consuming
+            --  form `xfer /.T/ -> U` (accepts `xfer` closures too, invocable
+            --  at most once, acquires `with destruct`). Both are represented
+            --  as a pointer-sized value like `fn`.
+            Fn_Invocable : Boolean := False;
+            Fn_Xfer      : Boolean := False;
       end case;
    end record;
 
@@ -143,6 +152,7 @@ package Kurt.Parser is
       E_Slice_Cast,   --  implicit `&[T; N] → &[T]` coercion (§4.6)
       E_Type_Intrinsic,  --  `T@size` / `T@align` / `T@offset(f)` (§6.12)
       E_Uninit,           --  `uninit` uninitialized value (§6.1.8)
+      E_Closure,          --  `/.params/ <- e` / `/.params/ { ... }` (§9.9)
       E_Destruct,         --  `destruct(e)` / `undestruct(e)` (§8.4, §8.11)
       E_Range);           --  `a..b` / `a..=b` range literal (§4.8)
       --  Note: Kurt has no `[]` indexing operator (§6.2). Element access
@@ -163,6 +173,16 @@ package Kurt.Parser is
       --  Pat_Variant payload bindings, positional (e.g. `{ w, h }`).
       Bindings : Path_Segments.Vector;
    end record;
+
+   --  §9.9 a closure parameter `name: T` (Param is declared later, after
+   --  Expr_Node, so closures use this lightweight pair).
+   type Closure_Param is record
+      Name : SU.Unbounded_String;
+      Ty   : Type_Access;
+   end record;
+
+   package Closure_Param_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Closure_Param);
 
    --  A struct-literal field initialiser: `name = expr`.
    type Field_Init is record
@@ -240,6 +260,11 @@ package Kurt.Parser is
             --  subroutine-pointer value rather than a named subroutine, so
             --  codegen emits an indirect call (`blr`).
             C_Indirect : Boolean := False;
+            --  §9.9 set by Kurt.Sema when the callee is a capturing-closure
+            --  value: names the lifted subroutine `$clo_N` to call directly,
+            --  passing the address of the callee binding as the hidden
+            --  `self` (the capture environment).
+            C_Clo_Lift : SU.Unbounded_String;
          when E_If =>
             I_Cond : Expr_Access;
             I_Then : Expr_Access;
@@ -314,6 +339,26 @@ package Kurt.Parser is
             TI_Field : SU.Unbounded_String;   --  TI_Offset only
          when E_Uninit =>
             null;   --  §6.1.8: no payload; type comes from the assignment
+         when E_Closure =>
+            --  §9.9 closure expression. Clo_Body is the block body; the
+            --  short form `/.p/ <- e` is desugared at parse time into a
+            --  single `return e;`. Clo_Fn_Name is the implementation-anonymous
+            --  subroutine the closure lowers to (filled by codegen). The
+            --  bootstrap lowers non-capturing closures (those that reference
+            --  no enclosing binding) to a plain subroutine usable as `fn`.
+            Clo_Params  : Closure_Param_Vectors.Vector;
+            Clo_Ret     : Type_Access := null;   --  null = inferred
+            Clo_Body    : Stmt_Vectors.Vector;
+            Clo_Xfer    : Boolean := False;
+            Clo_Fn_Name : SU.Unbounded_String;
+            --  §9.9.3 captured bindings (free variables referencing the
+            --  enclosing scope). Filled syntactically by Kurt.Mono (names);
+            --  Kurt.Sema fills each capture's type from the creating scope.
+            --  Empty => a non-capturing closure (a plain subroutine pointer).
+            --  Clo_Env_Name is the anonymous capture-struct type
+            --  `$clo_N$env`; the closure value has this type when capturing.
+            Clo_Caps     : Closure_Param_Vectors.Vector;
+            Clo_Env_Name : SU.Unbounded_String;
          when E_Destruct =>
             --  §8.4/§8.11: `destruct(e)` runs e's destructor immediately;
             --  `undestruct(e)` reclaims storage without running it (airside).
@@ -342,7 +387,7 @@ package Kurt.Parser is
       S_Assign,         --  place "=" expr ";"
       S_While,          --  "while" cond "{" stmts "}"
       S_If,             --  "if" cond "{" stmts "}" ["else" ("{"...} | if)]
-      S_Extract,        --  "let" v "<-" e "else" [err] "{" … "}" ";"
+      S_Extract,        --  "let" v "<-" e "else" [err] "{" ... "}" ";"
       S_Break,          --  "break" [expr] ";"   (§7.7 optional loop value)
       S_Continue,       --  "continue" ";"
       S_Express,        --  "express" expr ";"   (§7.8 block exit-with-value)
@@ -448,7 +493,7 @@ package Kurt.Parser is
    --      fn IDENT '(' params ')' [ '->' type ]
    type Fn_Header is record
       Name           : SU.Unbounded_String;
-      Generic_Params : Generic_Param_Vectors.Vector;  --  .<T[: bound], …>
+      Generic_Params : Generic_Param_Vectors.Vector;  --  .<T[: bound], ...>
       Params         : Param_Vectors.Vector;
       Return_Type : Type_Access;     --  null => void (or never, see Is_Never)
       Is_Pub      : Boolean := False;
@@ -471,6 +516,10 @@ package Kurt.Parser is
       --  variadic(name: T): retained for future codegen; ignored now.
       Variadic_Name : SU.Unbounded_String;
       Variadic_Ty   : Type_Access;
+      --  §9.9 set on a subroutine lifted from a closure expression. When its
+      --  Return_Type is null, sema infers it from the body's `return` (the
+      --  short/standard closure forms omit the return type).
+      Is_Closure   : Boolean := False;
    end record;
 
    type Fn_Decl is record
@@ -532,6 +581,12 @@ package Kurt.Parser is
       Conc_No_Transfer : Boolean := False;
       Conc_Reference   : Boolean := False;
       Conc_No_Reference : Boolean := False;
+      --  §9.9 closure environment: when non-empty, this struct is the
+      --  implementation-anonymous capture environment of a closure, and
+      --  Clo_Lift names the lifted subroutine `$clo_N(self : &this,
+      --  params...)` the closure value is invoked through. A value of this
+      --  type is callable; the call passes `&value` as the hidden `self`.
+      Clo_Lift : SU.Unbounded_String := SU.Null_Unbounded_String;
    end record;
 
    package Struct_Vectors is new Ada.Containers.Vectors
@@ -627,7 +682,7 @@ package Kurt.Parser is
    package Trait_Impl_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Trait_Impl);
 
-   --  §9.1 / §9.4 generic implementation `impl(P…) Owner.<P…> [as Trait]`.
+   --  §9.1 / §9.4 generic implementation `impl(P...) Owner.<P...> [as Trait]`.
    --  The method is a template: its body keeps the `self_t` placeholder and
    --  references the impl parameters `Gen_Params`. Kurt.Mono specialises it
    --  per concrete owner instance (e.g. `Box$si4$get`) when that instance
@@ -679,7 +734,7 @@ package Kurt.Parser is
       --  rule (§5.9.2); never lowered by codegen — only their
       --  monomorphised instances (back in Fns) are.
       Gen_Fns : Fn_Vectors.Vector;
-      --  §7.10.1 the single `@trap { … }` handler for this translation
+      --  §7.10.1 the single `@trap { ... }` handler for this translation
       --  unit, if one is declared. At most one is permitted.
       Has_Trap_Handler : Boolean := False;
       Trap_Handler     : Stmt_Vectors.Vector;

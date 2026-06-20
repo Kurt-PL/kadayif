@@ -1,0 +1,34 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.9.3 capturing closures. By default a closure captures every referenced
+// enclosing binding by copy (copyable bindings are copied into the closure's
+// anonymous capture struct at creation). The captured value is the binding's
+// value at creation time; a later mutation of the original is not observed.
+fn main() -> ui1 {
+    let base: si4 = 100;
+    let step: si4 = 5;
+
+    // captures `base` and `step` by copy
+    let bump: si4 = 0;
+    let f = /.x: si4/ <- base + step * x;
+    let a: si4 = f(3);   // 100 + 5*3 = 115
+    let b: si4 = f(10);  // 100 + 5*10 = 150 (invocable any number of times)
+
+    // a second closure capturing a different binding
+    let g = /.n: si4/ -> si4 {
+        let t: si4 = n * n;
+        return t + base;     // captures base
+    };
+    let c: si4 = g(4);   // 16 + 100 = 116
+
+    // capture-by-copy: mutating the original after creation does not change
+    // what the closure sees
+    let k: si4 = 7;
+    let h = /./ <- k;
+    let before: si4 = h();   // 7
+    airside {
+        posix::printf("a=%d b=%d c=%d before=%d bump=%d\n\0".ptr,
+                      a, b, c, before, bump);
+    }
+    return 0;
+}

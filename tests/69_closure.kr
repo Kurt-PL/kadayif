@@ -1,0 +1,26 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.9 non-capturing closures. All three forms — short (`<- e`), standard
+// (`{ ... }`, return inferred) and full (`-> U { ... }`) — lower to an
+// implementation-anonymous subroutine and, capturing nothing, behave exactly
+// as a subroutine pointer value: they coerce to `fn(T) -> U`, are callable
+// directly, and pass as arguments of subroutine-pointer type.
+fn apply(f: fn(si4) -> si4, x: si4) -> si4 {
+    return f(x);
+}
+
+fn main() -> ui1 {
+    let dbl: fn(si4) -> si4 = /.x: si4/ <- x * 2;        // short form
+    let sq:  fn(si4) -> si4 = /.x: si4/ { return x * x; }; // standard form
+    let inc: fn(si4) -> si4 = /.x: si4/ -> si4 {           // full form
+        return x + 1;
+    };
+    let r1: si4 = dbl(5);                    // call through the binding
+    let r2: si4 = sq(6);
+    let r3: si4 = inc(9);
+    let r4: si4 = apply(/.x: si4/ <- x + 100, 7);  // closure as argument
+    airside {
+        posix::printf("dbl=%d sq=%d inc=%d apply=%d\n\0".ptr, r1, r2, r3, r4);
+    }
+    return 0;
+}

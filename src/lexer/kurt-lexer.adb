@@ -312,7 +312,7 @@ package body Kurt.Lexer is
             end if;
 
             if Is_Float then
-               --  Optional float type suffix (fe…/f16/bf16/f32/…).
+               --  Optional float type suffix (fe.../f16/bf16/f32/...).
                if not At_End (L)
                  and then (Peek (L) = 'f' or else Peek (L) = 'b')
                then
@@ -340,7 +340,7 @@ package body Kurt.Lexer is
 
       --  §3.5.2 hexadecimal floating-point literal: `0x` hex digits with a
       --  fractional part (`.` hex digits) and/or a binary exponent
-      --  (`p`/`P` decimal). Without either it stays an integer (the `fe…`
+      --  (`p`/`P` decimal). Without either it stays an integer (the `fe...`
       --  of a would-be suffix are hex digits, per §3.5.2).
       if Base = 16 then
          declare

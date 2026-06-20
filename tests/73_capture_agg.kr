@@ -1,0 +1,18 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.9.3 capturing an aggregate (copyable struct) binding. The value is
+// copied into the closure's anonymous capture struct at creation; the body
+// reads it through the env (no second owner, no register load of the
+// aggregate). Invocable any number of times.
+struct point { x: si4, y: si4 }
+
+fn main() -> ui1 {
+    let p: point = point { x = 3, y = 4 };
+    let off: si4 = 100;
+    // captures the aggregate `p` and the scalar `off`
+    let f = /.k: si4/ -> si4 { return p.x * k + p.y + off; };
+    let a: si4 = f(10);   // 3*10 + 4 + 100 = 134
+    let b: si4 = f(2);    // 3*2  + 4 + 100 = 110
+    airside { posix::printf("a=%d b=%d\n\0".ptr, a, b); }
+    return 0;
+}

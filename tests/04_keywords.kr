@@ -6,7 +6,7 @@ fn main() -> ui1 {
     let f: bool = false;
     airside { posix::printf("t=%d f=%d\n\0".ptr, t, f); }   // 1 0
 
-    // §7.5.2 `loop { … }` is `while true { … }`.
+    // §7.5.2 `loop { ... }` is `while true { ... }`.
     mut i: si4 = 0;
     loop {
         i = i + 1;
