@@ -1,0 +1,32 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §10.7-8 conditional translation. Source-level `@flag` makes this test
+// deterministic under run.sh (no command-line flags). The inactive branch
+// below contains deliberately invalid text to prove it is never lexed.
+@flag(release)
+
+fn main() -> ui1 {
+    mut r: si4 = 0;
+@flag_if(release)
+    r = 10;
+@flag_else
+    this branch is &^%$ not valid kurt and must be skipped @@@
+@flag_endif
+
+    // chain with else-if; only the first true branch is taken
+@flag_if(debug)
+    r = r + 1;
+@flag_else_if(release)
+    r = r + 2;
+@flag_else
+    r = r + 99;
+@flag_endif
+
+    // boolean expression over flags
+@flag_if(release && !debug)
+    r = r + 100;
+@flag_endif
+
+    airside { posix::printf("r=%d\n\0".ptr, r); }   // 10 + 2 + 100 = 112
+    return 0;
+}

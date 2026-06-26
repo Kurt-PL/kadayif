@@ -143,6 +143,7 @@ package body Kurt.Lexer is
          elsif S = "false"    then T.Kind := Kw_False;
          elsif S = "cellbits" then T.Kind := Kw_Cellbits;
          elsif S = "never"    then T.Kind := Kw_Never;
+         elsif S = "xlatime"  then T.Kind := Kw_Xlatime;
          else                       T.Kind := Tok_Ident;
          end if;
 
@@ -692,6 +693,320 @@ package body Kurt.Lexer is
       L.Col  := 1;
    end Init;
 
+   ------------------------------------------------------------------
+   --  §10.7-8 conditional translation (flags).
+   ------------------------------------------------------------------
+
+   function Flag_Set (L : Lexer; Name : String) return Boolean is
+     (SU.Index (L.Flags, " " & Name & " ") /= 0);
+
+   procedure Define_Flag (L : in out Lexer; Name : String) is
+   begin
+      if not Flag_Set (L, Name) then
+         SU.Append (L.Flags, Name & " ");
+      end if;
+   end Define_Flag;
+
+   procedure Unset_Flag (L : in out Lexer; Name : String) is
+      Idx : constant Natural := SU.Index (L.Flags, " " & Name & " ");
+   begin
+      if Idx /= 0 then
+         --  Drop "Name " keeping the leading space as the next delimiter.
+         SU.Replace_Slice
+           (L.Flags, Idx + 1, Idx + Name'Length, "");
+      end if;
+   end Unset_Flag;
+
+   --  Evaluate a §10.8 flag expression held in S (the text between the
+   --  parentheses): identifier | '!' e | e '&&' e | e '||' e | '(' e ')'.
+   function Eval_Flag_Expr (L : Lexer; S : String) return Boolean is
+      P : Natural := S'First;
+
+      procedure Skip_Ws is
+      begin
+         while P <= S'Last and then (S (P) = ' ' or else S (P) = ASCII.HT)
+         loop
+            P := P + 1;
+         end loop;
+      end Skip_Ws;
+
+      function Parse_Or return Boolean;
+
+      function Parse_Atom return Boolean is
+         R : Boolean;
+      begin
+         Skip_Ws;
+         if P <= S'Last and then S (P) = '!' then
+            P := P + 1;
+            return not Parse_Atom;
+         elsif P <= S'Last and then S (P) = '(' then
+            P := P + 1;
+            R := Parse_Or;
+            Skip_Ws;
+            if P <= S'Last and then S (P) = ')' then
+               P := P + 1;
+            end if;
+            return R;
+         else
+            declare
+               Start : constant Natural := P;
+            begin
+               while P <= S'Last
+                 and then (Is_Ident_Continue (S (P)))
+               loop
+                  P := P + 1;
+               end loop;
+               if P = Start then
+                  return False;   --  malformed; treat as false
+               end if;
+               return Flag_Set (L, S (Start .. P - 1));
+            end;
+         end if;
+      end Parse_Atom;
+
+      function Parse_And return Boolean is
+         R : Boolean := Parse_Atom;
+      begin
+         loop
+            Skip_Ws;
+            if P + 1 <= S'Last and then S (P) = '&' and then S (P + 1) = '&'
+            then
+               P := P + 2;
+               R := Parse_Atom and then R;   --  evaluate both (no short-circuit side effects)
+            else
+               exit;
+            end if;
+         end loop;
+         return R;
+      end Parse_And;
+
+      function Parse_Or return Boolean is
+         R : Boolean := Parse_And;
+      begin
+         loop
+            Skip_Ws;
+            if P + 1 <= S'Last and then S (P) = '|' and then S (P + 1) = '|'
+            then
+               P := P + 2;
+               R := Parse_And or else R;
+            else
+               exit;
+            end if;
+         end loop;
+         return R;
+      end Parse_Or;
+   begin
+      return Parse_Or;
+   end Eval_Flag_Expr;
+
+   --  Flag-chain directive kinds recognised at the start of a line.
+   type Flag_Dir is (FD_None, FD_If, FD_Else_If, FD_Else, FD_Endif);
+
+   --  Classify the line beginning at L.Pos: if its first non-whitespace
+   --  token is a `@flag_*` chain directive, return its kind and leave L.Pos
+   --  just after the directive keyword (so a following `(expr)` can be read).
+   --  Otherwise return FD_None with L.Pos unchanged.
+   function Peek_Line_Directive (L : in out Lexer) return Flag_Dir is
+      Save : constant Positive := L.Pos;
+   begin
+      while Peek (L) = ' ' or else Peek (L) = ASCII.HT loop
+         Advance (L);
+      end loop;
+      if Peek (L) /= '@' then
+         L.Pos := Save;
+         return FD_None;
+      end if;
+      Advance (L);   --  '@'
+      declare
+         Start : constant Positive := L.Pos;
+      begin
+         while Is_Ident_Continue (Peek (L)) loop
+            Advance (L);
+         end loop;
+         declare
+            KW : constant String := SU.Slice (L.Src, Start, L.Pos - 1);
+         begin
+            if KW = "flag_if" then return FD_If;
+            elsif KW = "flag_else_if" then return FD_Else_If;
+            elsif KW = "flag_else" then return FD_Else;
+            elsif KW = "flag_endif" then return FD_Endif;
+            else
+               L.Pos := Save;   --  not a chain directive
+               return FD_None;
+            end if;
+         end;
+      end;
+   end Peek_Line_Directive;
+
+   --  Advance L.Pos past the rest of the current line (including the LF).
+   procedure Skip_Line (L : in out Lexer) is
+   begin
+      while not At_End (L) and then Peek (L) /= ASCII.LF loop
+         Advance (L);
+      end loop;
+      if not At_End (L) then
+         Advance (L);   --  consume the LF
+      end if;
+   end Skip_Line;
+
+   --  Read a `(expr)` at L.Pos and evaluate it; L.Pos ends after the ')'.
+   function Read_Paren_Cond (L : in out Lexer) return Boolean is
+   begin
+      while Peek (L) = ' ' or else Peek (L) = ASCII.HT loop
+         Advance (L);
+      end loop;
+      if Peek (L) /= '(' then
+         raise Translation_Failure with
+           "`@flag_if`/`@flag_else_if` requires `(expr)` at line"
+           & Positive'Image (L.Line);
+      end if;
+      Advance (L);   --  '('
+      declare
+         Start : constant Positive := L.Pos;
+         Depth : Natural := 1;
+      begin
+         while not At_End (L) and then Depth > 0 loop
+            if Peek (L) = '(' then Depth := Depth + 1;
+            elsif Peek (L) = ')' then Depth := Depth - 1;
+            end if;
+            exit when Depth = 0;
+            Advance (L);
+         end loop;
+         declare
+            Expr : constant String := SU.Slice (L.Src, Start, L.Pos - 1);
+         begin
+            if Peek (L) = ')' then Advance (L); end if;
+            return Eval_Flag_Expr (L, Expr);
+         end;
+      end;
+   end Read_Paren_Cond;
+
+   --  Skip a non-taken branch body from L.Pos to the next depth-0 chain
+   --  directive (handling nested `@flag_if…@flag_endif`). On return L.Pos is
+   --  just after that directive's keyword; the kind is returned.
+   function Skip_Inactive_Branch (L : in out Lexer) return Flag_Dir is
+      Depth : Natural := 0;
+   begin
+      loop
+         if At_End (L) then
+            raise Translation_Failure with
+              "unterminated `@flag_if` (missing `@flag_endif`)";
+         end if;
+         declare
+            D : constant Flag_Dir := Peek_Line_Directive (L);
+         begin
+            case D is
+               when FD_If =>
+                  Depth := Depth + 1;
+                  Skip_Line (L);
+               when FD_Endif =>
+                  if Depth = 0 then
+                     return FD_Endif;
+                  end if;
+                  Depth := Depth - 1;
+                  Skip_Line (L);
+               when FD_Else | FD_Else_If =>
+                  if Depth = 0 then
+                     return D;
+                  end if;
+                  Skip_Line (L);   --  belongs to a nested chain
+               when FD_None =>
+                  Skip_Line (L);
+            end case;
+         end;
+      end loop;
+   end Skip_Inactive_Branch;
+
+   --  From inside a taken branch that just ended (an `@flag_else`/`else_if`
+   --  was reached), skip everything to this chain's matching `@flag_endif`,
+   --  consuming that endif line.
+   procedure Skip_To_Endif (L : in out Lexer) is
+      Depth : Natural := 0;
+   begin
+      loop
+         if At_End (L) then
+            raise Translation_Failure with
+              "unterminated `@flag_if` (missing `@flag_endif`)";
+         end if;
+         declare
+            D : constant Flag_Dir := Peek_Line_Directive (L);
+         begin
+            case D is
+               when FD_If => Depth := Depth + 1; Skip_Line (L);
+               when FD_Endif =>
+                  if Depth = 0 then
+                     Skip_Line (L);
+                     return;
+                  end if;
+                  Depth := Depth - 1; Skip_Line (L);
+               when others => Skip_Line (L);
+            end case;
+         end;
+      end loop;
+   end Skip_To_Endif;
+
+   --  Read a `(identifier)` at L.Pos (used by `@flag`/`@unflag`).
+   function Read_Paren_Ident (L : in out Lexer) return String is
+   begin
+      while Peek (L) = ' ' or else Peek (L) = ASCII.HT loop
+         Advance (L);
+      end loop;
+      if Peek (L) /= '(' then
+         raise Translation_Failure with
+           "`@flag`/`@unflag` requires `(name)` at line"
+           & Positive'Image (L.Line);
+      end if;
+      Advance (L);   --  '('
+      while Peek (L) = ' ' or else Peek (L) = ASCII.HT loop
+         Advance (L);
+      end loop;
+      declare
+         Start : constant Positive := L.Pos;
+      begin
+         while Is_Ident_Continue (Peek (L)) loop
+            Advance (L);
+         end loop;
+         declare
+            Nm : constant String := SU.Slice (L.Src, Start, L.Pos - 1);
+         begin
+            while Peek (L) = ' ' or else Peek (L) = ASCII.HT loop
+               Advance (L);
+            end loop;
+            if Peek (L) = ')' then Advance (L); end if;
+            return Nm;
+         end;
+      end;
+   end Read_Paren_Ident;
+
+   --  Handle a `@flag_if` chain at L.Pos (just after the keyword). On return
+   --  L.Pos sits at the start of the taken branch's body, or past the whole
+   --  chain if no branch is taken.
+   procedure Enter_Flag_If (L : in out Lexer) is
+      Cond : Boolean := Read_Paren_Cond (L);
+   begin
+      loop
+         if Cond then
+            Skip_Line (L);   --  step past the directive line into the body
+            return;
+         end if;
+         declare
+            D : constant Flag_Dir := Skip_Inactive_Branch (L);
+         begin
+            case D is
+               when FD_Endif =>
+                  Skip_Line (L);
+                  return;
+               when FD_Else =>
+                  Cond := True;
+               when FD_Else_If =>
+                  Cond := Read_Paren_Cond (L);
+               when others =>
+                  return;   --  unreachable
+            end case;
+         end;
+      end loop;
+   end Enter_Flag_If;
+
    function Next_Token (L : in out Lexer) return Token is
    begin
       Skip_Trivia (L);
@@ -791,7 +1106,10 @@ package body Kurt.Lexer is
             when ';' => Tok.Kind := Punct_Semi;   Advance (L);
             when ',' => Tok.Kind := Punct_Comma;  Advance (L);
             when '.' =>
-               if Peek (L, 1) = '.' and then Peek (L, 2) = '=' then
+               if Peek (L, 1) = '.' and then Peek (L, 2) = '.' then
+                  Tok.Kind := Op_Ellipsis;        --  ...  (§7.4.2)
+                  Advance (L); Advance (L); Advance (L);
+               elsif Peek (L, 1) = '.' and then Peek (L, 2) = '=' then
                   Tok.Kind := Op_DotDotEq;        --  ..=  (§4.8)
                   Advance (L); Advance (L); Advance (L);
                elsif Peek (L, 1) = '.' then
@@ -963,10 +1281,9 @@ package body Kurt.Lexer is
                      Advance (L);
                   end loop;
                else
-                  raise Translation_Failure
-                    with "unexpected '#' at line"
-                       & Positive'Image (L.Line)
-                       & " (only '#wild#' is recognised by the bootstrap)";
+                  --  §5.10 standalone `#` (binding pattern `name # sub`).
+                  Tok.Kind := Tok_Hash;
+                  Advance (L);
                end if;
             when '@' =>
                Advance (L);
@@ -988,6 +1305,12 @@ package body Kurt.Lexer is
                   if S = "dyn" then
                      Tok.Kind   := Dir_At_Dyn;
                      Tok.Lexeme := Name_Tok.Lexeme;
+                  elsif S = "add" then
+                     Tok.Kind   := Dir_At_Add;       --  §10.2
+                     Tok.Lexeme := Name_Tok.Lexeme;
+                  elsif S = "path" then
+                     Tok.Kind   := Dir_At_Path;      --  §10.5
+                     Tok.Lexeme := Name_Tok.Lexeme;
                   elsif S = "trap" then
                      Tok.Kind   := Dir_At_Trap;      --  §7.10
                      Tok.Lexeme := Name_Tok.Lexeme;
@@ -1006,6 +1329,9 @@ package body Kurt.Lexer is
                   elsif S = "offset" then
                      Tok.Kind   := Dir_At_Offset;    --  §6.12
                      Tok.Lexeme := Name_Tok.Lexeme;
+                  elsif S = "name" then
+                     Tok.Kind   := Dir_At_Name;      --  §6.12.2
+                     Tok.Lexeme := Name_Tok.Lexeme;
                   elsif S = "inline" then
                      Tok.Kind   := Dir_At_Inline;    --  §5.14
                      Tok.Lexeme := Name_Tok.Lexeme;
@@ -1015,6 +1341,23 @@ package body Kurt.Lexer is
                   elsif S = "symbol" then
                      Tok.Kind   := Dir_At_Symbol;    --  §5.15
                      Tok.Lexeme := Name_Tok.Lexeme;
+                  elsif S = "flag" then               --  §10.7
+                     Define_Flag (L, Read_Paren_Ident (L));
+                     return Next_Token (L);
+                  elsif S = "unflag" then             --  §10.7
+                     Unset_Flag (L, Read_Paren_Ident (L));
+                     return Next_Token (L);
+                  elsif S = "flag_if" then            --  §10.8
+                     Enter_Flag_If (L);
+                     return Next_Token (L);
+                  elsif S = "flag_endif" then
+                     --  Active branch reached its chain end.
+                     Skip_Line (L);
+                     return Next_Token (L);
+                  elsif S = "flag_else" or else S = "flag_else_if" then
+                     --  Active branch ended; the rest of the chain is skipped.
+                     Skip_To_Endif (L);
+                     return Next_Token (L);
                   else
                      raise Translation_Failure
                        with "unknown @-directive '@" & S

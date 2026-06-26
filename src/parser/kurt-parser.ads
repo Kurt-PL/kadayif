@@ -163,16 +163,42 @@ package Kurt.Parser is
    type Type_Intrinsic_Op is (TI_Size, TI_Align, TI_Offset);
 
    --  Match patterns (bootstrap subset: enum variant path, integer
-   --  literal, or the `#wild#` catch-all).
-   type Pattern_Kind is (Pat_Variant, Pat_Int, Pat_Wild);
+   --  literal, numeric range, or the `#wild#` catch-all). Or-patterns
+   --  (`p | q`) are desugared at parse time into one arm per alternative,
+   --  so they need no dedicated kind here.
+   type Pattern_Kind is
+     (Pat_Variant, Pat_Int, Pat_Wild, Pat_Range, Pat_Slice);
+
+   --  §7.4.2 a slice-pattern element: bind a name, compare an integer
+   --  literal, ignore (`#wild#`), or the rest marker `...`.
+   type Slice_Elem_Kind is (SE_Bind, SE_Int, SE_Wild, SE_Rest);
+   type Slice_Elem is record
+      Kind  : Slice_Elem_Kind := SE_Wild;
+      Name  : SU.Unbounded_String;          --  SE_Bind
+      Int_V : Long_Long_Integer := 0;       --  SE_Int
+   end record;
+
+   package Slice_Elem_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Slice_Elem);
 
    type Pattern is record
       Kind     : Pattern_Kind := Pat_Wild;
       Path     : Path_Segments.Vector;  --  Pat_Variant: Enum::Variant
-      Int_V    : Long_Long_Integer := 0;  --  Pat_Int
+      Int_V    : Long_Long_Integer := 0;  --  Pat_Int; Pat_Range lower bound
+      --  §5.10 range pattern `lo..hi` / `lo..=hi` (numeric, refutable).
+      Range_Hi   : Long_Long_Integer := 0;
+      Range_Incl : Boolean := False;  --  Pat_Range: `..=` (true) vs `..`
       --  Pat_Variant payload bindings, positional (e.g. `{ w, h }`).
       Bindings : Path_Segments.Vector;
+      --  §5.10 binding pattern `name # sub`: the matched value is bound to
+      --  Bind_Name while it is tested against this (sub-)pattern. Empty = none.
+      Bind_Name : SU.Unbounded_String;
+      --  §7.4.2 Pat_Slice elements (in order); at most one SE_Rest.
+      Slice_Elems : Slice_Elem_Vectors.Vector;
    end record;
+
+   package Pattern_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Pattern);
 
    --  §9.9 a closure parameter `name: T` (Param is declared later, after
    --  Expr_Node, so closures use this lightweight pair).
@@ -193,9 +219,12 @@ package Kurt.Parser is
    package Field_Init_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Field_Init);
 
-   --  A match arm: `pattern = expr`. (Block-body arms deferred.)
+   --  A match arm: `pattern [if guard] = expr`. (Block-body arms deferred.)
+   --  §7.4: an optional guard clause restricts matching — the arm is selected
+   --  only when the pattern matches AND the guard evaluates to `true`.
    type Match_Arm is record
       Pat      : Pattern;
+      Guard    : Expr_Access := null;  --  §7.4 optional `if` guard; null = none
       Arm_Body : Expr_Access;
    end record;
 
@@ -221,6 +250,10 @@ package Kurt.Parser is
    type Expr_Node (Kind : Expr_Kind := E_Int_Lit) is record
       --  Filled by Kurt.Sema during type analysis; null before then.
       Sem_Ty : Type_Access := null;
+      --  §6.6: set when this expression was written inside explicit
+      --  parentheses, so the mixed comparison/bitwise constraint treats it
+      --  as an opaque group (parentheses are otherwise transparent).
+      Was_Paren : Boolean := False;
       case Kind is
          when E_Int_Lit =>
             Int_V      : Long_Long_Integer := 0;
@@ -414,6 +447,13 @@ package Kurt.Parser is
             --  non-empty, the names bind the tuple's positional fields and
             --  L_Name is unused.
             L_Tuple_Names : Path_Segments.Vector;
+            --  §5.2.1 refutable let-else: `let Enum::V { binds } = e else
+            --  { diverge };`. On a match the payload binds for the rest of
+            --  the enclosing scope; on a mismatch the (diverging) else block
+            --  runs. L_Init is the scrutinee.
+            L_Is_Refut : Boolean := False;
+            L_Refut_Pat : Pattern;
+            L_Else      : Stmt_Vectors.Vector;
          when S_Assign =>
             Asn_Lhs : Expr_Access;
             Asn_Rhs : Expr_Access;
@@ -422,6 +462,17 @@ package Kurt.Parser is
             W_Body  : Stmt_Vectors.Vector;
             W_Then  : Stmt_Vectors.Vector;  --  §7.5.3 step block; may be empty
             W_Label : SU.Unbounded_String;  --  §7.9 `'name:` loop label; empty=none
+            --  §7.5.1 `while let PAT = e { }`: W_Cond is the scrutinee, tested
+            --  on each iteration; the loop exits when the pattern fails to
+            --  match. Mirrors `if let` (SI_Is_Let / SI_Let_Pat).
+            W_Is_Let  : Boolean := False;
+            W_Let_Pat : Pattern;
+            --  §7.5.1 `while cond -> v { }`: W_Cond is a contract value tested
+            --  each iteration; on the success variant its payload binds to
+            --  W_Succ_Bind in the body, on the failure variant the loop exits.
+            --  (`while` provides `-> v` but not `| e`.)
+            W_Is_Contract : Boolean := False;
+            W_Succ_Bind   : SU.Unbounded_String;
          when S_If =>
             SI_Cond : Expr_Access;
             SI_Then : Stmt_Vectors.Vector;
@@ -440,10 +491,14 @@ package Kurt.Parser is
             SI_Is_Let  : Boolean := False;
             SI_Let_Pat : Pattern;
          when S_Extract =>
-            X_Bind : SU.Unbounded_String;       --  success binding
+            X_Bind : SU.Unbounded_String;       --  success binding (or place)
             X_Expr : Expr_Access;               --  contract value
             X_Err  : SU.Unbounded_String;       --  failure binding (else)
             X_Else : Stmt_Vectors.Vector;       --  else block (diverging)
+            --  §7.2.3 extract-assignment `place <- e else`: X_Bind names an
+            --  existing `mut` place; the success payload is copied into it
+            --  (vs the `let v <- e` form which declares a new binding).
+            X_Is_Place : Boolean := False;
          when S_Break =>
             --  Optional value form `break expr;` (§7.7). null = no value.
             Brk_Val   : Expr_Access;
@@ -470,8 +525,9 @@ package Kurt.Parser is
    ----------------------------------------------------------------------
 
    type Param is record
-      Name : SU.Unbounded_String;  --  empty for prototype unnamed
-      Ty   : Type_Access;
+      Name   : SU.Unbounded_String;  --  empty for prototype unnamed
+      Ty     : Type_Access;
+      Is_Mut : Boolean := False;     --  §5.1 `mut name: T` mutable parameter
    end record;
 
    package Param_Vectors is new Ada.Containers.Vectors
@@ -541,6 +597,9 @@ package Kurt.Parser is
       Alias  : SU.Unbounded_String;
       Is_Pub : Boolean := False;
       Items  : Proto_Vectors.Vector;
+      --  §10.4 bound form `@dyn [prefix::]"path" as name`: the source path
+      --  identifying the opaque code. Empty = unbound (host link mechanism).
+      Bound_Path : SU.Unbounded_String;
    end record;
 
    package Dyn_Vectors is new Ada.Containers.Vectors
@@ -657,10 +716,22 @@ package Kurt.Parser is
    package Assoc_Const_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Assoc_Const);
 
+   --  §9.3.1 associated type. On a trait: `type Item [= Default];` (Ty is the
+   --  default, null = required). On an impl: `type Item = Concrete;` (Ty is
+   --  the concrete type).
+   type Assoc_Type is record
+      Name : SU.Unbounded_String;
+      Ty   : Type_Access := null;
+   end record;
+
+   package Assoc_Type_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Assoc_Type);
+
    type Trait_Decl is record
       Name        : SU.Unbounded_String;
       Methods     : Trait_Method_Vectors.Vector;
       Consts      : Assoc_Const_Vectors.Vector;
+      Assoc_Types : Assoc_Type_Vectors.Vector;   --  §9.3.1 `type Item [= D];`
       --  §9.3.3 direct supertraits (`with { self_t: Bar + Baz }`), in
       --  declaration order. Each occupies a Zone-B dispatch-table field.
       Supertraits : Path_Segments.Vector;
@@ -677,6 +748,7 @@ package Kurt.Parser is
       Trait_Name : SU.Unbounded_String;
       Methods    : Path_Segments.Vector;  --  method names provided
       Consts     : Assoc_Const_Vectors.Vector;  --  associated-const values
+      Assoc_Types : Assoc_Type_Vectors.Vector;  --  §9.3.1 `type Item = C;`
    end record;
 
    package Trait_Impl_Vectors is new Ada.Containers.Vectors
@@ -738,7 +810,20 @@ package Kurt.Parser is
       --  unit, if one is declared. At most one is permitted.
       Has_Trap_Handler : Boolean := False;
       Trap_Handler     : Stmt_Vectors.Vector;
+      --  §10.2 `@add [prefix::]"path"` source imports declared in this unit,
+      --  in source order. Adds holds the path; Add_Prefixes the parallel
+      --  prefix name (empty = none) used to pick the resolution base.
+      Adds         : Path_Segments.Vector;
+      Add_Prefixes : Path_Segments.Vector;
+      --  §10.5 `@path "base" as name;` search-path prefixes (parallel).
+      Path_Names : Path_Segments.Vector;
+      Path_Bases : Path_Segments.Vector;
    end record;
+
+   --  §10.2 merge an imported unit's declarations into Into (appends every
+   --  declaration vector). The trap handler and `Adds` are not merged.
+   procedure Merge_Unit
+     (Into : in out Translation_Unit; From : Translation_Unit);
 
    function Parse_Unit (Lex : in out Kurt.Lexer.Lexer)
       return Translation_Unit;

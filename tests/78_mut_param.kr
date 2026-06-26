@@ -1,0 +1,28 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.1 a `mut` parameter is a mutable binding: it may be reassigned within
+// the body. The `mut` modifier is local — it does not change the signature,
+// so the caller is unaffected (arguments are passed by value).
+fn ramp(mut n: si4, step: si4) -> si4 {
+    mut acc: si4 = 0;
+    while n > 0 {
+        acc = acc + n;
+        n = n - step;       // OK: n is a mut parameter
+    }
+    return acc;
+}
+
+// An immutable parameter (no `mut`) is read-only; a local `let` is
+// single-assignment. Both are exercised here without reassignment.
+fn scale(x: si4, k: si4) -> si4 {
+    let y: si4 = x * k;     // immutable local
+    return y;
+}
+
+fn main() -> ui1 {
+    let a: si4 = ramp(5, 1);    // 5+4+3+2+1 = 15
+    let b: si4 = ramp(10, 2);   // 10+8+6+4+2 = 30
+    let c: si4 = scale(6, 7);   // 42
+    airside { posix::printf("a=%d b=%d c=%d\n\0".ptr, a, b, c); }
+    return 0;
+}

@@ -1,0 +1,15 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.9 lifetime parameters `'a` on a generic subroutine: a compile-time
+// discipline with no representation, parsed and ignored. The reference
+// lifetime annotations `&'a T` likewise parse; generic `T` still works.
+fn pick.<'a, T>(x: &'a T, y: &'a T, first: bool) -> &'a T {
+    return if first then x else y;
+}
+fn main() -> ui1 {
+    let a: si4 = 7;
+    let b: si4 = 9;
+    let r: &si4 = pick.<si4>(&a, &b, true);
+    airside { posix::printf("r=%d\n\0".ptr, *(r)); }
+    return 0;
+}

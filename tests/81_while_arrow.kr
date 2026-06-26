@@ -1,0 +1,22 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §7.5.1 `while cond -> v { }` — cond is a contract value re-evaluated each
+// iteration; on the success variant its payload binds to `v` in the body, on
+// the failure variant the loop exits. A user contract enum whose failure
+// variant is a unit (`#wild#`) so the body can reassign to it to terminate.
+enum loop_st { Go { si4 } = 1, Stop = #wild#(0) } with contract;
+
+fn main() -> ui1 {
+    mut s: loop_st = loop_st::Go { 5 };
+    mut sum: si4 = 0;
+    while s -> v {              // v = the Go payload for this iteration
+        sum = sum + v;
+        if v <= 1 {
+            s = loop_st::Stop; // unit failure variant -> loop exits
+        } else {
+            v = v - 1;         // write through the success payload alias
+        }
+    }
+    airside { posix::printf("sum=%d\n\0".ptr, sum); }   // 5+4+3+2+1 = 15
+    return 0;
+}

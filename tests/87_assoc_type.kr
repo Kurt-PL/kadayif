@@ -1,0 +1,23 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.3.1 associated types: the trait declares `type Item;`, the impl provides
+// `type Item = Concrete;`, and the method signature refers to `self_t::Item`.
+trait Container {
+    type Item;
+    fn first(&self) -> self_t::Item;
+}
+
+struct ibox { v: si4 }
+
+impl ibox as Container {
+    type Item = si4;                         // concrete associated type
+    fn first(&self) -> self_t::Item {        // resolves to si4
+        return self.v;
+    }
+}
+
+fn main() -> ui1 {
+    let b: ibox = ibox { v = 42 };
+    airside { posix::printf("first=%d\n\0".ptr, b.first()); }   // 42
+    return 0;
+}

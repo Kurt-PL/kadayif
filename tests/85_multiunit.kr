@@ -1,0 +1,14 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §10.2 `@add "path"` — imports another source unit (resolved relative to
+// this file). Imported declarations (the `point` struct and `area` fn) are
+// merged into this translation unit. Transitive imports and diamond dedup
+// are exercised in the manual multi-file checks.
+@add "85_lib/geo.kr" as geo;
+
+fn main() -> ui1 {
+    let p: point = point { x = 6, y = 7 };   // struct from geo.kr
+    let a: si4 = area(p);                     // fn from geo.kr
+    airside { posix::printf("area=%d\n\0".ptr, a); }   // 42
+    return 0;
+}

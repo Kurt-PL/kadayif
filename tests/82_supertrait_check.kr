@@ -1,0 +1,25 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.3.3 supertrait satisfaction is now checked: a type implementing a trait
+// shall also implement all of that trait's supertraits. This exercises a
+// transitive chain — Top requires Mid, Mid requires Base — so `gadget` must
+// implement all three. (Omitting any link is a translation failure, covered
+// by negative compile checks.)
+trait Base { fn base(&self) -> si4; }
+trait Mid  with { self_t: Base } { fn mid(&self) -> si4; }
+trait Top  with { self_t: Mid }  { fn top(&self) -> si4; }
+
+struct gadget { n: si4 }
+
+impl gadget as Base { fn base(&self) -> si4 { return self.n; } }
+impl gadget as Mid  { fn mid(&self)  -> si4 { return self.n * 10; } }
+impl gadget as Top  { fn top(&self)  -> si4 { return self.n * 100; } }
+
+fn main() -> ui1 {
+    let g: gadget = gadget { n = 3 };
+    airside {
+        posix::printf("base=%d mid=%d top=%d\n\0".ptr,
+                      g.base(), g.mid(), g.top());     // 3 30 300
+    }
+    return 0;
+}

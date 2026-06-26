@@ -88,6 +88,9 @@ package body Kurt.Codegen is
          when E_Match =>
             Collect_Strings_In_Expr (E.M_Scrut, Pool);
             for I in E.M_Arms.First_Index .. E.M_Arms.Last_Index loop
+               if E.M_Arms.Element (I).Guard /= null then
+                  Collect_Strings_In_Expr (E.M_Arms.Element (I).Guard, Pool);
+               end if;
                Collect_Strings_In_Expr (E.M_Arms.Element (I).Arm_Body, Pool);
             end loop;
          when E_Cast =>
@@ -134,6 +137,11 @@ package body Kurt.Codegen is
             end loop;
          when S_Let | S_Mut =>
             Collect_Strings_In_Expr (S.L_Init, Pool);
+            if S.L_Is_Refut then
+               for I in S.L_Else.First_Index .. S.L_Else.Last_Index loop
+                  Collect_Strings_In_Stmt (S.L_Else.Element (I), Pool);
+               end loop;
+            end if;
          when S_Assign =>
             Collect_Strings_In_Expr (S.Asn_Lhs, Pool);
             Collect_Strings_In_Expr (S.Asn_Rhs, Pool);

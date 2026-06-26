@@ -1,0 +1,33 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §6.10.2 implicit xlatime: const initializer folded at translation time.
+const SIZE: si4 = xlatime { express 64 * 4; };   // 256
+
+fn pick() -> si4 {
+    // §6.10 if xlatime: execution-time selects the else branch. The then
+    // branch references an undeclared name but is discarded (not checked).
+    if xlatime {
+        return this_name_does_not_exist_but_is_discarded();
+    } else {
+        return 10;
+    }
+}
+
+fn pick2() -> si4 {
+    // if !xlatime: execution-time selects the then branch.
+    if !xlatime {
+        return 20;
+    } else {
+        return undeclared_discarded();
+    }
+}
+
+fn main() -> ui1 {
+    // §6.10 expression form: execution-time keeps the else operand.
+    let w: si4 = if xlatime then bogus_discarded() else 16;
+    airside {
+        posix::printf("SIZE=%d pick=%d pick2=%d w=%d\n\0".ptr,
+                      SIZE, pick(), pick2(), w);    // 256 10 20 16
+    }
+    return 0;
+}

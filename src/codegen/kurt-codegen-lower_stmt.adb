@@ -238,6 +238,67 @@ begin
          Lower_Scoped (S.A_Stmts);
 
       when S_Let | S_Mut =>
+         if S.L_Is_Refut then
+            --  §5.2.1 refutable let-else. Like `if let` the scrutinee is a
+            --  binding; compare its discriminant against the pattern variant.
+            --  On a match, jump past the (diverging) else and register the
+            --  payload aliases so they PERSIST for the rest of the enclosing
+            --  scope; on a mismatch, fall into the else block.
+            declare
+               FN    : constant String  := SU.To_String (ST.Fn_Name);
+               Idx   : constant Natural := ST.If_Idx;
+               L_Ok  : constant String  := "Lletok_" & FN & "_" & Img (Idx);
+               CName : constant String :=
+                 (if S.L_Init.Kind = E_Path
+                     and then Natural (S.L_Init.Segments.Length) = 1
+                  then SU.To_String (S.L_Init.Segments.Last_Element) else "");
+               Bi : constant Natural :=
+                 (if CName /= "" then Find_Binding (ST, CName) else 0);
+            begin
+               ST.If_Idx := ST.If_Idx + 1;
+               if Bi = 0 then
+                  raise Program_Error with
+                    "codegen: refutable `let` scrutinee must be a binding";
+               end if;
+               declare
+                  B    : constant Binding := ST.Bindings.Element (Bi);
+                  EN   : constant String := SU.To_String (B.Ty.Name);
+                  VN   : constant String :=
+                    SU.To_String (S.L_Refut_Pat.Path.Last_Element);
+                  DSz  : constant Natural := Kurt.Layout.Enum_Disc_Size (EN);
+                  Loc  : constant String :=
+                    ", [x29, #" & Img (B.Offset) & "]";
+               begin
+                  if DSz > 0 then
+                     if DSz >= 4 then
+                        IO.Put_Line (F, "    ldr     w10" & Loc);
+                     elsif DSz = 2 then
+                        IO.Put_Line (F, "    ldrh    w10" & Loc);
+                     else
+                        IO.Put_Line (F, "    ldrb    w10" & Loc);
+                     end if;
+                     Lower_Imm (F, 11,
+                       Kurt.Layout.Variant_Value (EN, VN), False);
+                     IO.Put_Line (F, "    cmp     w10, w11");
+                     IO.Put_Line (F, "    b.eq    " & L_Ok);
+                     --  mismatch: the else block runs and diverges.
+                     Lower_Scoped (S.L_Else);
+                  end if;
+                  IO.Put_Line (F, L_Ok & ":");
+                  --  Register payload aliases; they persist (no pop) so the
+                  --  rest of the enclosing block can use them.
+                  for K in 1 .. Natural (S.L_Refut_Pat.Bindings.Length) loop
+                     ST.Bindings.Append
+                       ((Name   => S.L_Refut_Pat.Bindings.Element (K),
+                         Offset => B.Offset
+                           + Kurt.Layout.Variant_Field_Offset (B.Ty, VN, K),
+                         Ty     => Kurt.Layout.Variant_Field_Type
+                                     (B.Ty, VN, K)));
+                  end loop;
+               end;
+            end;
+            return;
+         end if;
          --  Allocate a slot, evaluate the initialiser (if any), store it,
          --  and register the binding. §5.2 lets `mut` omit the
          --  initialiser. Per §2.2.3 every binding object — struct or
@@ -1023,11 +1084,129 @@ begin
                 Name      => S.W_Label,
                 Body_Entry => Natural (ST.Bindings.Length)));
             IO.Put_Line (F, L_Top & ":");
-            Lower_Expr_Into_Reg (F, S.W_Cond, 10, ST);
-            IO.Put_Line (F, "    cbz     w10, " & L_End);
-            --  §8.4: each iteration's body locals are destroyed at the body's
-            --  end (before the loop-back), so every pass cleans up its own.
-            Lower_Scoped (S.W_Body);
+            if S.W_Is_Let then
+               --  §7.5.1 `while let Enum::Variant { binds } = e`. Like
+               --  `if let`, the bootstrap requires e to be a binding (a
+               --  place); each iteration re-reads its discriminant, exits on
+               --  a mismatch, and otherwise aliases the payload fields into
+               --  the body. The body makes progress by reassigning the
+               --  binding (which flips its discriminant).
+               declare
+                  CName : constant String :=
+                    (if S.W_Cond.Kind = E_Path
+                        and then Natural (S.W_Cond.Segments.Length) = 1
+                     then SU.To_String (S.W_Cond.Segments.Last_Element)
+                     else "");
+                  Bi : constant Natural :=
+                    (if CName /= "" then Find_Binding (ST, CName) else 0);
+               begin
+                  if Bi = 0 then
+                     raise Program_Error with
+                       "codegen: `while let` scrutinee must be a binding";
+                  end if;
+                  declare
+                     B    : constant Binding := ST.Bindings.Element (Bi);
+                     EN   : constant String := SU.To_String (B.Ty.Name);
+                     VN   : constant String :=
+                       SU.To_String (S.W_Let_Pat.Path.Last_Element);
+                     DSz  : constant Natural := Kurt.Layout.Enum_Disc_Size (EN);
+                     Loc  : constant String :=
+                       ", [x29, #" & Img (B.Offset) & "]";
+                     Saved : Natural;
+                  begin
+                     if DSz > 0 then
+                        if DSz >= 4 then
+                           IO.Put_Line (F, "    ldr     w10" & Loc);
+                        elsif DSz = 2 then
+                           IO.Put_Line (F, "    ldrh    w10" & Loc);
+                        else
+                           IO.Put_Line (F, "    ldrb    w10" & Loc);
+                        end if;
+                        Lower_Imm (F, 11,
+                          Kurt.Layout.Variant_Value (EN, VN), False);
+                        IO.Put_Line (F, "    cmp     w10, w11");
+                        IO.Put_Line (F, "    b.ne    " & L_End);
+                     end if;
+                     --  Bind payload fields as slot+offset aliases for the
+                     --  body. Appended below the body scope so Lower_Scoped
+                     --  keeps them (they project into the scrutinee's storage
+                     --  — dropping them would double-free).
+                     Saved := Natural (ST.Bindings.Length);
+                     for K in 1 .. Natural (S.W_Let_Pat.Bindings.Length) loop
+                        ST.Bindings.Append
+                          ((Name   => S.W_Let_Pat.Bindings.Element (K),
+                            Offset => B.Offset
+                              + Kurt.Layout.Variant_Field_Offset (B.Ty, VN, K),
+                            Ty     => Kurt.Layout.Variant_Field_Type
+                                        (B.Ty, VN, K)));
+                     end loop;
+                     Lower_Scoped (S.W_Body);
+                     while Natural (ST.Bindings.Length) > Saved loop
+                        ST.Bindings.Delete_Last;
+                     end loop;
+                  end;
+               end;
+            elsif S.W_Is_Contract then
+               --  §7.5.1 `while cond -> v`. Like `if e -> v`, the bootstrap
+               --  requires cond to be a contract-enum binding; each iteration
+               --  re-reads its discriminant, exits on the failure variant,
+               --  and otherwise aliases the success payload to `v`.
+               declare
+                  CName : constant String :=
+                    (if S.W_Cond.Kind = E_Path
+                        and then Natural (S.W_Cond.Segments.Length) = 1
+                     then SU.To_String (S.W_Cond.Segments.Last_Element)
+                     else "");
+                  Bi : constant Natural :=
+                    (if CName /= "" then Find_Binding (ST, CName) else 0);
+               begin
+                  if Bi = 0 then
+                     raise Program_Error with
+                       "codegen: `while ->` cond must be a contract binding";
+                  end if;
+                  declare
+                     B      : constant Binding := ST.Bindings.Element (Bi);
+                     EN     : constant String := SU.To_String (B.Ty.Name);
+                     Succ_V : constant String :=
+                       Kurt.Layout.Contract_Success_Variant (EN);
+                     DSz    : constant Natural :=
+                       Kurt.Layout.Enum_Disc_Size (EN);
+                     Loc    : constant String :=
+                       ", [x29, #" & Img (B.Offset) & "]";
+                     Saved  : Natural;
+                  begin
+                     if DSz >= 4 then
+                        IO.Put_Line (F, "    ldr     w10" & Loc);
+                     elsif DSz = 2 then
+                        IO.Put_Line (F, "    ldrh    w10" & Loc);
+                     else
+                        IO.Put_Line (F, "    ldrb    w10" & Loc);
+                     end if;
+                     Lower_Imm (F, 11,
+                       Kurt.Layout.Variant_Value (EN, Succ_V), False);
+                     IO.Put_Line (F, "    cmp     w10, w11");
+                     IO.Put_Line (F, "    b.ne    " & L_End);
+                     Saved := Natural (ST.Bindings.Length);
+                     ST.Bindings.Append
+                       ((Name   => S.W_Succ_Bind,
+                         Offset => B.Offset
+                           + Kurt.Layout.Variant_Field_Offset (B.Ty, Succ_V, 1),
+                         Ty     => Kurt.Layout.Variant_Field_Type
+                                     (B.Ty, Succ_V, 1)));
+                     Lower_Scoped (S.W_Body);
+                     while Natural (ST.Bindings.Length) > Saved loop
+                        ST.Bindings.Delete_Last;
+                     end loop;
+                  end;
+               end;
+            else
+               Lower_Expr_Into_Reg (F, S.W_Cond, 10, ST);
+               IO.Put_Line (F, "    cbz     w10, " & L_End);
+               --  §8.4: each iteration's body locals are destroyed at the
+               --  body's end (before the loop-back), so every pass cleans up
+               --  its own.
+               Lower_Scoped (S.W_Body);
+            end if;
             if Has_Then then
                IO.Put_Line (F, L_Thn & ":");
                Lower_Scoped (S.W_Then);
@@ -1241,6 +1420,7 @@ begin
             FN     : constant String  := SU.To_String (ST.Fn_Name);
             Idx    : constant Natural := ST.If_Idx;
             L_Succ : constant String := "Lextr_" & FN & "_ok_" & Img (Idx);
+            L_XEnd : constant String := "Lextr_" & FN & "_end_" & Img (Idx);
             CName  : constant String :=
               (if S.X_Expr.Kind = E_Path
                   and then Natural (S.X_Expr.Segments.Length) = 1
@@ -1293,14 +1473,47 @@ begin
                while Natural (ST.Bindings.Length) > Saved loop
                   ST.Bindings.Delete_Last;
                end loop;
+               --  §7.2.3: in the place form the else may fall through (the
+               --  place keeps its prior value); skip the success copy. (For
+               --  the `let` form the else diverges, so this is dead.)
+               IO.Put_Line (F, "    b       " & L_XEnd);
 
-               --  Success: bind v permanently for the rest of the block.
                IO.Put_Line (F, L_Succ & ":");
-               ST.Bindings.Append
-                 ((Name   => S.X_Bind,
-                   Offset => B.Offset
-                     + Kurt.Layout.Variant_Field_Offset (B.Ty, Succ_V, 1),
-                   Ty     => Kurt.Layout.Variant_Field_Type (B.Ty, Succ_V, 1)));
+               if S.X_Is_Place then
+                  --  §7.2.3 copy the success payload into the existing place.
+                  declare
+                     PBi : constant Natural :=
+                       Find_Binding (ST, SU.To_String (S.X_Bind));
+                     Pay_Off : constant Natural := B.Offset
+                       + Kurt.Layout.Variant_Field_Offset (B.Ty, Succ_V, 1);
+                     Sz : constant Natural := Sizeof
+                       (Kurt.Layout.Variant_Field_Type (B.Ty, Succ_V, 1));
+                     POff : constant Natural :=
+                       ST.Bindings.Element (PBi).Offset;
+                     Ld : constant String :=
+                       (if Sz >= 8 then "ldr     x9" elsif Sz >= 4
+                        then "ldr     w9" elsif Sz = 2 then "ldrh    w9"
+                        else "ldrb    w9");
+                     St : constant String :=
+                       (if Sz >= 8 then "str     x9" elsif Sz >= 4
+                        then "str     w9" elsif Sz = 2 then "strh    w9"
+                        else "strb    w9");
+                  begin
+                     IO.Put_Line (F, "    " & Ld & ", [x29, #"
+                                     & Img (Pay_Off) & "]");
+                     IO.Put_Line (F, "    " & St & ", [x29, #"
+                                     & Img (POff) & "]");
+                  end;
+               else
+                  --  Success: bind v permanently for the rest of the block.
+                  ST.Bindings.Append
+                    ((Name   => S.X_Bind,
+                      Offset => B.Offset
+                        + Kurt.Layout.Variant_Field_Offset (B.Ty, Succ_V, 1),
+                      Ty     => Kurt.Layout.Variant_Field_Type
+                                  (B.Ty, Succ_V, 1)));
+               end if;
+               IO.Put_Line (F, L_XEnd & ":");
             end;
          end;
 

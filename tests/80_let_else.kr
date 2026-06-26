@@ -1,0 +1,29 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.2.1 refutable let-else: `let Enum::V { binds } = e else { diverge };`.
+// On a match the payload binds for the rest of the enclosing scope; on a
+// mismatch the diverging else block runs. The scrutinee is a binding.
+enum opt { Some { si4 }, None }
+
+// Returns the contained value doubled, or -1 via the else path.
+fn unwrap_or_neg(o: opt) -> si4 {
+    let opt::Some { v } = o else {
+        return -1;          // diverges — payload `v` not in scope here
+    };
+    return v * 2;           // v persists past the let-else on the match path
+}
+
+fn main() -> ui1 {
+    let a: opt = opt::Some { 21 };
+    let b: opt = opt::None;
+    let ra: si4 = unwrap_or_neg(a);     // 42
+    let rb: si4 = unwrap_or_neg(b);     // -1
+
+    // Inline use too: bind, then keep using the payload afterwards.
+    let s: opt = opt::Some { 7 };
+    let opt::Some { x } = s else { return 9; };
+    let y: si4 = x + 100;               // 107
+
+    airside { posix::printf("ra=%d rb=%d y=%d\n\0".ptr, ra, rb, y); }
+    return 0;
+}

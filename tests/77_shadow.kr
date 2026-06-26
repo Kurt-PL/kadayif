@@ -1,0 +1,21 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.17: a name may be declared at most once *within a scope*, but an inner
+// scope may shadow an outer declaration — a distinct, independent binding.
+fn main() -> ui1 {
+    let x: si4 = 1;
+    if x > 0 {
+        let x: si4 = 2;             // shadows outer x in this inner block
+        airside { posix::printf("inner x=%d\n\0".ptr, x); }   // 2
+    }
+    airside { posix::printf("outer x=%d\n\0".ptr, x); }       // 1 again
+
+    // A loop body is its own scope each pass, so reusing `t` here is fine.
+    mut i: si4 = 0;
+    while i < 3 {
+        let t: si4 = i * 10;
+        airside { posix::printf("t=%d\n\0".ptr, t); }
+        i = i + 1;
+    }
+    return 0;
+}

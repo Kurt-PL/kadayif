@@ -1,0 +1,18 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+fn describe(a: [si4; 3]) -> si4 {
+    return match a {
+        [0, 0, 0] = 100,
+        [x, 0, 0] = x + 200,
+        [a0, ..., a2] = a0 + a2,
+        #wild# = -1,
+    };
+}
+fn main() -> ui1 {
+    mut p: [si4; 3] = [0, 0, 0];
+    mut q: [si4; 3] = [5, 0, 0];
+    mut r: [si4; 3] = [3, 9, 4];
+    airside {
+        posix::printf("%d %d %d\n\0".ptr, describe(p), describe(q), describe(r));
+    }
+    return 0;
+}

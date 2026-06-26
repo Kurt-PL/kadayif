@@ -181,14 +181,103 @@ procedure Main is
      (In_Path  : String;
       Out_Path : String;
       Emit     : Boolean;
+      Flags    : String;
       Errors   : out Natural)
    is
-      Source : constant String := Read_File (In_Path);
-      Lex    : Kurt.Lexer.Lexer;
-      Unit   : Kurt.Parser.Translation_Unit;
+      Unit    : Kurt.Parser.Translation_Unit;
+      Visited : Unbounded_String;   --  space-bracketed canonical paths
+
+      --  Lex (seeding command-line flags) and parse one source file.
+      function Parse_One (Path : String)
+        return Kurt.Parser.Translation_Unit
+      is
+         Source : constant String := Read_File (Path);
+         Lex    : Kurt.Lexer.Lexer;
+         Start  : Natural := Flags'First;
+      begin
+         Kurt.Lexer.Init (Lex, Source);
+         --  §10.7 external (command-line) flags apply to every source unit.
+         for I in Flags'Range loop
+            if Flags (I) = ' ' then
+               if I > Start then
+                  Kurt.Lexer.Define_Flag (Lex, Flags (Start .. I - 1));
+               end if;
+               Start := I + 1;
+            end if;
+         end loop;
+         if Flags'Last >= Start then
+            Kurt.Lexer.Define_Flag (Lex, Flags (Start .. Flags'Last));
+         end if;
+         return Kurt.Parser.Parse_Unit (Lex);
+      end Parse_One;
+
+      --  §10.2 parse Path, recursively pull in its `@add` imports (resolved
+      --  relative to Path's directory, deduplicated by canonical name), and
+      --  merge every unit's declarations into Unit.
+      procedure Load (Path : String) is
+         Canon : constant String := Dir.Full_Name (Path);
+         U     : Kurt.Parser.Translation_Unit;
+      begin
+         if Index (Visited, " " & Canon & " ") /= 0 then
+            return;   --  already imported
+         end if;
+         Append (Visited, Canon & " ");
+         U := Parse_One (Path);
+         declare
+            Base : constant String := Dir.Containing_Directory (Canon);
+         begin
+            for I in U.Adds.First_Index .. U.Adds.Last_Index loop
+               declare
+                  Rel : constant String := To_String (U.Adds.Element (I));
+                  Pfx : constant String :=
+                    To_String (U.Add_Prefixes.Element (I));
+
+                  --  §10.5 resolution base: a `prefix::` selects the matching
+                  --  `@path` base; otherwise the importing file's directory.
+                  function Resolve_Base return String is
+                  begin
+                     if Pfx /= "" then
+                        for P in U.Path_Names.First_Index ..
+                                 U.Path_Names.Last_Index loop
+                           if To_String (U.Path_Names.Element (P)) = Pfx then
+                              return To_String (U.Path_Bases.Element (P));
+                           end if;
+                        end loop;
+                        Put_E ("kadayif: unknown @path prefix '" & Pfx
+                               & "' (from " & Path & ")");
+                        Errors := Errors + 1;
+                        return Base;
+                     end if;
+                     return Base;
+                  end Resolve_Base;
+
+                  RB  : constant String := Resolve_Base;
+                  Sub : constant String :=
+                    (if Rel'Length > 0 and then Rel (Rel'First) = '/'
+                     then Rel
+                     elsif RB'Length > 0 and then RB (RB'First) = '/'
+                     then RB & "/" & Rel
+                     else Base & "/" & RB & "/" & Rel);
+               begin
+                  if not Dir.Exists (Sub) then
+                     Put_E ("kadayif: @add file not found: " & Rel
+                            & " (from " & Path & ")");
+                     Errors := Errors + 1;
+                  else
+                     Load (Sub);
+                  end if;
+               end;
+            end loop;
+         end;
+         Kurt.Parser.Merge_Unit (Unit, U);
+      end Load;
    begin
-      Kurt.Lexer.Init (Lex, Source);
-      Unit := Kurt.Parser.Parse_Unit (Lex);
+      Visited := To_Unbounded_String (" ");
+      Errors := 0;
+      Load (In_Path);
+      if Errors > 0 then
+         return;   --  missing imports; do not proceed to sema/codegen
+      end if;
       --  Built-in types verdict (§4.5) and the ranges (§4.8) are intrinsic —
       --  recognised by name/structure in Kurt.Layout like the primitives, not
       --  monomorphised here.
@@ -217,6 +306,8 @@ procedure Main is
    Mode     : Mode_Kind := M_Build;
    In_Path  : Unbounded_String;
    Out_Path : Unbounded_String;
+   --  §10.7 translation-time flags from `-f NAME` options (space-delimited).
+   Cmd_Flags : Unbounded_String;
 
 begin
    ----------------------------------------------------------------------
@@ -241,7 +332,16 @@ begin
          declare
             A : constant String := CLI.Argument (I);
          begin
-            if A = "-o" then
+            if A = "-f" then
+               --  §10.7 define a translation-time flag.
+               if I = CLI.Argument_Count then
+                  Put_E ("kadayif: -f requires a flag name");
+                  CLI.Set_Exit_Status (Exit_Usage);
+                  return;
+               end if;
+               I := I + 1;
+               Append (Cmd_Flags, CLI.Argument (I) & " ");
+            elsif A = "-o" then
                if I = CLI.Argument_Count then
                   Put_E ("kadayif: -o requires an output path");
                   CLI.Set_Exit_Status (Exit_Usage);
@@ -320,7 +420,8 @@ begin
          else Base & ".kt.s");                 --  build/obj intermediate
       Errors : Natural := 0;
    begin
-      Translate (In_S, Asm, Emit => Mode /= M_Check, Errors => Errors);
+      Translate (In_S, Asm, Emit => Mode /= M_Check,
+                 Flags => To_String (Cmd_Flags), Errors => Errors);
 
       if Errors > 0 then
          Put_E ("kadayif: aborting after" & Natural'Image (Errors)

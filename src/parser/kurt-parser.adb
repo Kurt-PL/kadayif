@@ -11,6 +11,7 @@ package body Kurt.Parser is
    type Alias_Entry is record
       Name   : SU.Unbounded_String;
       Target : Type_Access;
+      Params : Path_Segments.Vector;   --  §5.8 generic alias `Name.<T,...>`
    end record;
 
    package Alias_Vectors is new Ada.Containers.Vectors
@@ -268,6 +269,58 @@ package body Kurt.Parser is
       end if;
    end Parse_Concurrent_Items;
 
+   --  §5.8 deep-copy a type, substituting each named type matching a generic
+   --  alias parameter with the corresponding argument. Used to expand a
+   --  generic alias instance `Name.<Args>` against its template.
+   function Copy_Subst
+     (T      : Type_Access;
+      Params : Path_Segments.Vector;
+      Args   : Type_Vectors.Vector) return Type_Access
+   is
+      R : Type_Access;
+   begin
+      if T = null then
+         return null;
+      end if;
+      if T.Kind = T_Named and then T.Args.Is_Empty then
+         for I in Params.First_Index .. Params.Last_Index loop
+            if SU."=" (Params.Element (I), T.Name) then
+               return Args.Element
+                 (Args.First_Index + (I - Params.First_Index));
+            end if;
+         end loop;
+      end if;
+      R := new AST_Type'(T.all);   --  shallow copy (incl. discriminant)
+      case R.Kind is
+         when T_Named =>
+            R.Args := Type_Vectors.Empty_Vector;
+            for I in T.Args.First_Index .. T.Args.Last_Index loop
+               R.Args.Append (Copy_Subst (T.Args.Element (I), Params, Args));
+            end loop;
+         when T_Ref =>
+            R.Target := Copy_Subst (T.Target, Params, Args);
+         when T_Array =>
+            R.Elem := Copy_Subst (T.Elem, Params, Args);
+         when T_Tuple =>
+            R.Elems := Type_Vectors.Empty_Vector;
+            for I in T.Elems.First_Index .. T.Elems.Last_Index loop
+               R.Elems.Append (Copy_Subst (T.Elems.Element (I), Params, Args));
+            end loop;
+         when T_Range =>
+            R.Rng_Elem := Copy_Subst (T.Rng_Elem, Params, Args);
+         when T_Fn =>
+            R.Fn_Params := Type_Vectors.Empty_Vector;
+            for I in T.Fn_Params.First_Index .. T.Fn_Params.Last_Index loop
+               R.Fn_Params.Append
+                 (Copy_Subst (T.Fn_Params.Element (I), Params, Args));
+            end loop;
+            R.Fn_Ret := Copy_Subst (T.Fn_Ret, Params, Args);
+         when others =>
+            null;
+      end case;
+      return R;
+   end Copy_Subst;
+
    function Parse_Type (C : in out Cursor) return Type_Access is
       Node : Type_Access;
    begin
@@ -472,6 +525,15 @@ package body Kurt.Parser is
             end if;
             Expect (C, Op_Gt, "'>' to close generic arguments");
          end if;
+         --  §9.3.1 qualified associated-type path `Head::Item` (commonly
+         --  `self_t::Item`). Stored as a compound name; resolved when the
+         --  impl method is specialised (Subst_Self / mono).
+         if C.Cur.Kind = Punct_ColonColon then
+            Advance (C);
+            Node.Name := SU.To_Unbounded_String
+              (SU.To_String (Node.Name) & "::"
+               & SU.To_String (Take_Ident (C, "associated type name")));
+         end if;
          --  §4.8: the built-in range types are intrinsic — rewrite
          --  `range_ex.<T>` / `range_in.<T>` to the dedicated T_Range kind.
          declare
@@ -486,16 +548,26 @@ package body Kurt.Parser is
                   Rng_Elem      => Node.Args.First_Element);
             end if;
          end;
-         --  §5.8: a type-alias name is replaced by its underlying type
-         --  at every use site before any further analysis. Bootstrap:
-         --  non-generic aliases, declared before use.
-         if Node.Args.Is_Empty then
-            for I in C.Aliases.First_Index .. C.Aliases.Last_Index loop
-               if SU."=" (C.Aliases.Element (I).Name, Node.Name) then
-                  return C.Aliases.Element (I).Target;
-               end if;
-            end loop;
-         end if;
+         --  §5.8: a type-alias name is replaced by its underlying type at
+         --  every use site. A non-generic alias substitutes directly; a
+         --  generic alias `Name.<Args>` expands its template with the
+         --  arguments bound to the alias parameters. Declared before use.
+         for I in C.Aliases.First_Index .. C.Aliases.Last_Index loop
+            if SU."=" (C.Aliases.Element (I).Name, Node.Name) then
+               declare
+                  AE : Alias_Entry renames C.Aliases.Element (I);
+               begin
+                  if AE.Params.Is_Empty and then Node.Args.Is_Empty then
+                     return AE.Target;
+                  elsif Natural (AE.Params.Length)
+                          = Natural (Node.Args.Length)
+                    and then not AE.Params.Is_Empty
+                  then
+                     return Copy_Subst (AE.Target, AE.Params, Node.Args);
+                  end if;
+               end;
+            end if;
+         end loop;
          return Node;
       else
          raise Syntax_Error with
@@ -519,20 +591,27 @@ package body Kurt.Parser is
       Split_Shr_If_Present (C);
       if C.Cur.Kind /= Op_Gt then
          loop
-            declare
-               P : Generic_Param;
-            begin
-               P.Name := Take_Ident (C, "generic parameter");
-               if C.Cur.Kind = Punct_Colon then
-                  Advance (C);
-                  loop
-                     P.Bounds.Append (Take_Ident (C, "bound name"));
-                     exit when C.Cur.Kind /= Op_Plus;
+            --  §5.9 lifetime parameter `'name`: a compile-time discipline
+            --  with no representation, so it is parsed and ignored (the
+            --  bootstrap's borrow analysis does not consume it).
+            if C.Cur.Kind = Tok_Label then
+               Advance (C);
+            else
+               declare
+                  P : Generic_Param;
+               begin
+                  P.Name := Take_Ident (C, "generic parameter");
+                  if C.Cur.Kind = Punct_Colon then
                      Advance (C);
-                  end loop;
-               end if;
-               Params.Append (P);
-            end;
+                     loop
+                        P.Bounds.Append (Take_Ident (C, "bound name"));
+                        exit when C.Cur.Kind /= Op_Plus;
+                        Advance (C);
+                     end loop;
+                  end if;
+                  Params.Append (P);
+               end;
+            end if;
             exit when C.Cur.Kind /= Punct_Comma;
             Advance (C);
             Split_Shr_If_Present (C);
@@ -574,6 +653,12 @@ package body Kurt.Parser is
    is
       P : Param;
    begin
+      --  §5.1 `mut name: T` — a mutable parameter binding. The `mut` modifier
+      --  is local to the body; it does not affect the signature.
+      if C.Cur.Kind = Kw_Mut then
+         Advance (C);
+         P.Is_Mut := True;
+      end if;
       --  §9.2 self parameter: `&self` / `$self`. The referent is the
       --  placeholder `self_t`, substituted with the impl type by
       --  Parse_Impl_Decl.
@@ -895,6 +980,25 @@ package body Kurt.Parser is
                end if;
                Expect (C, Op_Gt, "'>' to close generic arguments");
             end if;
+            --  §6.12.2 name intrinsic `T@name`: a translation-time string
+            --  (`&[ui1]`) of the type's name. Desugared to a string literal.
+            if C.Cur.Kind = Dir_At_Name then
+               if Natural (E.Segments.Length) /= 1
+                 or else not E.P_Type_Args.Is_Empty
+               then
+                  raise Syntax_Error with
+                    "`@name` operand shall be a plain named type (bootstrap) "
+                    & "at line" & Positive'Image (C.Cur.Line);
+               end if;
+               Advance (C);   --  consume @name
+               declare
+                  S : constant Expr_Access :=
+                    new Expr_Node (Kind => E_String_Lit);
+               begin
+                  S.Str_Bytes := E.Segments.First_Element;
+                  return S;
+               end;
+            end if;
             --  §6.12 type intrinsic: the parsed path names a *type* when
             --  followed by `@size` / `@align` / `@offset(field)`.
             --  Bootstrap subset: a single-segment named type.
@@ -1001,12 +1105,36 @@ package body Kurt.Parser is
             Advance (C);
             E := Parse_Expr (C);
             Expect (C, Punct_RParen, "')'");
+            E.Was_Paren := True;   --  §6.6 explicit grouping
             return E;
 
          when Kw_If =>
             --  §7.1 inline form: `if cond then a else b`. The block
             --  form is deferred.
             Advance (C);
+            --  §6.10 `if xlatime then E1 else E2` / `if !xlatime ...`: the
+            --  condition is statically false at execution time, so only the
+            --  selected operand is kept; the other is parsed but discarded.
+            if C.Cur.Kind = Kw_Xlatime
+              or else (C.Cur.Kind = Op_Bang
+                       and then Peek_Tok (C).Kind = Kw_Xlatime)
+            then
+               declare
+                  Negated : Boolean := False;
+                  E1, E2  : Expr_Access;
+               begin
+                  if C.Cur.Kind = Op_Bang then
+                     Negated := True;
+                     Advance (C);
+                  end if;
+                  Advance (C);   --  xlatime
+                  Expect (C, Kw_Then, "'then' in `if xlatime`");
+                  E1 := Parse_Expr (C);
+                  Expect (C, Kw_Else, "'else' in `if xlatime`");
+                  E2 := Parse_Expr (C);
+                  return (if Negated then E1 else E2);
+               end;
+            end if;
             E := new Expr_Node (Kind => E_If);
             E.I_Cond := Parse_Expr (C);
             Expect (C, Kw_Then, "'then'");
@@ -1014,6 +1142,40 @@ package body Kurt.Parser is
             Expect (C, Kw_Else, "'else'");
             E.I_Else := Parse_Expr (C);
             return E;
+
+         when Kw_Xlatime =>
+            --  §6.10 `xlatime { express E; }` block expression. The bootstrap
+            --  evaluates it at translation time by folding to the expressed
+            --  value (subject to the existing const-expression handling); the
+            --  body shall be a single `express E;`.
+            Advance (C);   --  xlatime
+            Expect (C, Punct_LBrace, "'{' after xlatime");
+            declare
+               Result : Expr_Access := null;
+            begin
+               while C.Cur.Kind /= Punct_RBrace
+                 and then C.Cur.Kind /= Tok_EOF
+               loop
+                  if C.Cur.Kind = Kw_Express then
+                     Advance (C);
+                     Result := Parse_Expr (C);
+                     if C.Cur.Kind = Punct_Semi then
+                        Advance (C);
+                     end if;
+                  else
+                     raise Syntax_Error with
+                       "the bootstrap supports only `xlatime { express E; }` "
+                       & "(no statements) at line"
+                       & Positive'Image (C.Cur.Line);
+                  end if;
+               end loop;
+               Expect (C, Punct_RBrace, "'}' to close xlatime block");
+               if Result = null then
+                  raise Syntax_Error with
+                    "`xlatime` block requires an `express` (bootstrap)";
+               end if;
+               return Result;
+            end;
 
          when Kw_Match =>
             --  §7: match scrut { pattern = expr, ... }
@@ -1033,49 +1195,143 @@ package body Kurt.Parser is
             while C.Cur.Kind /= Punct_RBrace and then C.Cur.Kind /= Tok_EOF
             loop
                declare
-                  Arm : Match_Arm;
-               begin
-                  --  pattern
-                  case C.Cur.Kind is
-                     when Tok_Hash_Wild =>
-                        Arm.Pat.Kind := Pat_Wild;
-                        Advance (C);
-                     when Tok_Int_Lit =>
-                        Arm.Pat.Kind  := Pat_Int;
-                        Arm.Pat.Int_V := C.Cur.Int_V;
-                        Advance (C);
-                     when Tok_Ident =>
-                        Arm.Pat.Kind := Pat_Variant;
-                        Arm.Pat.Path.Append (C.Cur.Lexeme);
-                        Advance (C);
-                        while C.Cur.Kind = Punct_ColonColon loop
+                  --  §5.10 parse a single pattern (no `|`). A leading integer
+                  --  literal may continue into a range `lo..hi` / `lo..=hi`.
+                  function Parse_One_Pattern return Pattern is
+                     P : Pattern;
+                  begin
+                     case C.Cur.Kind is
+                        when Tok_Hash_Wild =>
+                           P.Kind := Pat_Wild;
                            Advance (C);
-                           Arm.Pat.Path.Append
-                             (Take_Ident (C, "variant name"));
-                        end loop;
-                        --  Optional payload destructuring `{ a, b }`
-                        --  (positional binding names).
-                        if C.Cur.Kind = Punct_LBrace then
+                        when Punct_LBracket =>
+                           --  §7.4.2 slice pattern `[e0, e1, ...]`.
+                           P.Kind := Pat_Slice;
                            Advance (C);
-                           if C.Cur.Kind /= Punct_RBrace then
+                           if C.Cur.Kind /= Punct_RBracket then
                               loop
-                                 Arm.Pat.Bindings.Append
-                                   (Take_Ident (C, "payload binding"));
+                                 declare
+                                    SE : Slice_Elem;
+                                 begin
+                                    if C.Cur.Kind = Op_Ellipsis then
+                                       SE.Kind := SE_Rest;
+                                       Advance (C);
+                                    elsif C.Cur.Kind = Tok_Hash_Wild then
+                                       SE.Kind := SE_Wild;
+                                       Advance (C);
+                                    elsif C.Cur.Kind = Tok_Int_Lit then
+                                       SE.Kind  := SE_Int;
+                                       SE.Int_V := C.Cur.Int_V;
+                                       Advance (C);
+                                    elsif C.Cur.Kind = Tok_Ident then
+                                       SE.Kind := SE_Bind;
+                                       SE.Name := C.Cur.Lexeme;
+                                       Advance (C);
+                                    else
+                                       raise Syntax_Error with
+                                         "bad slice-pattern element at line"
+                                         & Positive'Image (C.Cur.Line);
+                                    end if;
+                                    P.Slice_Elems.Append (SE);
+                                 end;
                                  exit when C.Cur.Kind /= Punct_Comma;
                                  Advance (C);
-                                 exit when C.Cur.Kind = Punct_RBrace;
+                                 exit when C.Cur.Kind = Punct_RBracket;
                               end loop;
                            end if;
-                           Expect (C, Punct_RBrace, "'}'");
-                        end if;
-                     when others =>
-                        raise Syntax_Error with
-                          "expected match pattern, got " & Image (C.Cur)
-                          & " at line" & Positive'Image (C.Cur.Line);
-                  end case;
+                           Expect (C, Punct_RBracket, "']' to close slice "
+                                   & "pattern");
+                        when Tok_Int_Lit =>
+                           P.Int_V := C.Cur.Int_V;
+                           Advance (C);
+                           if C.Cur.Kind = Op_DotDot
+                             or else C.Cur.Kind = Op_DotDotEq
+                           then
+                              --  §5.10 range pattern.
+                              P.Kind := Pat_Range;
+                              P.Range_Incl := C.Cur.Kind = Op_DotDotEq;
+                              Advance (C);
+                              if C.Cur.Kind /= Tok_Int_Lit then
+                                 raise Syntax_Error with
+                                   "range pattern needs an integer upper "
+                                   & "bound at line"
+                                   & Positive'Image (C.Cur.Line);
+                              end if;
+                              P.Range_Hi := C.Cur.Int_V;
+                              Advance (C);
+                           else
+                              P.Kind := Pat_Int;
+                           end if;
+                        when Tok_Ident =>
+                           --  §5.10 binding pattern `name # sub`: bind the
+                           --  value to `name`, then match `sub`. The binding
+                           --  name rides on the sub-pattern.
+                           if Peek_Tok (C).Kind = Tok_Hash then
+                              declare
+                                 Nm : constant SU.Unbounded_String :=
+                                   C.Cur.Lexeme;
+                              begin
+                                 Advance (C);   --  name
+                                 Advance (C);   --  '#'
+                                 P := Parse_One_Pattern;
+                                 P.Bind_Name := Nm;
+                                 return P;
+                              end;
+                           end if;
+                           P.Kind := Pat_Variant;
+                           P.Path.Append (C.Cur.Lexeme);
+                           Advance (C);
+                           while C.Cur.Kind = Punct_ColonColon loop
+                              Advance (C);
+                              P.Path.Append (Take_Ident (C, "variant name"));
+                           end loop;
+                           --  Optional payload destructuring `{ a, b }`.
+                           if C.Cur.Kind = Punct_LBrace then
+                              Advance (C);
+                              if C.Cur.Kind /= Punct_RBrace then
+                                 loop
+                                    P.Bindings.Append
+                                      (Take_Ident (C, "payload binding"));
+                                    exit when C.Cur.Kind /= Punct_Comma;
+                                    Advance (C);
+                                    exit when C.Cur.Kind = Punct_RBrace;
+                                 end loop;
+                              end if;
+                              Expect (C, Punct_RBrace, "'}'");
+                           end if;
+                        when others =>
+                           raise Syntax_Error with
+                             "expected match pattern, got " & Image (C.Cur)
+                             & " at line" & Positive'Image (C.Cur.Line);
+                     end case;
+                     return P;
+                  end Parse_One_Pattern;
+
+                  --  §5.10 or-pattern `p | q | r`: collect the alternatives;
+                  --  one arm is emitted per alternative below, all sharing the
+                  --  same guard and body.
+                  Alts  : Pattern_Vectors.Vector;
+                  Guard : Expr_Access := null;
+                  Body_E : Expr_Access;
+               begin
+                  Alts.Append (Parse_One_Pattern);
+                  while C.Cur.Kind = Op_Bar loop
+                     Advance (C);
+                     Alts.Append (Parse_One_Pattern);
+                  end loop;
+                  --  §7.4 optional guard clause: `pattern if expr = body`.
+                  if C.Cur.Kind = Kw_If then
+                     Advance (C);
+                     Guard := Parse_Expr (C);
+                  end if;
                   Expect (C, Punct_Eq, "'=' in match arm");
-                  Arm.Arm_Body := Parse_Expr (C);
-                  E.M_Arms.Append (Arm);
+                  Body_E := Parse_Expr (C);
+                  for I in Alts.First_Index .. Alts.Last_Index loop
+                     E.M_Arms.Append
+                       ((Pat      => Alts.Element (I),
+                         Guard    => Guard,
+                         Arm_Body => Body_E));
+                  end loop;
                   --  §3.2: comma separates expression-bodied arms.
                   exit when C.Cur.Kind /= Punct_Comma;
                   Advance (C);
@@ -1284,6 +1540,26 @@ package body Kurt.Parser is
    function Is_Cmp (Op : Binary_Op) return Boolean is
      (Op in B_Eq | B_Ne | B_Lt | B_Gt | B_Le | B_Ge);
 
+   --  §6.6 bitwise / shift operators (`& | ^ << >>`).
+   function Is_Bitsh (Op : Binary_Op) return Boolean is
+     (Op in B_And | B_Or | B_Xor | B_Shl | B_Shr);
+
+   --  §6.6: a comparison mixed with a bitwise/shift operator (in either
+   --  order) without intervening parentheses shall not appear. An operand
+   --  that is itself an un-parenthesised binary node of the opposing class
+   --  is the violation; explicit grouping (`Was_Paren`) makes it well-formed.
+   function Mixes_Cmp_Bitsh (Op : Binary_Op; Operand : Expr_Access)
+     return Boolean is
+   begin
+      if Operand = null or else Operand.Kind /= E_Binary
+        or else Operand.Was_Paren
+      then
+         return False;
+      end if;
+      return (Is_Cmp (Op) and then Is_Bitsh (Operand.B_Op))
+        or else (Is_Bitsh (Op) and then Is_Cmp (Operand.B_Op));
+   end Mixes_Cmp_Bitsh;
+
    function Parse_Binary
      (C : in out Cursor; Min_BP : Natural) return Expr_Access
    is
@@ -1311,6 +1587,15 @@ package body Kurt.Parser is
                   raise Syntax_Error with
                     "comparison operators are non-associative (§6.6); "
                     & "parenthesise the chain at line"
+                    & Positive'Image (C.Cur.Line);
+               end if;
+               --  §6.6 mixed comparison × bitwise/shift without parens.
+               if Mixes_Cmp_Bitsh (Op, Left)
+                 or else Mixes_Cmp_Bitsh (Op, R)
+               then
+                  raise Syntax_Error with
+                    "a comparison mixed with a bitwise/shift operator "
+                    & "requires explicit parentheses (§6.6) at line"
                     & Positive'Image (C.Cur.Line);
                end if;
                Next := new Expr_Node (Kind => E_Binary);
@@ -1530,6 +1815,42 @@ package body Kurt.Parser is
                Expect (C, Punct_Semi, "';'");
                return S;
             end if;
+            --  §5.2.1 refutable let-else: a variant pattern (the head ident
+            --  is followed by `::` or `{`) destructured against a scrutinee,
+            --  with a diverging `else` on mismatch.
+            if C.Cur.Kind = Tok_Ident
+              and then (Peek_Tok (C).Kind = Punct_ColonColon
+                        or else Peek_Tok (C).Kind = Punct_LBrace)
+            then
+               S := new Stmt_Node (Kind => S_Let);
+               S.L_Is_Refut := True;
+               S.L_Refut_Pat.Kind := Pat_Variant;
+               S.L_Refut_Pat.Path.Append
+                 (Take_Ident (C, "enum name in let-else pattern"));
+               while C.Cur.Kind = Punct_ColonColon loop
+                  Advance (C);
+                  S.L_Refut_Pat.Path.Append (Take_Ident (C, "variant name"));
+               end loop;
+               if C.Cur.Kind = Punct_LBrace then
+                  Advance (C);
+                  if C.Cur.Kind /= Punct_RBrace then
+                     loop
+                        S.L_Refut_Pat.Bindings.Append
+                          (Take_Ident (C, "payload binding"));
+                        exit when C.Cur.Kind /= Punct_Comma;
+                        Advance (C);
+                        exit when C.Cur.Kind = Punct_RBrace;
+                     end loop;
+                  end if;
+                  Expect (C, Punct_RBrace, "'}'");
+               end if;
+               Expect (C, Punct_Eq, "'=' in let-else");
+               S.L_Init := Parse_Expr (C);
+               Expect (C, Kw_Else, "'else' in refutable let (spec 5.2.1)");
+               Parse_Block_Stmts (C, S.L_Else);
+               Expect (C, Punct_Semi, "';'");
+               return S;
+            end if;
             declare
                Name : constant SU.Unbounded_String :=
                  Take_Ident (C, "let binding name");
@@ -1616,7 +1937,42 @@ package body Kurt.Parser is
             --  target of `continue`; `break` skips it.
             Advance (C);
             S := new Stmt_Node (Kind => S_While);
+            --  §7.5.1 `while let PAT = e { }`: refutable pattern tested each
+            --  iteration; the loop exits when it fails. Same pattern shape as
+            --  `if let` (a variant pattern with positional payload bindings).
+            if C.Cur.Kind = Kw_Let then
+               Advance (C);
+               S.W_Is_Let := True;
+               S.W_Let_Pat.Kind := Pat_Variant;
+               S.W_Let_Pat.Path.Append
+                 (Take_Ident (C, "enum name in while-let pattern"));
+               while C.Cur.Kind = Punct_ColonColon loop
+                  Advance (C);
+                  S.W_Let_Pat.Path.Append (Take_Ident (C, "variant name"));
+               end loop;
+               if C.Cur.Kind = Punct_LBrace then
+                  Advance (C);
+                  if C.Cur.Kind /= Punct_RBrace then
+                     loop
+                        S.W_Let_Pat.Bindings.Append
+                          (Take_Ident (C, "payload binding"));
+                        exit when C.Cur.Kind /= Punct_Comma;
+                        Advance (C);
+                        exit when C.Cur.Kind = Punct_RBrace;
+                     end loop;
+                  end if;
+                  Expect (C, Punct_RBrace, "'}'");
+               end if;
+               Expect (C, Punct_Eq, "'=' in while-let");
+            end if;
             S.W_Cond := Parse_Cond (C);
+            --  §7.5.1 `while cond -> v { }`: bind the contract success
+            --  payload to `v` for the body. (Not available with `while let`.)
+            if not S.W_Is_Let and then C.Cur.Kind = Punct_Arrow then
+               Advance (C);
+               S.W_Is_Contract := True;
+               S.W_Succ_Bind := Take_Ident (C, "while `->` success binding");
+            end if;
             Parse_Block_Stmts (C, S.W_Body);
             if C.Cur.Kind = Kw_Then then
                Advance (C);
@@ -1645,6 +2001,44 @@ package body Kurt.Parser is
             --    inline expression      if cond then a else b      (as a stmt)
             --  Disambiguate after the condition: '{' => statement.
             Advance (C);
+
+            --  §6.10 `if xlatime { } [else { }]` / `if !xlatime ...`. The
+            --  condition is statically `false` in execution-time code, so the
+            --  selected branch (else for `xlatime`, then for `!xlatime`) is
+            --  kept; the discarded branch is parsed (must be well-formed) but
+            --  never type-checked or lowered.
+            if C.Cur.Kind = Kw_Xlatime
+              or else (C.Cur.Kind = Op_Bang
+                       and then Peek_Tok (C).Kind = Kw_Xlatime)
+            then
+               declare
+                  Negated   : Boolean := False;
+                  Then_Blk  : Stmt_Vectors.Vector;
+                  Else_Blk  : Stmt_Vectors.Vector;
+               begin
+                  if C.Cur.Kind = Op_Bang then
+                     Negated := True;
+                     Advance (C);
+                  end if;
+                  Advance (C);   --  xlatime
+                  Parse_Block_Stmts (C, Then_Blk);
+                  if C.Cur.Kind = Kw_Else then
+                     Advance (C);
+                     Parse_Block_Stmts (C, Else_Blk);
+                  end if;
+                  S := new Stmt_Node (Kind => S_If);
+                  S.SI_Cond := new Expr_Node (Kind => E_Bool_Lit);
+                  S.SI_Cond.Bool_V := True;
+                  --  Execution time: `xlatime` is false. `if xlatime` keeps
+                  --  the else branch; `if !xlatime` keeps the then branch.
+                  if Negated then
+                     S.SI_Then := Then_Blk;
+                  else
+                     S.SI_Then := Else_Blk;
+                  end if;
+                  return S;
+               end;
+            end if;
 
             --  §7.3.3 `if let PAT = e { } else { }` refutable pattern branch.
             if C.Cur.Kind = Kw_Let then
@@ -1815,6 +2209,27 @@ package body Kurt.Parser is
                   S := new Stmt_Node (Kind => S_Assign);
                   S.Asn_Lhs := E;
                   S.Asn_Rhs := Parse_Expr (C);
+                  Expect (C, Punct_Semi, "';'");
+                  return S;
+               elsif C.Cur.Kind = Punct_LArrow then
+                  --  §7.2.3 extract-assignment `place <- e else [err] { }`.
+                  if E.Kind /= E_Path
+                    or else Natural (E.Segments.Length) /= 1
+                  then
+                     raise Syntax_Error with
+                       "extract-assignment target must be a place at line"
+                       & Positive'Image (C.Cur.Line);
+                  end if;
+                  Advance (C);   --  <-
+                  S := new Stmt_Node (Kind => S_Extract);
+                  S.X_Is_Place := True;
+                  S.X_Bind := E.Segments.Last_Element;
+                  S.X_Expr := Parse_Expr (C);
+                  Expect (C, Kw_Else, "'else' in extract-assignment");
+                  if C.Cur.Kind = Tok_Ident then
+                     S.X_Err := Take_Ident (C, "failure binding");
+                  end if;
+                  Parse_Block_Stmts (C, S.X_Else);
                   Expect (C, Punct_Semi, "';'");
                   return S;
                elsif Compound_Op (C.Cur.Kind, C_Op) then
@@ -1988,6 +2403,19 @@ package body Kurt.Parser is
          D.Is_Pub := True;
          Advance (C);
       end if;
+      --  §10.4 optional bound form `[prefix::]"path"`. The path identifies the
+      --  opaque code; resolution/symbol-presence checking against the host
+      --  linker is deferred, so the path is recorded but not yet verified.
+      if C.Cur.Kind = Tok_Ident
+        and then Peek_Tok (C).Kind = Punct_ColonColon
+      then
+         Advance (C);   --  prefix
+         Advance (C);   --  ::
+      end if;
+      if C.Cur.Kind = Tok_String_Lit then
+         D.Bound_Path := C.Cur.Str_Bytes;
+         Advance (C);
+      end if;
       Expect (C, Kw_As, "'as'");
       D.Alias := Take_Ident (C, "alias name for @dyn block");
 
@@ -2027,8 +2455,11 @@ package body Kurt.Parser is
       Ty_Name     : SU.Unbounded_String;
       Impl_Params : Generic_Param_Vectors.Vector;  --  §9.1 `impl(...)` list
       Is_Generic  : Boolean := False;
+      TI : Trait_Impl;        --  populated only for `impl Type as Trait`
 
-      --  Replace the `self_t` placeholder with the impl type, in place.
+      --  Replace the `self_t` placeholder with the impl type, in place; also
+      --  resolve `self_t::Item` (§9.3.1) to the impl's concrete associated
+      --  type. Associated-type defs must precede methods that use them.
       procedure Subst_Self (T : Type_Access) is
       begin
          if T = null then
@@ -2036,9 +2467,34 @@ package body Kurt.Parser is
          end if;
          case T.Kind is
             when T_Named =>
-               if SU.To_String (T.Name) = "self_t" then
-                  T.Name := Ty_Name;
-               end if;
+               declare
+                  NM : constant String := SU.To_String (T.Name);
+               begin
+                  if NM = "self_t" then
+                     T.Name := Ty_Name;
+                  elsif NM'Length > 8
+                    and then NM (NM'First .. NM'First + 7) = "self_t::"
+                  then
+                     declare
+                        Item : constant String :=
+                          NM (NM'First + 8 .. NM'Last);
+                        Res  : Type_Access := null;
+                     begin
+                        for I in TI.Assoc_Types.First_Index ..
+                                 TI.Assoc_Types.Last_Index
+                        loop
+                           if SU.To_String (TI.Assoc_Types.Element (I).Name)
+                                = Item
+                           then
+                              Res := TI.Assoc_Types.Element (I).Ty;
+                           end if;
+                        end loop;
+                        if Res /= null then
+                           T.all := Res.all;   --  splice the concrete type in
+                        end if;
+                     end;
+                  end if;
+               end;
                for I in T.Args.First_Index .. T.Args.Last_Index loop
                   Subst_Self (T.Args.Element (I));
                end loop;
@@ -2061,7 +2517,6 @@ package body Kurt.Parser is
                Subst_Self (T.Fn_Ret);
          end case;
       end Subst_Self;
-      TI : Trait_Impl;        --  populated only for `impl Type as Trait`
    begin
       Expect (C, Kw_Impl, "'impl'");
       --  §9.1 / §9.4: optional `impl(P [: bound]...)` generic parameter list,
@@ -2113,7 +2568,24 @@ package body Kurt.Parser is
       end if;
       Expect (C, Punct_LBrace, "'{' to open impl block");
       while C.Cur.Kind /= Punct_RBrace and then C.Cur.Kind /= Tok_EOF loop
-       if C.Cur.Kind = Kw_Const then
+       if C.Cur.Kind = Tok_Ident
+         and then SU.To_String (C.Cur.Lexeme) = "type"
+       then
+         --  §9.3.1 associated-type definition `type Item = Concrete;`.
+         Advance (C);
+         declare
+            ATy : Assoc_Type;
+         begin
+            ATy.Name := Take_Ident (C, "associated type name");
+            Expect (C, Punct_Eq, "'=' in associated type definition");
+            ATy.Ty := Parse_Type (C);
+            Expect (C, Punct_Semi, "';' after associated type definition");
+            --  Resolve `self_t::Item` style names in the concrete type and
+            --  record it for the impl's method specialisation.
+            Subst_Self (ATy.Ty);
+            TI.Assoc_Types.Append (ATy);
+         end;
+       elsif C.Cur.Kind = Kw_Const then
          --  §9.3.2 associated-const definition `const NAME: type = expr;`.
          Advance (C);
          declare
@@ -2215,7 +2687,23 @@ package body Kurt.Parser is
       end if;
       Expect (C, Punct_LBrace, "'{' to open trait body");
       while C.Cur.Kind /= Punct_RBrace and then C.Cur.Kind /= Tok_EOF loop
-         if C.Cur.Kind = Kw_Const then
+         if C.Cur.Kind = Tok_Ident
+           and then SU.To_String (C.Cur.Lexeme) = "type"
+         then
+            --  §9.3.1 associated type: `type Item [= Default];`.
+            Advance (C);
+            declare
+               ATy : Assoc_Type;
+            begin
+               ATy.Name := Take_Ident (C, "associated type name");
+               if C.Cur.Kind = Punct_Eq then
+                  Advance (C);
+                  ATy.Ty := Parse_Type (C);   --  default
+               end if;
+               Expect (C, Punct_Semi, "';' after associated type");
+               D.Assoc_Types.Append (ATy);
+            end;
+         elsif C.Cur.Kind = Kw_Const then
             --  §9.3.2 associated constant: `const NAME: type [= expr];`.
             Advance (C);
             declare
@@ -2321,9 +2809,17 @@ package body Kurt.Parser is
                   begin
                      if Arg = "packed" then
                         D.Repr_Packed := True;
+                     elsif Arg = "native" then
+                        --  §10.9.2: `repr(native)` is the default layout /
+                        --  invocation interface — in a single-unit bootstrap
+                        --  it coincides with the default KSA, so no effect.
+                        null;
+                     else
+                        raise Syntax_Error with
+                          "unknown `repr(" & Arg & ")` - expected `packed` "
+                          & "or `native` (spec 4.11.4) at line"
+                          & Positive'Image (C.Cur.Line);
                      end if;
-                     --  `repr(native)` and others: accepted, no effect
-                     --  in the bootstrap layout model.
                   end;
                   Expect (C, Punct_RParen, "')'");
                elsif Item = "align" then
@@ -2703,6 +3199,30 @@ package body Kurt.Parser is
       return D;
    end Parse_Static_Decl;
 
+   procedure Merge_Unit
+     (Into : in out Translation_Unit; From : Translation_Unit) is
+   begin
+      Into.Fns.Append (From.Fns);
+      Into.Dyns.Append (From.Dyns);
+      Into.Structs.Append (From.Structs);
+      Into.Enums.Append (From.Enums);
+      Into.Traits.Append (From.Traits);
+      Into.Trait_Impls.Append (From.Trait_Impls);
+      Into.Consts.Append (From.Consts);
+      Into.Statics.Append (From.Statics);
+      Into.Gen_Methods.Append (From.Gen_Methods);
+      Into.Gen_Fns.Append (From.Gen_Fns);
+      --  §7.10.1 at most one trap handler across the translation unit.
+      if From.Has_Trap_Handler then
+         if Into.Has_Trap_Handler then
+            raise Syntax_Error with
+              "multiple @trap handlers across the translation unit (§7.10.1)";
+         end if;
+         Into.Has_Trap_Handler := True;
+         Into.Trap_Handler := From.Trap_Handler;
+      end if;
+   end Merge_Unit;
+
    function Parse_Unit (Lex : in out Kurt.Lexer.Lexer)
       return Translation_Unit
    is
@@ -2751,6 +3271,60 @@ package body Kurt.Parser is
                U.Consts.Append (Parse_Const_Decl (C));
             when Dir_At_Dyn =>
                U.Dyns.Append (Parse_Dyn_Decl (C));
+            when Dir_At_Add =>
+               --  §10.2 `@add [pub] [prefix::]"path" as ident;` — the
+               --  `as ident` namespace name is mandatory. The import is
+               --  resolved and merged by the driver. (Namespacing of the
+               --  imported names under `ident` is deferred — flat merge.)
+               Advance (C);
+               declare
+                  Prefix : SU.Unbounded_String;
+               begin
+                  if C.Cur.Kind = Kw_Pub then
+                     Advance (C);   --  `pub` re-export (no visibility model)
+                  end if;
+                  if C.Cur.Kind = Tok_Ident
+                    and then Peek_Tok (C).Kind = Punct_ColonColon
+                  then
+                     Prefix := C.Cur.Lexeme;
+                     Advance (C);   --  prefix
+                     Advance (C);   --  ::
+                  end if;
+                  if C.Cur.Kind /= Tok_String_Lit then
+                     raise Syntax_Error with
+                       "`@add` requires a string path at line"
+                       & Positive'Image (C.Cur.Line);
+                  end if;
+                  U.Adds.Append (C.Cur.Str_Bytes);
+                  U.Add_Prefixes.Append (Prefix);
+                  Advance (C);
+                  Expect (C, Kw_As, "`as` in @add (spec 10.2)");
+                  declare
+                     Ns : constant SU.Unbounded_String :=
+                       Take_Ident (C, "@add namespace name");
+                     pragma Unreferenced (Ns);
+                  begin null; end;
+                  Expect (C, Punct_Semi, "';' after @add");
+               end;
+            when Dir_At_Path =>
+               --  §10.5 `@path "base" as name;` — named search-path prefix.
+               Advance (C);
+               if C.Cur.Kind /= Tok_String_Lit then
+                  raise Syntax_Error with
+                    "`@path` requires a string base at line"
+                    & Positive'Image (C.Cur.Line);
+               end if;
+               declare
+                  Base : constant SU.Unbounded_String := C.Cur.Str_Bytes;
+               begin
+                  Advance (C);
+                  Expect (C, Kw_As, "'as' in @path");
+                  U.Path_Names.Append (Take_Ident (C, "@path prefix name"));
+                  U.Path_Bases.Append (Base);
+               end;
+               if C.Cur.Kind = Punct_Semi then
+                  Advance (C);
+               end if;
             when Dir_At_Trap =>
                --  §7.10.1 `@trap { ... }` handler. At most one per
                --  translation unit.
@@ -2775,6 +3349,18 @@ package body Kurt.Parser is
                --  `static` is not a bootstrap keyword).
                if SU.To_String (C.Cur.Lexeme) = "static" then
                   U.Statics.Append (Parse_Static_Decl (C));
+               --  §5.12.2 `use path;` — unqualified name introduction. In the
+               --  single-unit bootstrap every declaration is already in one
+               --  flat scope, so a `use` is consumed and has no effect (it
+               --  becomes meaningful only with the module model, §10).
+               elsif SU.To_String (C.Cur.Lexeme) = "use" then
+                  Advance (C);
+                  while C.Cur.Kind /= Punct_Semi
+                    and then C.Cur.Kind /= Tok_EOF
+                  loop
+                     Advance (C);
+                  end loop;
+                  Expect (C, Punct_Semi, "';' after `use`");
                --  §5.8 `type NAME = type ;` — alias declaration. The
                --  substitution happens at later use sites (Parse_Type),
                --  so nothing is recorded in the translation unit.
@@ -2784,13 +3370,19 @@ package body Kurt.Parser is
                      A : Alias_Entry;
                   begin
                      A.Name := Take_Ident (C, "alias name after 'type'");
+                     --  §5.8 generic alias `type Name.<T, U> = ...`.
                      if C.Cur.Kind = Punct_Dot
                        and then Peek_Tok (C).Kind = Op_Lt
                      then
-                        raise Syntax_Error with
-                          "generic type aliases are not supported by "
-                          & "the bootstrap (spec 5.8) at line"
-                          & Positive'Image (C.Cur.Line);
+                        Advance (C);   --  '.'
+                        Advance (C);   --  '<'
+                        loop
+                           A.Params.Append
+                             (Take_Ident (C, "alias type parameter"));
+                           exit when C.Cur.Kind /= Punct_Comma;
+                           Advance (C);
+                        end loop;
+                        Expect (C, Op_Gt, "'>' to close alias parameters");
                      end if;
                      Expect (C, Punct_Eq, "'=' in type alias");
                      A.Target := Parse_Type (C);

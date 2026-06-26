@@ -21,6 +21,7 @@ package Kurt.Lexer is
       Tok_Char_Lit,    --  §3.5.4 character literal; cell value in Int_V
       Tok_Label,       --  §7.9 loop/block label `'name` (name in Lexeme)
       Tok_Hash_Wild,   --  #wild#  (§3.6, single indivisible token)
+      Tok_Hash,        --  #       (§5.10 binding pattern `name # sub`)
       --  Keywords (§3.3.1)
       Kw_Fn,
       Kw_Return,
@@ -55,6 +56,7 @@ package Kurt.Lexer is
       Kw_False,
       Kw_Cellbits,       --  cell-width keyword (§4.2.1, replaces CELL_BITS)
       Kw_Never,          --  `never` diverging return type (§4.10, §7.11)
+      Kw_Xlatime,        --  `xlatime` translation-time evaluation (§6.10)
       --  Reference sigils (§4.9, §8.1). The `raw` qualifier in `&raw T`
       --  is a normal identifier; the parser splices the two tokens.
       Op_Amp,            --  &
@@ -124,14 +126,18 @@ package Kurt.Lexer is
       Punct_Dot,         --  .
       Op_DotDot,         --  ..   (exclusive range, §4.8)
       Op_DotDotEq,       --  ..=  (inclusive range, §4.8)
+      Op_Ellipsis,       --  ...  (rest pattern / variadic, §7.4.2)
       --  Directives (§10.3, §8.5.3)
       Dir_At_Dyn,
+      Dir_At_Add,        --  @add "path"  source import (§10.2)
+      Dir_At_Path,       --  @path "base" as name  search-path prefix (§10.5)
       Dir_At_Trap,       --  @trap termination primitive / handler (§7.10)
       Dir_At_Guard,      --  @guard fence family (§8.5.3)
       Dir_At_Volatile,   --  @volatile fence family (§8.5.3)
       Dir_At_Size,       --  T@size   type intrinsic (§6.12)
       Dir_At_Align,      --  T@align  type intrinsic (§6.12)
       Dir_At_Offset,     --  T@offset(field) type intrinsic (§6.12)
+      Dir_At_Name,       --  T@name   name intrinsic (§6.12.2)
       Dir_At_Inline,     --  @inline    subroutine inlining hint (§5.14)
       Dir_At_No_Inline,  --  @no_inline subroutine inlining prohibition
       Dir_At_Symbol,     --  @symbol "name"  external symbol override (§5.15)
@@ -160,6 +166,10 @@ package Kurt.Lexer is
    procedure Init (L : out Lexer; Source : String);
    function  Next_Token (L : in out Lexer) return Token;
 
+   --  §10.7 introduce a translation-time flag from the external mechanism
+   --  (e.g. a `-f NAME` command-line option). Call before lexing.
+   procedure Define_Flag (L : in out Lexer; Name : String);
+
    Translation_Failure : exception;
 
 private
@@ -169,6 +179,9 @@ private
       Pos  : Positive := 1;
       Line : Positive := 1;
       Col  : Positive := 1;
+      --  §10.7 active translation-time flags, stored space-delimited and
+      --  space-bracketed (" a b "), so membership is a substring test.
+      Flags : SU.Unbounded_String := SU.To_Unbounded_String (" ");
    end record;
 
 end Kurt.Lexer;

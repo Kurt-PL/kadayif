@@ -1,0 +1,25 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §7.5.1 `while let PAT = e { }` — tests a refutable variant pattern against
+// a binding each iteration; the loop exits when the pattern no longer
+// matches. Payload fields are bound as aliases into the body, so the body
+// can both read and write the running state in place and flip the
+// discriminant (here to the unit variant `Stop`) to terminate.
+enum step { More { si4, si4 }, Stop }
+
+fn main() -> ui1 {
+    // Countdown 5..1: print n and the running accumulator, fold n into acc,
+    // decrement n through the alias, and at n == 0 switch to Stop to exit.
+    mut s: step = step::More { 5, 0 };
+    while let step::More { n, acc } = s {
+        airside { posix::printf("n=%d acc=%d\n\0".ptr, n, acc); }
+        acc = acc + n;          // write through the `acc` alias
+        n = n - 1;              // write through the `n` alias
+        if n == 0 {
+            airside { posix::printf("sum=%d\n\0".ptr, acc); }
+            s = step::Stop;     // unit-variant reassignment -> loop exits
+        }
+    }
+    airside { posix::printf("exited\n\0".ptr); }
+    return 0;
+}

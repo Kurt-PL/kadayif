@@ -284,6 +284,7 @@ package body Kurt.Mono is
             for I in E.M_Arms.First_Index .. E.M_Arms.Last_Index loop
                R.M_Arms.Append
                  ((Pat      => E.M_Arms.Element (I).Pat,
+                   Guard    => C (E.M_Arms.Element (I).Guard),
                    Arm_Body => C (E.M_Arms.Element (I).Arm_Body)));
             end loop;
          when E_Cast =>
@@ -374,6 +375,9 @@ package body Kurt.Mono is
             R.L_Ty          := Subst (S.L_Ty, Params, Args);
             R.L_Init        := C (S.L_Init);
             R.L_Tuple_Names := S.L_Tuple_Names;
+            R.L_Is_Refut    := S.L_Is_Refut;
+            R.L_Refut_Pat   := S.L_Refut_Pat;
+            R.L_Else        := Copy_Block (S.L_Else, Params, Args);
          when S_Assign =>
             R.Asn_Lhs := C (S.Asn_Lhs);
             R.Asn_Rhs := C (S.Asn_Rhs);
@@ -382,6 +386,10 @@ package body Kurt.Mono is
             R.W_Body  := Copy_Block (S.W_Body, Params, Args);
             R.W_Then  := Copy_Block (S.W_Then, Params, Args);
             R.W_Label := S.W_Label;
+            R.W_Is_Let  := S.W_Is_Let;
+            R.W_Let_Pat := S.W_Let_Pat;
+            R.W_Is_Contract := S.W_Is_Contract;
+            R.W_Succ_Bind   := S.W_Succ_Bind;
          when S_If =>
             R.SI_Cond        := C (S.SI_Cond);
             R.SI_Then        := Copy_Block (S.SI_Then, Params, Args);
@@ -396,6 +404,7 @@ package body Kurt.Mono is
             R.X_Expr := C (S.X_Expr);
             R.X_Err  := S.X_Err;
             R.X_Else := Copy_Block (S.X_Else, Params, Args);
+            R.X_Is_Place := S.X_Is_Place;
          when S_Break =>
             R.Brk_Val   := C (S.Brk_Val);
             R.Brk_Label := S.Brk_Label;
@@ -716,6 +725,14 @@ package body Kurt.Mono is
                      loop
                         Add_Once (Bound, S.L_Tuple_Names.Element (J));
                      end loop;
+                     if S.L_Is_Refut then
+                        Scan_Stmts (S.L_Else, Used, Bound);
+                        for J in S.L_Refut_Pat.Bindings.First_Index ..
+                                 S.L_Refut_Pat.Bindings.Last_Index
+                        loop
+                           Add_Once (Bound, S.L_Refut_Pat.Bindings.Element (J));
+                        end loop;
+                     end if;
                   when S_Assign =>
                      Scan_Expr (S.Asn_Lhs, Used, Bound);
                      Scan_Expr (S.Asn_Rhs, Used, Bound);
@@ -799,6 +816,19 @@ package body Kurt.Mono is
                      loop
                         Add_Once (Bound, A.Pat.Bindings.Element (J));
                      end loop;
+                     if SU.Length (A.Pat.Bind_Name) > 0 then
+                        Add_Once (Bound, A.Pat.Bind_Name);
+                     end if;
+                     for J in A.Pat.Slice_Elems.First_Index ..
+                              A.Pat.Slice_Elems.Last_Index loop
+                        if A.Pat.Slice_Elems.Element (J).Kind = SE_Bind then
+                           Add_Once
+                             (Bound, A.Pat.Slice_Elems.Element (J).Name);
+                        end if;
+                     end loop;
+                     if A.Guard /= null then
+                        Scan_Expr (A.Guard, Used, Bound);
+                     end if;
                      Scan_Expr (A.Arm_Body, Used, Bound);
                   end;
                end loop;
@@ -896,7 +926,8 @@ package body Kurt.Mono is
                   New_Fn.Header.Params.Append
                     ((Name => TD.Header.Params.Element (I).Name,
                       Ty   => Subst (TD.Header.Params.Element (I).Ty,
-                                     PNames, Type_Args)));
+                                     PNames, Type_Args),
+                      Is_Mut => TD.Header.Params.Element (I).Is_Mut));
                end loop;
                New_Fn.Header.Return_Type :=
                  Subst (TD.Header.Return_Type, PNames, Type_Args);
@@ -1034,7 +1065,7 @@ package body Kurt.Mono is
                         Self_T.Target.Name := E.Clo_Env_Name;
                         D.Header.Params.Append
                           ((Name => SU.To_Unbounded_String ("self"),
-                            Ty   => Self_T));
+                            Ty   => Self_T, Is_Mut => False));
                         for C of E.Clo_Caps loop
                            Env.Fields.Append
                              ((Name => C.Name, Ty => null, Default => null));
@@ -1067,7 +1098,8 @@ package body Kurt.Mono is
                   end if;
 
                   for P of E.Clo_Params loop
-                     D.Header.Params.Append ((Name => P.Name, Ty => P.Ty));
+                     D.Header.Params.Append
+                       ((Name => P.Name, Ty => P.Ty, Is_Mut => False));
                   end loop;
                   D.Header.Return_Type := E.Clo_Ret;   --  null => inferred
                   D.Body_Stmts := E.Clo_Body;
@@ -1083,6 +1115,7 @@ package body Kurt.Mono is
             when E_Match =>
                Visit_Expr (E.M_Scrut);
                for I in E.M_Arms.First_Index .. E.M_Arms.Last_Index loop
+                  Visit_Expr (E.M_Arms.Element (I).Guard);
                   Visit_Expr (E.M_Arms.Element (I).Arm_Body);
                end loop;
             when E_Cast =>
@@ -1202,7 +1235,9 @@ package body Kurt.Mono is
                                          .Element (K).Name,
                                Ty   => Subst
                                  (GM.Method.Header.Params.Element (K).Ty,
-                                  PNames, Args)));
+                                  PNames, Args),
+                               Is_Mut => GM.Method.Header.Params
+                                           .Element (K).Is_Mut));
                         end loop;
                         New_Fn.Header.Return_Type :=
                           Subst (GM.Method.Header.Return_Type,
@@ -1299,7 +1334,9 @@ package body Kurt.Mono is
                                                   .Name,
                                         Ty   => Subst
                                           (TM.Sig.Params.Element (K).Ty,
-                                           SelfP, Args1)));
+                                           SelfP, Args1),
+                                        Is_Mut => TM.Sig.Params.Element (K)
+                                                    .Is_Mut));
                                  end loop;
                                  New_Fn.Header.Return_Type :=
                                    Subst (TM.Sig.Return_Type,

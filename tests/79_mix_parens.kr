@@ -1,0 +1,23 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §6.6: a comparison mixed with `& | ^ << >>` requires explicit parentheses.
+// Well-formed uses must parenthesise the bitwise/shift sub-expression; this
+// test exercises the accepted (parenthesised) forms — the rejection of the
+// un-parenthesised forms is covered by negative compile checks.
+fn main() -> ui1 {
+    let a: si4 = 0b1100;
+    let b: si4 = 0b1010;
+    let c: si4 =   12;
+
+    let r1: si4 = if (a & b) == 8  then 1 else 0;   // bitwise grouped, compared
+    let r2: si4 = if (a | b) > 10  then 1 else 0;
+    let r3: si4 = if (a ^ b) != 0  then 1 else 0;
+    let r4: si4 = if (a << 1) == 24 then 1 else 0;
+    let r5: si4 = if c == (a & b) + 4 then 1 else 0; // mix via a non-cmp middle
+
+    airside {
+        posix::printf("r1=%d r2=%d r3=%d r4=%d r5=%d\n\0".ptr,
+                      r1, r2, r3, r4, r5);
+    }
+    return 0;
+}

@@ -1,0 +1,73 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §7.4 guard clause: `pattern if expr = body`. An arm is selected only when
+// the pattern matches AND the guard is true. A guard does not affect
+// exhaustiveness, so an unguarded catch-all is still required.
+
+// (a) integer scrutinee — guards on int patterns and on the wild arm. The
+// first arm whose pattern matches and whose guard holds wins, in order.
+fn classify(n: si4) -> &raw ui1 {
+    return match n {
+        0                 = "zero\0".ptr,
+        #wild# if n < 0   = "negative\0".ptr,
+        #wild# if n > 100 = "big\0".ptr,
+        #wild#            = "small\0".ptr,
+    };
+}
+
+enum shape {
+    Circle { si4 },             // radius
+    Rect   { si4, si4 },        // width, height
+}
+
+fn main() -> ui1 {
+    airside {
+        posix::printf("%s\n\0".ptr, classify(0));      // zero
+        posix::printf("%s\n\0".ptr, classify(-4));     // negative
+        posix::printf("%s\n\0".ptr, classify(500));    // big
+        posix::printf("%s\n\0".ptr, classify(7));      // small
+    }
+
+    // (b) guard referencing a payload binding; falls through to a later arm
+    // of the SAME variant when the guard fails. Matched inline (aggregate
+    // enum-by-value across calls is a separate, deferred ABI concern).
+    let pt: shape = shape::Circle { 0 };
+    let ci: shape = shape::Circle { 5 };
+    let sq: shape = shape::Rect { 4, 4 };
+    let rc: shape = shape::Rect { 3, 4 };
+    let a: &raw ui1 = match pt {
+        shape::Circle { r } if r == 0 = "point\0".ptr,
+        shape::Circle { r }           = "circle\0".ptr,
+        shape::Rect { w, h } if w == h = "square\0".ptr,
+        shape::Rect { w, h }           = "rect\0".ptr,
+        #wild#                         = "?\0".ptr,
+    };
+    let b: &raw ui1 = match ci {
+        shape::Circle { r } if r == 0 = "point\0".ptr,
+        shape::Circle { r }           = "circle\0".ptr,
+        shape::Rect { w, h } if w == h = "square\0".ptr,
+        shape::Rect { w, h }           = "rect\0".ptr,
+        #wild#                         = "?\0".ptr,
+    };
+    let c: &raw ui1 = match sq {
+        shape::Circle { r } if r == 0 = "point\0".ptr,
+        shape::Circle { r }           = "circle\0".ptr,
+        shape::Rect { w, h } if w == h = "square\0".ptr,
+        shape::Rect { w, h }           = "rect\0".ptr,
+        #wild#                         = "?\0".ptr,
+    };
+    let d: &raw ui1 = match rc {
+        shape::Circle { r } if r == 0 = "point\0".ptr,
+        shape::Circle { r }           = "circle\0".ptr,
+        shape::Rect { w, h } if w == h = "square\0".ptr,
+        shape::Rect { w, h }           = "rect\0".ptr,
+        #wild#                         = "?\0".ptr,
+    };
+    airside {
+        posix::printf("%s\n\0".ptr, a);    // point
+        posix::printf("%s\n\0".ptr, b);    // circle
+        posix::printf("%s\n\0".ptr, c);    // square
+        posix::printf("%s\n\0".ptr, d);    // rect
+    }
+    return 0;
+}

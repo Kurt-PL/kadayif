@@ -1,0 +1,17 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+// §5.10 binding pattern `name # sub`: bind the value while testing.
+fn classify(code: si4) -> si4 {
+    return match code {
+        c # 200..=299 = c + 1000,        // bind c, test range; use c in body
+        c # 400..=499 if c == 404 = 404, // binding + range + guard
+        c # 400..=499 = c,
+        #wild# = -1,
+    };
+}
+fn main() -> ui1 {
+    airside {
+        posix::printf("%d %d %d %d\n\0".ptr,
+            classify(204), classify(404), classify(450), classify(999));
+    }
+    return 0;
+}

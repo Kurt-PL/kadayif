@@ -1,0 +1,3 @@
+// §10.2 imported helper unit (not globbed by run.sh — lives in a subdir).
+struct point { x: si4, y: si4 }
+fn area(p: point) -> si4 { return p.x * p.y; }

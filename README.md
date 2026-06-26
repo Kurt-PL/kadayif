@@ -2,7 +2,7 @@
 
 The brainless reference implementation of the Kurt programming language.
 
-Kadayif is a bootstrap compiler for [Kurt](../std-spec), written in Ada. It
+Kadayif is a bootstrap compiler for Kurt, written in Ada. It
 translates a single `.kr` source file all the way to a native
 `arm64-apple-darwin` executable: lex → parse → semantic analysis → assembly,
 then it shells out to the system `as` and `ld` to assemble and link.
@@ -36,10 +36,11 @@ programming language could have only *one* compiler?
 
 ## Status
 
-Kadayif targets **KPLSS 0.1** (the Kurt Programming Language Standard
-Specification, preliminary edition 1), kept in [`../std-spec`](../std-spec).
-It is a bootstrap, so it implements a growing subset of the language rather
-than the whole thing.
+Kadayif targets **Kurt 0.1** (the Kurt programming language standard
+specification — preliminary edition 1), kept in
+[`std-spec`](https://github.com/Kurt-PL/std-spec). It is a bootstrap,
+so it implements a growing subset of the language rather than the whole
+thing.
 
 What works today (non-exhaustive): functions and recursion, `let`/`mut`,
 integer/float/bool/char/string literals, the full operator set (wrapping,

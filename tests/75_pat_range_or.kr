@@ -1,0 +1,53 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+enum colour { Red, Green, Blue, Cyan, Magenta, Yellow }
+
+// §5.10 range patterns `lo..hi` (exclusive) / `lo..=hi` (inclusive) on an
+// integer scrutinee. Refutable, so an unguarded `#wild#` is still required.
+fn http(code: si4) -> &raw ui1 {
+    return match code {
+        200..=299 = "ok\0".ptr,
+        300..400  = "redirect\0".ptr,   // 300..=399, exclusive upper
+        400..=499 = "client\0".ptr,
+        500..=599 = "server\0".ptr,
+        #wild#    = "unknown\0".ptr,
+    };
+}
+
+// §5.10 or-pattern `p | q | r`: matches if any alternative matches. Here on
+// unit enum variants. Combined with the wild for the rest.
+fn kind(c: colour) -> &raw ui1 {
+    return match c {
+        colour::Red | colour::Green | colour::Blue = "primary\0".ptr,
+        #wild#                                      = "secondary\0".ptr,
+    };
+}
+
+// Or-patterns over integer literals plus a range, sharing one body. A guard
+// can still ride on top (applies to each alternative).
+fn bucket(n: si4) -> &raw ui1 {
+    return match n {
+        0 | 1 | 2          = "low\0".ptr,
+        10..=20 if n != 15 = "mid\0".ptr,
+        #wild#             = "other\0".ptr,
+    };
+}
+
+fn main() -> ui1 {
+    airside {
+        posix::printf("%s\n\0".ptr, http(204));   // ok
+        posix::printf("%s\n\0".ptr, http(301));   // redirect
+        posix::printf("%s\n\0".ptr, http(400));   // client (inclusive lower)
+        posix::printf("%s\n\0".ptr, http(599));   // server (inclusive upper)
+        posix::printf("%s\n\0".ptr, http(100));   // unknown
+
+        posix::printf("%s\n\0".ptr, kind(colour::Green));    // primary
+        posix::printf("%s\n\0".ptr, kind(colour::Cyan));     // secondary
+
+        posix::printf("%s\n\0".ptr, bucket(1));   // low
+        posix::printf("%s\n\0".ptr, bucket(12));  // mid
+        posix::printf("%s\n\0".ptr, bucket(15));  // other (guard excludes 15)
+        posix::printf("%s\n\0".ptr, bucket(99));  // other
+    }
+    return 0;
+}

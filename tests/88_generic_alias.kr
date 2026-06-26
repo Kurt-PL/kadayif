@@ -1,0 +1,17 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+struct pair { a: si4, b: si4 }
+// §5.8 generic type alias: parameters bound at the use site.
+type Ref.<T> = &raw T;
+type Maybe.<T> = verdict.<T, void>;
+
+fn main() -> ui1 {
+    let p: pair = pair { a = 3, b = 4 };
+    let r: Ref.<pair> = &raw p;          // expands to &raw pair
+    let m: Maybe.<si4> = verdict::Pass { 9 };  // expands to verdict.<si4,void>
+    airside {
+        if m -> v {
+            posix::printf("a=%d v=%d\n\0".ptr, r.a, v);   // 3 9
+        } else { }
+    }
+    return 0;
+}

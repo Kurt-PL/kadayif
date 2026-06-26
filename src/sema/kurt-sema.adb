@@ -193,6 +193,21 @@ package body Kurt.Sema is
       and then T.Target /= null and then T.Target.Kind = T_Array
       and then T.Target.Len = 0);
 
+   --  §4.6: a bare dynamically-sized array `[T]` (Len = 0, not behind a ref).
+   --  Permitted only as a reference target; forbidden as a value-position
+   --  type (binding / parameter / return / field / element).
+   function Is_Unsized_Arr (T : Type_Access) return Boolean is
+     (T /= null and then T.Kind = T_Array and then T.Len = 0);
+
+   --  §9.5: a bare `dyn Trait` (not behind a reference) — like `[T]` it has no
+   --  static size and is forbidden in value positions.
+   function Is_Dyn_Bare (T : Type_Access) return Boolean is
+     (T /= null and then T.Kind = T_Dyn);
+
+   --  A type that may not appear in a value position (§4.6 / §9.5).
+   function Is_Unsized_Value (T : Type_Access) return Boolean is
+     (Is_Unsized_Arr (T) or else Is_Dyn_Bare (T));
+
    function Is_Uaddr (T : Type_Access) return Boolean is
      (T /= null and then T.Kind = T_Named
       and then SU.To_String (T.Name) = "uaddr");
@@ -435,6 +450,11 @@ package body Kurt.Sema is
    type SBinding is record
       Name : SU.Unbounded_String;
       Ty   : Type_Access;
+      --  §2.2.1/§5.1: a `let` binding is single-assignment (immutable after
+      --  initialisation); a `mut` binding and a `mut` parameter are mutable.
+      --  Defaults to mutable so payload aliases / extract bindings (which are
+      --  writable in the bootstrap) need no per-site annotation.
+      Is_Mut : Boolean := True;
    end record;
 
    package SBind_Vec is new Ada.Containers.Vectors
@@ -458,6 +478,11 @@ package body Kurt.Sema is
       Errors  : Natural := 0;
       Sigs    : Sig_Vec.Vector;
       Scope   : SBind_Vec.Vector;
+      --  §5.17 base index (into Scope) of the current lexical block: a name
+      --  declared at-or-above this index is in the *same* scope (a duplicate
+      --  declaration = TF); a same-named binding below it is an outer
+      --  declaration, which the inner one legally shadows.
+      Block_Base : Natural := 0;
       Cur_Ret : Type_Access;
       --  §8.2/§8.3 reference derivation tree for the body being analysed.
       Borrows : Kurt.Borrow.Tree;
@@ -504,6 +529,22 @@ package body Kurt.Sema is
          end loop;
          return null;
       end Lookup_Scope;
+
+      --  §2.2.1: nearest binding's mutability (innermost scope wins, matching
+      --  Lookup_Scope's shadowing order). Found is set False when no local
+      --  binding of that name exists.
+      function Lookup_Scope_Mut
+        (Name : String; Found : out Boolean) return Boolean is
+      begin
+         for I in reverse Scope.First_Index .. Scope.Last_Index loop
+            if SU.To_String (Scope.Element (I).Name) = Name then
+               Found := True;
+               return Scope.Element (I).Is_Mut;
+            end if;
+         end loop;
+         Found := False;
+         return False;
+      end Lookup_Scope_Mut;
 
       --  §5.4: whether Name denotes a top-level static binding (and
       --  whether it is `static mut`). Local bindings shadow statics, so
@@ -1781,12 +1822,32 @@ package body Kurt.Sema is
                      begin
                         case Arm.Pat.Kind is
                            when Pat_Wild =>
-                              Has_Wild := True;
+                              --  §7.4: a guarded arm may fail at runtime, so a
+                              --  guarded `#wild#` does not make the match
+                              --  exhaustive — only an unguarded one does.
+                              if Arm.Guard = null then
+                                 Has_Wild := True;
+                              end if;
                            when Pat_Int =>
                               if not Is_Integer_Type (Scrut_Ty) then
                                  Error ("integer pattern matched against "
                                         & "non-integer scrutinee '"
                                         & Image (Scrut_Ty) & "'");
+                              end if;
+                           when Pat_Range =>
+                              --  §5.10 range pattern: numeric scrutinee, and
+                              --  a non-empty bound order.
+                              if not Is_Integer_Type (Scrut_Ty) then
+                                 Error ("range pattern matched against "
+                                        & "non-integer scrutinee '"
+                                        & Image (Scrut_Ty) & "'");
+                              elsif Arm.Pat.Int_V > Arm.Pat.Range_Hi
+                                or else (not Arm.Pat.Range_Incl
+                                         and then Arm.Pat.Int_V
+                                                    = Arm.Pat.Range_Hi)
+                              then
+                                 Error ("range pattern lower bound exceeds "
+                                        & "upper bound (empty range)");
                               end if;
                            when Pat_Variant =>
                               if Is_Enum_Scrut
@@ -1813,7 +1874,8 @@ package body Kurt.Sema is
                                                         (K),
                                               Ty   => Kurt.Layout
                                                 .Variant_Field_Type
-                                                  (Scrut_Ty, VN, K)));
+                                                  (Scrut_Ty, VN, K),
+                                              others => <>));
                                        end loop;
                                     end if;
                                  end;
@@ -1821,7 +1883,65 @@ package body Kurt.Sema is
                                  Error ("variant pattern requires an enum "
                                         & "scrutinee");
                               end if;
+                           when Pat_Slice =>
+                              --  §7.4.2 slice pattern: the scrutinee shall be
+                              --  an array; each bind names an element.
+                              if Scrut_Ty = null
+                                or else Scrut_Ty.Kind /= T_Array
+                              then
+                                 Error ("slice pattern requires an array "
+                                        & "scrutinee, got '"
+                                        & Image (Scrut_Ty) & "'");
+                              else
+                                 declare
+                                    Rests : Natural := 0;
+                                 begin
+                                    for K in Arm.Pat.Slice_Elems.First_Index ..
+                                             Arm.Pat.Slice_Elems.Last_Index
+                                    loop
+                                       declare
+                                          SE : constant Slice_Elem :=
+                                            Arm.Pat.Slice_Elems.Element (K);
+                                       begin
+                                          if SE.Kind = SE_Rest then
+                                             Rests := Rests + 1;
+                                          elsif SE.Kind = SE_Bind then
+                                             Scope.Append
+                                               ((Name => SE.Name,
+                                                 Ty   => Scrut_Ty.Elem,
+                                                 others => <>));
+                                          end if;
+                                       end;
+                                    end loop;
+                                    if Rests > 1 then
+                                       Error ("a slice pattern may contain at "
+                                          & "most one `...` (spec 7.4.2)");
+                                    end if;
+                                 end;
+                              end if;
                         end case;
+
+                        --  §5.10 binding pattern `name # sub`: bind the
+                        --  scrutinee value to `name` for the arm (and guard).
+                        if SU.Length (Arm.Pat.Bind_Name) > 0 then
+                           Scope.Append
+                             ((Name => Arm.Pat.Bind_Name,
+                               Ty   => Scrut_Ty, others => <>));
+                        end if;
+
+                        --  §7.4: a guard clause is type-checked in the arm's
+                        --  pattern-binding scope and shall satisfy `contract`.
+                        if Arm.Guard /= null then
+                           declare
+                              GT : constant Type_Access :=
+                                Infer (Arm.Guard, Mk_Named ("bool"));
+                           begin
+                              if not Is_Contract_Ty (GT) then
+                                 Error ("match guard must satisfy `contract`, "
+                                        & "got '" & Image (GT) & "'");
+                              end if;
+                           end;
+                        end if;
 
                         BT := Infer (Arm.Arm_Body, Result);
 
@@ -1876,6 +1996,8 @@ package body Kurt.Sema is
                                     loop
                                        if E.M_Arms.Element (I).Pat.Kind
                                             = Pat_Variant
+                                         and then E.M_Arms.Element (I).Guard
+                                                    = null
                                          and then SU.To_String
                                            (E.M_Arms.Element (I).Pat.Path
                                               .Last_Element) = VN
@@ -2407,7 +2529,14 @@ package body Kurt.Sema is
                      end;
                   end if;
 
-                  if not Known then
+                  if E.TI_Ty.Kind = T_Array and then E.TI_Ty.Len = 0
+                    and then E.TI_Op in TI_Size | TI_Align
+                  then
+                     --  §4.6: `T@size`/`T@align` shall not be applied to a
+                     --  dynamically-sized array `[T]` (it has no static size).
+                     Error ("`@size`/`@align` cannot be applied to a "
+                            & "dynamically-sized array `[T]` (spec 4.6)");
+                  elsif not Known then
                      declare
                         TypeNameStr : constant String :=
                           (if E.TI_Ty.Kind = T_Named then SU.To_String (E.TI_Ty.Name)
@@ -2561,7 +2690,7 @@ package body Kurt.Sema is
                   end if;
 
                   for P of E.Clo_Params loop
-                     Scope.Append ((Name => P.Name, Ty => P.Ty));
+                     Scope.Append ((Name => P.Name, Ty => P.Ty, others => <>));
                   end loop;
                   if RT = null then
                      for S of E.Clo_Body loop
@@ -2868,11 +2997,18 @@ package body Kurt.Sema is
       end Check_Return_Escape;
 
       procedure Check_Block (Stmts : Stmt_Vectors.Vector) is
-         Entry_Len : constant Natural := Natural (Scope.Length);
+         Entry_Len  : constant Natural := Natural (Scope.Length);
+         --  §5.17: this block opens a fresh scope. Names already in Scope
+         --  (params, outer-block locals, and any pattern bindings appended
+         --  just before this call) belong to enclosing scopes and may be
+         --  shadowed; only declarations made within this block collide.
+         Saved_Base : constant Natural := Block_Base;
       begin
+         Block_Base := Entry_Len;
          for I in Stmts.First_Index .. Stmts.Last_Index loop
             Check_Stmt (Stmts.Element (I));
          end loop;
+         Block_Base := Saved_Base;
          --  §8.2 liveness: references bound inside this block lapse at its
          --  end (their bindings leave scope).
          Kurt.Borrow.Kill_Above (Borrows, Entry_Len);
@@ -2883,6 +3019,20 @@ package body Kurt.Sema is
             end if;
          end loop;
       end Check_Block;
+
+      --  §5.17: a name shall be declared at most once within a scope. Flag a
+      --  collision with a binding already declared in the current block;
+      --  bindings below Block_Base belong to outer scopes and are shadowed.
+      procedure Check_Dup_In_Scope (Name : SU.Unbounded_String) is
+      begin
+         for I in Block_Base + 1 .. Natural (Scope.Length) loop
+            if SU.To_String (Scope.Element (I).Name) = SU.To_String (Name) then
+               Error ("'" & SU.To_String (Name) & "' is already declared in "
+                      & "this scope (spec 5.17)");
+               return;
+            end if;
+         end loop;
+      end Check_Dup_In_Scope;
 
       procedure Check_Stmt (S : Stmt_Access) is
       begin
@@ -2916,9 +3066,53 @@ package body Kurt.Sema is
                end;
 
             when S_Let | S_Mut =>
+               if S.L_Is_Refut then
+                  --  §5.2.1 refutable let-else: `let Enum::V { binds } = e
+                  --  else { diverge };`. On a match the payload binds for the
+                  --  rest of the enclosing scope; the else block (which sees no
+                  --  payload binding) runs on mismatch.
+                  declare
+                     CT : constant Type_Access := Infer (S.L_Init, null);
+                     EN : constant String :=
+                       (if CT /= null and then CT.Kind = T_Named
+                        then SU.To_String (CT.Name) else "");
+                     VN : constant String :=
+                       SU.To_String (S.L_Refut_Pat.Path.Last_Element);
+                  begin
+                     if EN = "" or else not Kurt.Layout.Is_Enum (EN) then
+                        Error ("refutable `let` requires an enum value; got '"
+                               & Image (CT) & "' (spec 5.2.1)");
+                     elsif not Kurt.Layout.Has_Variant (EN, VN) then
+                        Error ("enum '" & EN & "' has no variant '" & VN
+                               & "' (spec 5.2.1)");
+                     end if;
+                     --  else first (no payload in scope here), then the
+                     --  payload bindings persist into the enclosing scope.
+                     Check_Block (S.L_Else);
+                     if EN /= "" and then Kurt.Layout.Is_Enum (EN)
+                       and then Kurt.Layout.Has_Variant (EN, VN)
+                     then
+                        for K in 1 .. Natural (S.L_Refut_Pat.Bindings.Length)
+                        loop
+                           Check_Dup_In_Scope
+                             (S.L_Refut_Pat.Bindings.Element (K));
+                           Scope.Append
+                             ((Name => S.L_Refut_Pat.Bindings.Element (K),
+                               Ty   => Kurt.Layout.Variant_Field_Type
+                                         (CT, VN, K), others => <>));
+                        end loop;
+                     end if;
+                  end;
+                  return;
+               end if;
                declare
                   Ty : Type_Access := S.L_Ty;
                begin
+                  --  §4.6: `[T]` cannot be a binding type (use `&[T]`).
+                  if Is_Unsized_Value (S.L_Ty) then
+                     Error ("`[T]`/`dyn Trait` cannot be a binding type "
+                            & "(use a reference) (spec 4.6/9.5)");
+                  end if;
                   if S.L_Init /= null and then S.L_Init.Kind = E_Uninit then
                      --  §6.1.8: `let/mut x: T = uninit;` — no value to infer
                      --  from, so the type annotation is required.
@@ -2966,10 +3160,12 @@ package body Kurt.Sema is
                         for I in S.L_Tuple_Names.First_Index ..
                                  S.L_Tuple_Names.Last_Index
                         loop
+                           Check_Dup_In_Scope (S.L_Tuple_Names.Element (I));
                            Scope.Append
                              ((Name => S.L_Tuple_Names.Element (I),
                                Ty   => Kurt.Layout.Tuple_Field_Type
-                                         (Ty, I - S.L_Tuple_Names.First_Index)));
+                                         (Ty, I - S.L_Tuple_Names.First_Index),
+                               Is_Mut => S.Kind = S_Mut));
                         end loop;
                      end if;
                   else
@@ -2977,7 +3173,12 @@ package body Kurt.Sema is
                         Error ("binding '" & SU.To_String (S.L_Name)
                                & "' needs a type annotation or initialiser");
                      end if;
-                     Scope.Append ((Name => S.L_Name, Ty => Ty));
+                     Check_Dup_In_Scope (S.L_Name);
+                     --  §2.2.1: `let` is single-assignment (immutable); `mut`
+                     --  is mutable.
+                     Scope.Append
+                       ((Name => S.L_Name, Ty => Ty,
+                         Is_Mut => S.Kind = S_Mut));
                      Register_Borrow (SU.To_String (S.L_Name), S.L_Init);
                      --  §8.8.2: initialising from a `destruct`-typed binding
                      --  transfers it (the source is invalidated).
@@ -3019,12 +3220,20 @@ package body Kurt.Sema is
                      declare
                         Name : constant String := SU.To_String
                           (S.Asn_Lhs.Segments.Last_Element);
-                        M    : Boolean;
+                        M       : Boolean;
+                        Mutable : Boolean;
+                        Is_Local : Boolean;
                      begin
-                        if Lookup_Scope (Name) = null
-                          and then Find_Static_Decl (Name, M)
-                          and then not M
-                        then
+                        Mutable := Lookup_Scope_Mut (Name, Is_Local);
+                        if Is_Local then
+                           --  §2.2.1/§5.1: a `let` binding (and an immutable
+                           --  parameter) is single-assignment.
+                           if not Mutable then
+                              Error ("assignment to immutable binding '"
+                                     & Name & "' -- declare it `mut` "
+                                     & "(spec 2.2.1)");
+                           end if;
+                        elsif Find_Static_Decl (Name, M) and then not M then
                            Error ("assignment to immutable static '"
                                   & Name & "' -- declare it `static "
                                   & "mut` (spec 5.4)");
@@ -3057,11 +3266,72 @@ package body Kurt.Sema is
 
             when S_While =>
                declare
-                  CT : constant Type_Access :=
-                    Infer (S.W_Cond, Mk_Named ("bool"));
-                  pragma Unreferenced (CT);
                   Has_Label : constant Boolean := SU.Length (S.W_Label) > 0;
+                  Saved     : Natural := 0;
+                  Bound_Let : Boolean := False;
                begin
+                  if S.W_Is_Let then
+                     --  §7.5.1 `while let Enum::Variant { binds } = e { }`:
+                     --  the body sees the positional payload bindings.
+                     declare
+                        CT : constant Type_Access := Infer (S.W_Cond, null);
+                        EN : constant String :=
+                          (if CT /= null and then CT.Kind = T_Named
+                           then SU.To_String (CT.Name) else "");
+                        VN : constant String :=
+                          SU.To_String (S.W_Let_Pat.Path.Last_Element);
+                     begin
+                        if EN = "" or else not Kurt.Layout.Is_Enum (EN) then
+                           Error ("`while let` requires an enum value; got '"
+                                  & Image (CT) & "' (spec 7.5.1)");
+                        elsif not Kurt.Layout.Has_Variant (EN, VN) then
+                           Error ("enum '" & EN & "' has no variant '" & VN
+                                  & "' (spec 7.5.1)");
+                        else
+                           Saved := Natural (Scope.Length);
+                           Bound_Let := True;
+                           for K in 1 .. Natural (S.W_Let_Pat.Bindings.Length)
+                           loop
+                              Scope.Append
+                                ((Name => S.W_Let_Pat.Bindings.Element (K),
+                                  Ty   => Kurt.Layout.Variant_Field_Type
+                                            (CT, VN, K), others => <>));
+                           end loop;
+                        end if;
+                     end;
+                  elsif S.W_Is_Contract then
+                     --  §7.5.1 `while cond -> v { }`: cond is a contract
+                     --  value; v binds the success payload in the body.
+                     declare
+                        CT : constant Type_Access := Infer (S.W_Cond, null);
+                        EN : constant String :=
+                          (if CT /= null and then CT.Kind = T_Named
+                           then SU.To_String (CT.Name) else "");
+                     begin
+                        if EN = "" or else not Kurt.Layout.Is_Contract_Enum (EN)
+                        then
+                           Error ("`while ->` requires a contract value; got '"
+                                  & Image (CT) & "' (spec 7.5.1)");
+                        else
+                           Saved := Natural (Scope.Length);
+                           Bound_Let := True;
+                           Scope.Append
+                             ((Name => S.W_Succ_Bind,
+                               Ty   => Kurt.Layout.Variant_Field_Type
+                                         (CT,
+                                          Kurt.Layout.Contract_Success_Variant
+                                            (EN), 1), others => <>));
+                        end if;
+                     end;
+                  else
+                     declare
+                        CT : constant Type_Access :=
+                          Infer (S.W_Cond, Mk_Named ("bool"));
+                        pragma Unreferenced (CT);
+                     begin
+                        null;
+                     end;
+                  end if;
                   In_Loop := In_Loop + 1;
                   if Has_Label then
                      Label_Stack.Append (S.W_Label);   --  §7.9 in scope
@@ -3072,6 +3342,11 @@ package body Kurt.Sema is
                      Label_Stack.Delete_Last;
                   end if;
                   In_Loop := In_Loop - 1;
+                  if Bound_Let then
+                     while Natural (Scope.Length) > Saved loop
+                        Scope.Delete_Last;
+                     end loop;
+                  end if;
                end;
 
             when S_If =>
@@ -3104,7 +3379,7 @@ package body Kurt.Sema is
                            Scope.Append
                              ((Name => S.SI_Let_Pat.Bindings.Element (K),
                                Ty   => Kurt.Layout.Variant_Field_Type
-                                         (CT, VN, K)));
+                                         (CT, VN, K), others => <>));
                         end loop;
                         Check_Block (S.SI_Then);
                         while Natural (Scope.Length) > Saved loop
@@ -3137,7 +3412,7 @@ package body Kurt.Sema is
                             Ty   => Kurt.Layout.Variant_Field_Type
                                       (CT,
                                        Kurt.Layout.Contract_Success_Variant
-                                         (EN), 1)));
+                                         (EN), 1), others => <>));
                         Check_Block (S.SI_Then);
                         while Natural (Scope.Length) > Saved loop
                            Scope.Delete_Last;
@@ -3150,7 +3425,7 @@ package body Kurt.Sema is
                                Ty   => Kurt.Layout.Variant_Field_Type
                                          (CT,
                                           Kurt.Layout.Contract_Fail_Variant
-                                            (EN), 1)));
+                                            (EN), 1), others => <>));
                         end if;
                         Check_Block (S.SI_Else);
                         while Natural (Scope.Length) > Saved loop
@@ -3198,19 +3473,46 @@ package body Kurt.Sema is
                             Ty   => Kurt.Layout.Variant_Field_Type
                                       (ET,
                                        Kurt.Layout.Contract_Fail_Variant (EN),
-                                       1)));
+                                       1), others => <>));
                      end if;
                      Check_Block (S.X_Else);
                      while Natural (Scope.Length) > Saved loop
                         Scope.Delete_Last;
                      end loop;
-                     --  Success binding stays in scope for the rest.
-                     Scope.Append
-                       ((Name => S.X_Bind,
-                         Ty   => Kurt.Layout.Variant_Field_Type
-                                   (ET,
-                                    Kurt.Layout.Contract_Success_Variant (EN),
-                                    1)));
+                     declare
+                        Succ_Ty : constant Type_Access :=
+                          Kurt.Layout.Variant_Field_Type
+                            (ET, Kurt.Layout.Contract_Success_Variant (EN), 1);
+                     begin
+                        if S.X_Is_Place then
+                           --  §7.2.3 copy the success payload into the place,
+                           --  which shall be an existing `mut` binding.
+                           declare
+                              PN : constant String := SU.To_String (S.X_Bind);
+                              PT : constant Type_Access := Lookup_Scope (PN);
+                              Is_Local : Boolean;
+                              Mutable  : constant Boolean :=
+                                Lookup_Scope_Mut (PN, Is_Local);
+                           begin
+                              if PT = null then
+                                 Error ("extract-assignment target '" & PN
+                                        & "' is not a binding");
+                              elsif not Mutable then
+                                 Error ("extract-assignment target '" & PN
+                                        & "' must be `mut` (spec 7.2.3)");
+                              elsif not Assignable (PT, Succ_Ty) then
+                                 Error ("extract-assignment type mismatch: "
+                                        & "place is '" & Image (PT)
+                                        & "' but success payload is '"
+                                        & Image (Succ_Ty) & "'");
+                              end if;
+                           end;
+                        else
+                           --  Success binding stays in scope for the rest.
+                           Scope.Append
+                             ((Name => S.X_Bind, Ty => Succ_Ty, others => <>));
+                        end if;
+                     end;
                   end if;
                end;
 
@@ -3651,7 +3953,7 @@ package body Kurt.Sema is
                   P : constant Param := Fn.Header.Params.Element (J);
                begin
                   if SU.Length (P.Name) > 0 then
-                     Scope.Append ((Name => P.Name, Ty => P.Ty));
+                     Scope.Append ((Name => P.Name, Ty => P.Ty, Is_Mut => P.Is_Mut));
                   end if;
                end;
             end loop;
@@ -3738,6 +4040,198 @@ package body Kurt.Sema is
             end if;
          end loop;
       end;
+
+      --  §4.6: a dynamically-sized array `[T]` shall not appear as a
+      --  parameter, return, struct-field, or enum-payload-field type (other
+      --  than as a reference target). `let`/`mut` annotations are checked in
+      --  Check_Stmt.
+      for I in U.Fns.First_Index .. U.Fns.Last_Index loop
+         declare
+            H : Fn_Header renames U.Fns.Element (I).Header;
+         begin
+            for P in H.Params.First_Index .. H.Params.Last_Index loop
+               if Is_Unsized_Value (H.Params.Element (P).Ty) then
+                  Error ("`[T]`/`dyn Trait` cannot be a parameter type "
+                         & "(use a reference) (spec 4.6/9.5)");
+               end if;
+            end loop;
+            if Is_Unsized_Value (H.Return_Type) then
+               Error ("`[T]`/`dyn Trait` cannot be a return type "
+                      & "(use a reference) (spec 4.6/9.5)");
+            end if;
+         end;
+      end loop;
+      for I in U.Structs.First_Index .. U.Structs.Last_Index loop
+         declare
+            SD : Struct_Decl renames U.Structs.Element (I);
+         begin
+            for Fi in SD.Fields.First_Index .. SD.Fields.Last_Index loop
+               if Is_Unsized_Value (SD.Fields.Element (Fi).Ty) then
+                  Error ("`[T]`/`dyn Trait` cannot be a struct field type "
+                         & "(use a reference) (spec 4.6/9.5)");
+               end if;
+            end loop;
+         end;
+      end loop;
+
+      --  §9.2.1 method-name ambiguity: if two different trait impls on the
+      --  same type provide the same method name, a bare `x.m()` call cannot
+      --  resolve (the bootstrap has no `(x as Trait).m()` disambiguation), so
+      --  the overlap is reported here.
+      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+         for J in I + 1 .. U.Trait_Impls.Last_Index loop
+            if SU.To_String (U.Trait_Impls.Element (I).Ty_Name)
+                 = SU.To_String (U.Trait_Impls.Element (J).Ty_Name)
+            then
+               declare
+                  MI : Path_Segments.Vector renames
+                    U.Trait_Impls.Element (I).Methods;
+                  MJ : Path_Segments.Vector renames
+                    U.Trait_Impls.Element (J).Methods;
+               begin
+                  for A in MI.First_Index .. MI.Last_Index loop
+                     for B in MJ.First_Index .. MJ.Last_Index loop
+                        if SU.To_String (MI.Element (A))
+                             = SU.To_String (MJ.Element (B))
+                        then
+                           Error ("type '"
+                             & SU.To_String (U.Trait_Impls.Element (I).Ty_Name)
+                             & "' has an ambiguous method '"
+                             & SU.To_String (MI.Element (A))
+                             & "' provided by traits '"
+                             & SU.To_String
+                                 (U.Trait_Impls.Element (I).Trait_Name)
+                             & "' and '"
+                             & SU.To_String
+                                 (U.Trait_Impls.Element (J).Trait_Name)
+                             & "' (spec 9.2.1)");
+                        end if;
+                     end loop;
+                  end loop;
+               end;
+            end if;
+         end loop;
+      end loop;
+
+      --  §9.4.2 duplicate detection: a type shall implement a given trait at
+      --  most once within the translation unit.
+      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+         for J in I + 1 .. U.Trait_Impls.Last_Index loop
+            if SU.To_String (U.Trait_Impls.Element (I).Ty_Name)
+                 = SU.To_String (U.Trait_Impls.Element (J).Ty_Name)
+              and then SU.To_String (U.Trait_Impls.Element (I).Trait_Name)
+                 = SU.To_String (U.Trait_Impls.Element (J).Trait_Name)
+            then
+               Error ("type '"
+                      & SU.To_String (U.Trait_Impls.Element (I).Ty_Name)
+                      & "' implements trait '"
+                      & SU.To_String (U.Trait_Impls.Element (I).Trait_Name)
+                      & "' more than once (spec 9.4.2)");
+            end if;
+         end loop;
+      end loop;
+
+      --  §9.3.1 associated-type completeness: an `impl T as Trait` shall
+      --  define every associated type the trait leaves without a default, and
+      --  shall not define one the trait does not declare.
+      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+         declare
+            TI : Trait_Impl renames U.Trait_Impls.Element (I);
+            Tr : constant String := SU.To_String (TI.Trait_Name);
+
+            function Impl_Defines (Nm : String) return Boolean is
+            begin
+               for K in TI.Assoc_Types.First_Index ..
+                        TI.Assoc_Types.Last_Index loop
+                  if SU.To_String (TI.Assoc_Types.Element (K).Name) = Nm then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            end Impl_Defines;
+         begin
+            for T in U.Traits.First_Index .. U.Traits.Last_Index loop
+               if SU.To_String (U.Traits.Element (T).Name) = Tr then
+                  declare
+                     TD : Trait_Decl renames U.Traits.Element (T);
+
+                     function Trait_Has (Nm : String) return Boolean is
+                     begin
+                        for K in TD.Assoc_Types.First_Index ..
+                                 TD.Assoc_Types.Last_Index loop
+                           if SU.To_String (TD.Assoc_Types.Element (K).Name)
+                                = Nm
+                           then
+                              return True;
+                           end if;
+                        end loop;
+                        return False;
+                     end Trait_Has;
+                  begin
+                     --  Every required (no-default) trait assoc type defined?
+                     for K in TD.Assoc_Types.First_Index ..
+                              TD.Assoc_Types.Last_Index loop
+                        if TD.Assoc_Types.Element (K).Ty = null
+                          and then not Impl_Defines
+                            (SU.To_String (TD.Assoc_Types.Element (K).Name))
+                        then
+                           Error ("impl of trait '" & Tr & "' for type '"
+                             & SU.To_String (TI.Ty_Name)
+                             & "' is missing associated type '"
+                             & SU.To_String (TD.Assoc_Types.Element (K).Name)
+                             & "' (spec 9.3.1)");
+                        end if;
+                     end loop;
+                     --  No def for an associated type the trait lacks?
+                     for K in TI.Assoc_Types.First_Index ..
+                              TI.Assoc_Types.Last_Index loop
+                        if not Trait_Has
+                          (SU.To_String (TI.Assoc_Types.Element (K).Name))
+                        then
+                           Error ("impl defines associated type '"
+                             & SU.To_String (TI.Assoc_Types.Element (K).Name)
+                             & "' not declared by trait '" & Tr
+                             & "' (spec 9.3.1)");
+                        end if;
+                     end loop;
+                  end;
+               end if;
+            end loop;
+         end;
+      end loop;
+
+      --  §9.3.3 supertrait satisfaction: a type that implements a trait with
+      --  supertrait bounds shall also implement every required supertrait.
+      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+         declare
+            TI : Trait_Impl renames U.Trait_Impls.Element (I);
+            Ty : constant String := SU.To_String (TI.Ty_Name);
+            Tr : constant String := SU.To_String (TI.Trait_Name);
+         begin
+            for T in U.Traits.First_Index .. U.Traits.Last_Index loop
+               if SU.To_String (U.Traits.Element (T).Name) = Tr then
+                  declare
+                     TD : Trait_Decl renames U.Traits.Element (T);
+                  begin
+                     for S in TD.Supertraits.First_Index ..
+                              TD.Supertraits.Last_Index
+                     loop
+                        declare
+                           Sup : constant String :=
+                             SU.To_String (TD.Supertraits.Element (S));
+                        begin
+                           if not Type_Implements (Ty, Sup) then
+                              Error ("type '" & Ty & "' implements trait '"
+                                     & Tr & "' but not its supertrait '"
+                                     & Sup & "' (spec 9.3.3)");
+                           end if;
+                        end;
+                     end loop;
+                  end;
+               end if;
+            end loop;
+         end;
+      end loop;
 
       Error_Count := Errors;
    end Check;
