@@ -22,6 +22,7 @@ package Kurt.Lexer is
       Tok_Label,       --  §7.9 loop/block label `'name` (name in Lexeme)
       Tok_Hash_Wild,   --  #wild#  (§3.6, single indivisible token)
       Tok_Hash,        --  #       (§5.10 binding pattern `name # sub`)
+      Tok_Asm,         --  asm { … } raw instruction body (§6.11, lexeme=body)
       --  Keywords (§3.3.1)
       Kw_Fn,
       Kw_Return,

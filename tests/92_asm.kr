@@ -1,0 +1,17 @@
+// §6.11 inline `asm { ... }` (operand-less, emitted verbatim into the
+// instruction stream). Here the asm loads the return register and returns,
+// so the program exits with 7. The `with { ... }` operand form is rejected
+// by the bootstrap (negative compile check).
+fn seven() -> ui1 {
+    airside {
+        asm {
+            mov w0, #7
+            ret
+        }
+    }
+    return 0;
+}
+
+fn main() -> ui1 {
+    return seven();
+}

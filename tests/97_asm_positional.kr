@@ -1,0 +1,25 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+fn main() -> ui1 {
+    // §6.11 positional: anonymous in() / in() -> indices 0,1; body uses '0/'1
+    mut s: si4 = 0;
+    airside {
+        asm {
+            add '0, '0, '1
+        } with {
+            in('0) = 10;        // explicit index 0
+            in('1) = 32;        // explicit index 1
+            out('0) -> s;       // 10 + 32 = 42
+        }
+    }
+    // §6.11 '? sequential + '(expr) immediate
+    mut t: si4 = 0;
+    airside {
+        asm {
+            mov '?, '(3 << 4)    // '? -> index0 reg; '(3<<4) -> #48
+        } with {
+            out() -> t;          // anonymous out index 0
+        }
+    }
+    airside { posix::printf("s=%d t=%d\n\0".ptr, s, t); }   // 42 48
+    return 0;
+}

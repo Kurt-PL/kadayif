@@ -417,6 +417,16 @@ package body Kurt.Mono is
             R.Fn_Form  := S.Fn_Form;
          when S_Trap =>
             null;   --  §7.10: no fields to copy
+         when S_Asm =>
+            R.Asm_Body      := S.Asm_Body;   --  §6.11 raw body
+            R.Asm_In_Regs   := S.Asm_In_Regs;
+            R.Asm_Out_Regs  := S.Asm_Out_Regs;
+            R.Asm_Out_Names := S.Asm_Out_Names;
+            R.Asm_Clobbers  := S.Asm_Clobbers;
+            for I in S.Asm_In_Exprs.First_Index ..
+                     S.Asm_In_Exprs.Last_Index loop
+               R.Asm_In_Exprs.Append (C (S.Asm_In_Exprs.Element (I)));
+            end loop;
       end case;
       return R;
    end Copy_Stmt;
@@ -763,7 +773,7 @@ package body Kurt.Mono is
                      end if;
                      Scan_Stmts (S.X_Else, Used, Bound);
                   when S_Break     => Scan_Expr (S.Brk_Val, Used, Bound);
-                  when S_Continue | S_Fence | S_Trap => null;
+                  when S_Continue | S_Fence | S_Trap | S_Asm => null;
                end case;
             end;
          end loop;
@@ -1178,7 +1188,7 @@ package body Kurt.Mono is
                Visit_Expr (S.Brk_Val);
             when S_Express =>
                Visit_Expr (S.Xp_Val);
-            when S_Continue | S_Fence | S_Trap =>
+            when S_Continue | S_Fence | S_Trap | S_Asm =>
                null;
          end case;
       end Visit_Stmt;

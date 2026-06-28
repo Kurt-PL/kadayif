@@ -425,7 +425,8 @@ package Kurt.Parser is
       S_Continue,       --  "continue" ";"
       S_Express,        --  "express" expr ";"   (§7.8 block exit-with-value)
       S_Fence,          --  "@guard"/"@volatile" [".start"|".end"] (§8.5.3)
-      S_Trap);          --  "@trap" ";"   termination primitive (§7.10)
+      S_Trap,           --  "@trap" ";"   termination primitive (§7.10)
+      S_Asm);           --  "asm" "{" … "}"   inline assembly (§6.11)
 
    --  §8.5.3 fence forms: forward boundary, backward boundary, or the
    --  fully ordered standalone form.
@@ -517,6 +518,21 @@ package Kurt.Parser is
          when S_Trap =>
             --  §7.10 `@trap;` — diverging termination primitive; no fields.
             null;
+         when S_Asm =>
+            --  §6.11 inline assembly — the raw instruction body, emitted
+            --  verbatim, plus optional `with { … }` operand constraints.
+            --  Bootstrap: operand targets are concrete registers (e.g. x0),
+            --  referenced directly in the body. `in(REG)=e` loads e into REG
+            --  before the body; `out(REG)->name` stores REG into the place
+            --  after; `io(REG)=e->name` does both; `clobber(...)` is recorded
+            --  but unused (the non-optimizing codegen keeps no live registers
+            --  across statements).
+            Asm_Body      : SU.Unbounded_String;
+            Asm_In_Regs   : Path_Segments.Vector;
+            Asm_In_Exprs  : Expr_Vectors.Vector;
+            Asm_Out_Regs  : Path_Segments.Vector;
+            Asm_Out_Names : Path_Segments.Vector;
+            Asm_Clobbers  : Path_Segments.Vector;
       end case;
    end record;
 
@@ -818,6 +834,9 @@ package Kurt.Parser is
       --  §10.5 `@path "base" as name;` search-path prefixes (parallel).
       Path_Names : Path_Segments.Vector;
       Path_Bases : Path_Segments.Vector;
+      --  §5.13 top-level `asm { … }` blocks, emitted verbatim into the text
+      --  section (raw bodies, in declaration order).
+      Top_Asm : Path_Segments.Vector;
    end record;
 
    --  §10.2 merge an imported unit's declarations into Into (appends every

@@ -1,0 +1,15 @@
+// §5.13 top-level asm: define a naked subroutine in assembly, declare it via
+// @dyn, and call it from Kurt.
+asm {
+.global _asm_answer
+.align 2
+_asm_answer:
+    mov w0, #55
+    ret
+}
+
+@dyn as ext { fn asm_answer() -> ui1; }
+
+fn main() -> ui1 {
+    airside { return ext::asm_answer(); }    // 55
+}

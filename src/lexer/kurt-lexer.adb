@@ -1060,16 +1060,64 @@ package body Kurt.Lexer is
                   return T;
                end;
             end if;
-            return Scan_Ident (L);
+            declare
+               T : Token := Scan_Ident (L);
+            begin
+               --  §6.11 `asm { … }`: capture the brace body verbatim. `asm`
+               --  followed (on the same line) by `{` opens a raw block; any
+               --  other `asm` stays an ordinary identifier.
+               if T.Kind = Tok_Ident
+                 and then SU.To_String (T.Lexeme) = "asm"
+               then
+                  declare
+                     Save_Pos : constant Positive := L.Pos;
+                     Save_Col : constant Positive := L.Col;
+                  begin
+                     while Peek (L) = ' ' or else Peek (L) = L1.HT loop
+                        Advance (L);
+                     end loop;
+                     if Peek (L) = '{' then
+                        Advance (L);   --  consume '{'
+                        declare
+                           Depth : Natural := 1;
+                           Buf   : SU.Unbounded_String;
+                        begin
+                           while not At_End (L) and then Depth > 0 loop
+                              if Peek (L) = '{' then
+                                 Depth := Depth + 1;
+                              elsif Peek (L) = '}' then
+                                 Depth := Depth - 1;
+                                 exit when Depth = 0;
+                              end if;
+                              SU.Append (Buf, Peek (L));
+                              Advance (L);
+                           end loop;
+                           if Peek (L) = '}' then
+                              Advance (L);
+                           end if;
+                           T.Kind   := Tok_Asm;
+                           T.Lexeme := Buf;
+                        end;
+                     else
+                        L.Pos := Save_Pos;   --  not an asm block
+                        L.Col := Save_Col;
+                     end if;
+                  end;
+               end if;
+               return T;
+            end;
          elsif CH.Is_Digit (C) then
             return Scan_Int (L);
          elsif C = '"' then
             return Scan_String (L);
          elsif C = ''' then
-            --  §7.9: disambiguate a label `'name` from a character literal
-            --  `'c'`. It is a label when an identifier follows the quote and
-            --  is not closed by another quote (a char literal always is).
-            if Is_Ident_Start (Peek (L, 1)) then
+            --  §7.9 / §6.11: disambiguate a label / asm positional operand
+            --  (`'name`, `'0`) from a character literal `'c'`. It is a label
+            --  when an identifier or digit follows the quote and is not closed
+            --  by another quote (a char literal always is).
+            if Is_Ident_Start (Peek (L, 1))
+              or else Peek (L, 1) in '0' .. '9'
+            then
                declare
                   K : Positive := 2;
                begin

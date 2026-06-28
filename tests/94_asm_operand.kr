@@ -1,0 +1,36 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §6.11 asm with operands: add two Kurt values via asm and read the result.
+fn add_via_asm(a: si4, b: si4) -> si4 {
+    mut r: si4 = 0;
+    airside {
+        asm {
+            add w2, w0, w1
+        } with {
+            in(w0) = a;
+            in(w1) = b;
+            out(w2) -> r;
+        }
+    }
+    return r;
+}
+
+// io: increment in place through a register.
+fn inc(x: si4) -> si4 {
+    mut v: si4 = x;
+    airside {
+        asm {
+            add w3, w3, #1
+        } with {
+            io(w3) = v -> v;
+        }
+    }
+    return v;
+}
+
+fn main() -> ui1 {
+    let s: si4 = add_via_asm(30, 12);    // 42
+    let t: si4 = inc(99);                // 100
+    airside { posix::printf("s=%d t=%d\n\0".ptr, s, t); }
+    return 0;
+}

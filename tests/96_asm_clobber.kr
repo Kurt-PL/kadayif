@@ -1,0 +1,30 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+fn f(x: si4) -> si4 { return x * 2; }
+fn g(x: si4) -> si4 { return x + 100; }
+
+// §6.11 clobber + operand safety.
+//  * Both inputs are non-trivial calls whose lowering uses scratch registers;
+//    they must survive each other's evaluation (inputs spill to temps first).
+//  * `clobber(x12, x13)` declares the body destroys x12/x13: the codegen saves
+//    them before the body and restores them after, and allocates the logical
+//    operands AROUND x12/x13 so they never collide. The body's `mov x12, ...`
+//    therefore cannot corrupt an operand, and x12 is preserved across.
+fn main() -> ui1 {
+    mut r: si4 = 0;
+    let p: si4 = 3;
+    let q: si4 = 5;
+    airside {
+        asm {
+            mov x12, #777
+            mov x13, #888
+            sub 'r, 'a, 'b
+        } with {
+            in('a) = f(p) + 1;      // 7
+            in('b) = g(q);          // 105
+            out('r) -> r;           // -98
+            clobber(x12, x13);
+        }
+    }
+    airside { posix::printf("r=%d\n\0".ptr, r); }    // -98
+    return 0;
+}

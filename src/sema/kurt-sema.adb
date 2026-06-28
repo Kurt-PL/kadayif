@@ -3548,6 +3548,69 @@ package body Kurt.Sema is
                --  §7.10/§7.11: `@trap;` is a diverging expression; it
                --  produces no value and imposes no type obligation.
                null;
+            when S_Asm =>
+               --  §6.11 inline assembly is opaque to the type system, but its
+               --  `in`/`io` operand expressions are ordinary Kurt expressions
+               --  (inferred so codegen has their types) and each `out`/`io`
+               --  target shall be an existing binding (a place).
+               --  §6.11: `asm` is permitted only inside an airside region.
+               if In_Airside = 0 then
+                  Error ("inline `asm` is permitted only inside an `airside` "
+                         & "block or `airside fn` body (spec 6.11)");
+               end if;
+               for I in S.Asm_In_Exprs.First_Index ..
+                        S.Asm_In_Exprs.Last_Index loop
+                  declare
+                     T : constant Type_Access :=
+                       Infer (S.Asm_In_Exprs.Element (I), null);
+                     pragma Unreferenced (T);
+                  begin null; end;
+               end loop;
+               for I in S.Asm_Out_Names.First_Index ..
+                        S.Asm_Out_Names.Last_Index loop
+                  if Lookup_Scope
+                       (SU.To_String (S.Asm_Out_Names.Element (I))) = null
+                  then
+                     Error ("asm `out` target '"
+                            & SU.To_String (S.Asm_Out_Names.Element (I))
+                            & "' is not a binding");
+                  end if;
+               end loop;
+               --  §6.11: overlap between a (resource-mode) operand target and
+               --  a `clobber` entry, and duplicate resource targets, shall not
+               --  appear. Logical/positional targets (`'…`) get impl-chosen
+               --  registers and cannot textually overlap a named clobber.
+               declare
+                  function In_Clobbers (R : String) return Boolean is
+                  begin
+                     for K in S.Asm_Clobbers.First_Index ..
+                              S.Asm_Clobbers.Last_Index loop
+                        if SU.To_String (S.Asm_Clobbers.Element (K)) = R then
+                           return True;
+                        end if;
+                     end loop;
+                     return False;
+                  end In_Clobbers;
+
+                  procedure Check_Target (R : String) is
+                  begin
+                     if R'Length > 0 and then R (R'First) /= '''
+                       and then In_Clobbers (R)
+                     then
+                        Error ("asm operand target '" & R & "' overlaps a "
+                               & "`clobber` entry (spec 6.11)");
+                     end if;
+                  end Check_Target;
+               begin
+                  for I in S.Asm_In_Regs.First_Index ..
+                           S.Asm_In_Regs.Last_Index loop
+                     Check_Target (SU.To_String (S.Asm_In_Regs.Element (I)));
+                  end loop;
+                  for I in S.Asm_Out_Regs.First_Index ..
+                           S.Asm_Out_Regs.Last_Index loop
+                     Check_Target (SU.To_String (S.Asm_Out_Regs.Element (I)));
+                  end loop;
+               end;
          end case;
       end Check_Stmt;
 
@@ -3923,7 +3986,8 @@ package body Kurt.Sema is
                   --  break/express it never transfers control onward.
                   return Cond_Is_True (S.W_Cond)
                     and then not Has_Escape (S.W_Body);
-               when S_Let | S_Mut | S_Assign | S_Fence | S_Extract =>
+               when S_Let | S_Mut | S_Assign | S_Fence | S_Extract
+                  | S_Asm =>
                   return False;
             end case;
          end Stmt_Diverges;

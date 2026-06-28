@@ -14,7 +14,7 @@ fn main() -> ui1 {
     let sz: uaddr = test_pad@size;
     let magic_off: uaddr = test_pad@offset(magic);
     let version_off: uaddr = test_pad@offset(version);
-    
+
     // We cannot access s.? directly (which causes a translation failure).
     // Instead, we inspect the padding memory at offset 4 via raw pointer
     // arithmetic — a `&raw` dereference, which is airside-only (§2.6).

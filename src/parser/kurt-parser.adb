@@ -1734,8 +1734,16 @@ package body Kurt.Parser is
       return E;
    end Parse_Closure;
 
+   --  Natural to string with no leading space.
+   function Trim_Img (N : Natural) return String is
+      Raw : constant String := Natural'Image (N);
+   begin
+      return Raw (Raw'First + 1 .. Raw'Last);
+   end Trim_Img;
+
    function Parse_Stmt (C : in out Cursor) return Stmt_Access is
       S : Stmt_Access;
+      Asm_Pos_Idx : Natural := 0;   --  §6.11 anonymous-operand index counter
    begin
       case C.Cur.Kind is
          when Kw_Return =>
@@ -1759,6 +1767,112 @@ package body Kurt.Parser is
             Advance (C);
             S := new Stmt_Node (Kind => S_Trap);
             Expect (C, Punct_Semi, "';'");
+            return S;
+
+         when Tok_Asm =>
+            --  §6.11 inline assembly. The lexer captured the brace body
+            --  verbatim. An optional `with { in/out/io/clobber; ... }` clause
+            --  binds Kurt values to concrete registers (bootstrap subset).
+            S := new Stmt_Node (Kind => S_Asm);
+            S.Asm_Body := C.Cur.Lexeme;
+            Advance (C);
+            if C.Cur.Kind = Kw_With then
+               Advance (C);
+               Expect (C, Punct_LBrace, "'{' after `with` in asm");
+               --  §6.11 next positional index for an anonymous `in()`/`out()`.
+               Asm_Pos_Idx := 0;
+               while C.Cur.Kind /= Punct_RBrace
+                 and then C.Cur.Kind /= Tok_EOF
+               loop
+                  declare
+                     KS : constant String :=
+                       (if C.Cur.Kind = Tok_Ident
+                        then SU.To_String (C.Cur.Lexeme) else "");
+                  begin
+                     if KS = "clobber" then
+                        Advance (C);
+                        Expect (C, Punct_LParen, "'(' after clobber");
+                        while C.Cur.Kind /= Punct_RParen
+                          and then C.Cur.Kind /= Tok_EOF
+                        loop
+                           if C.Cur.Kind = Tok_Ident then
+                              S.Asm_Clobbers.Append (C.Cur.Lexeme);
+                           end if;
+                           Advance (C);   --  register name or comma
+                        end loop;
+                        Expect (C, Punct_RParen, "')'");
+                     elsif KS = "in" or else KS = "out" or else KS = "io" then
+                        Advance (C);
+                        Expect (C, Punct_LParen, "'(' after in/out/io");
+                        declare
+                           --  §6.11 operand target — one of:
+                           --    `(x0)`    concrete register (resource mode),
+                           --    `('name)` logical operand (kept with `'`),
+                           --    `('N)`    explicit positional index,
+                           --    `()`      anonymous → next positional index.
+                           --  Logical / positional targets carry a leading `'`
+                           --  so codegen substitutes them in the body.
+                           Reg : SU.Unbounded_String;
+                        begin
+                           if C.Cur.Kind = Punct_RParen then
+                              Reg := SU.To_Unbounded_String
+                                ("'" & Trim_Img (Asm_Pos_Idx));
+                              Asm_Pos_Idx := Asm_Pos_Idx + 1;
+                           elsif C.Cur.Kind = Tok_Label then
+                              Reg := SU.To_Unbounded_String
+                                ("'" & SU.To_String (C.Cur.Lexeme));
+                              --  Explicit positional `'N` bumps the counter.
+                              declare
+                                 LX : constant String :=
+                                   SU.To_String (C.Cur.Lexeme);
+                                 N  : Natural := 0;
+                                 OK : Boolean := LX'Length > 0;
+                              begin
+                                 for J in LX'Range loop
+                                    if LX (J) in '0' .. '9' then
+                                       N := N * 10 + (Character'Pos (LX (J))
+                                                      - Character'Pos ('0'));
+                                    else
+                                       OK := False;
+                                    end if;
+                                 end loop;
+                                 if OK and then N + 1 > Asm_Pos_Idx then
+                                    Asm_Pos_Idx := N + 1;
+                                 end if;
+                              end;
+                              Advance (C);
+                           else
+                              Reg := Take_Ident (C, "asm operand register");
+                           end if;
+                           Expect (C, Punct_RParen, "')'");
+                           if KS = "in" or else KS = "io" then
+                              Expect (C, Punct_Eq, "'=' in asm in/io operand");
+                              S.Asm_In_Regs.Append (Reg);
+                              S.Asm_In_Exprs.Append (Parse_Expr (C));
+                           end if;
+                           if KS = "out" or else KS = "io" then
+                              Expect (C, Punct_Arrow,
+                                      "'->' in asm out/io operand");
+                              S.Asm_Out_Regs.Append (Reg);
+                              S.Asm_Out_Names.Append
+                                (Take_Ident (C, "asm output binding"));
+                           end if;
+                        end;
+                     else
+                        raise Syntax_Error with
+                          "expected in/out/io/clobber in asm `with` at line"
+                          & Positive'Image (C.Cur.Line);
+                     end if;
+                     if C.Cur.Kind = Punct_Semi then
+                        Advance (C);
+                     end if;
+                  end;
+               end loop;
+               Expect (C, Punct_RBrace, "'}' to close asm `with`");
+            end if;
+            if C.Cur.Kind = Punct_Semi then
+               Advance (C);
+            end if;
             return S;
 
          when Dir_At_Guard | Dir_At_Volatile =>
@@ -3212,6 +3326,7 @@ package body Kurt.Parser is
       Into.Statics.Append (From.Statics);
       Into.Gen_Methods.Append (From.Gen_Methods);
       Into.Gen_Fns.Append (From.Gen_Fns);
+      Into.Top_Asm.Append (From.Top_Asm);
       --  §7.10.1 at most one trap handler across the translation unit.
       if From.Has_Trap_Handler then
          if Into.Has_Trap_Handler then
@@ -3228,6 +3343,12 @@ package body Kurt.Parser is
    is
       C : Cursor := (Lex => Lex'Unchecked_Access, others => <>);
       U : Translation_Unit;
+      --  §10.6 `module name { … }` nesting depth. A module is a transparent
+      --  namespace wrapper in the bootstrap: its declarations are flattened
+      --  into the unit (qualified `name::item` access resolves by last
+      --  segment, as for `@dyn` aliases). `super`/`srcroot` path roots and
+      --  strict module-scoped name resolution are deferred.
+      Module_Depth : Natural := 0;
    begin
       Advance (C);
       while C.Cur.Kind /= Tok_EOF loop
@@ -3259,6 +3380,19 @@ package body Kurt.Parser is
                elsif Peek_Tok (C).Kind = Kw_Const then
                   Advance (C);
                   U.Consts.Append (Parse_Const_Decl (C));
+               elsif Peek_Tok (C).Kind = Tok_Ident
+                 and then SU.To_String (Peek_Tok (C).Lexeme) = "module"
+               then
+                  --  §10.6 `pub module name { … }` (flattened).
+                  Advance (C);   --  `pub`
+                  Advance (C);   --  `module`
+                  declare
+                     Nm : constant SU.Unbounded_String :=
+                       Take_Ident (C, "module name");
+                     pragma Unreferenced (Nm);
+                  begin null; end;
+                  Expect (C, Punct_LBrace, "'{' to open module body");
+                  Module_Depth := Module_Depth + 1;
                elsif Peek_Tok (C).Kind = Tok_Ident
                  and then SU.To_String (Peek_Tok (C).Lexeme) = "static"
                then
@@ -3336,6 +3470,14 @@ package body Kurt.Parser is
                Advance (C);
                U.Has_Trap_Handler := True;
                Parse_Block_Stmts (C, U.Trap_Handler);
+            when Tok_Asm =>
+               --  §5.13 top-level inline assembly — emitted verbatim into the
+               --  text section. Operand-less only (bootstrap).
+               U.Top_Asm.Append (C.Cur.Lexeme);
+               Advance (C);
+               if C.Cur.Kind = Punct_Semi then
+                  Advance (C);
+               end if;
             when Kw_Struct =>
                U.Structs.Append (Parse_Struct_Decl (C));
             when Kw_Enum =>
@@ -3344,11 +3486,31 @@ package body Kurt.Parser is
                Parse_Impl_Decl (C, U.Fns, U.Trait_Impls, U.Gen_Methods);
             when Kw_Trait =>
                Parse_Trait_Decl (C, U.Traits);
+            when Punct_RBrace =>
+               --  §10.6 closing brace of a `module` body (flattened).
+               if Module_Depth = 0 then
+                  raise Syntax_Error with
+                    "unexpected '}' at top level at line"
+                    & Positive'Image (C.Cur.Line);
+               end if;
+               Module_Depth := Module_Depth - 1;
+               Advance (C);
             when Tok_Ident =>
                --  §5.4 `static [mut] NAME: T = expr ;` (the word
                --  `static` is not a bootstrap keyword).
                if SU.To_String (C.Cur.Lexeme) = "static" then
                   U.Statics.Append (Parse_Static_Decl (C));
+               --  §10.6 `module name { … }` — a transparent namespace wrapper;
+               --  its declarations flatten into the unit. `pub module` too.
+               elsif SU.To_String (C.Cur.Lexeme) = "module" then
+                  Advance (C);   --  `module`
+                  declare
+                     Nm : constant SU.Unbounded_String :=
+                       Take_Ident (C, "module name");
+                     pragma Unreferenced (Nm);
+                  begin null; end;
+                  Expect (C, Punct_LBrace, "'{' to open module body");
+                  Module_Depth := Module_Depth + 1;
                --  §5.12.2 `use path;` — unqualified name introduction. In the
                --  single-unit bootstrap every declaration is already in one
                --  flat scope, so a `use` is consumed and has no effect (it
@@ -3400,6 +3562,10 @@ package body Kurt.Parser is
                  & " at line" & Positive'Image (C.Cur.Line);
          end case;
       end loop;
+      if Module_Depth > 0 then
+         raise Syntax_Error with
+           "unterminated `module` (missing '}', spec 10.6)";
+      end if;
       return U;
    end Parse_Unit;
 

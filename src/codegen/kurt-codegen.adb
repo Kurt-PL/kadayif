@@ -168,7 +168,7 @@ package body Kurt.Codegen is
             end loop;
          when S_Break =>
             Collect_Strings_In_Expr (S.Brk_Val, Pool);
-         when S_Continue | S_Fence | S_Trap =>
+         when S_Continue | S_Fence | S_Trap | S_Asm =>
             null;
          when S_Express =>
             Collect_Strings_In_Expr (S.Xp_Val, Pool);
@@ -1314,6 +1314,25 @@ package body Kurt.Codegen is
       Emit_String_Pool (F, Pool);
 
       IO.Put_Line (F, ".section __TEXT,__text,regular,pure_instructions");
+
+      --  §5.13 top-level `asm { … }` blocks, emitted verbatim into the text
+      --  section (declaration order, before the translated subroutines).
+      for I in U.Top_Asm.First_Index .. U.Top_Asm.Last_Index loop
+         declare
+            Body_S : constant String := SU.To_String (U.Top_Asm.Element (I));
+            Start  : Integer := Body_S'First;
+         begin
+            for K in Body_S'Range loop
+               if Body_S (K) = ASCII.LF then
+                  IO.Put_Line (F, Body_S (Start .. K - 1));
+                  Start := K + 1;
+               end if;
+            end loop;
+            if Start <= Body_S'Last then
+               IO.Put_Line (F, Body_S (Start .. Body_S'Last));
+            end if;
+         end;
+      end loop;
 
       declare
          Str_Base : Natural := 0;

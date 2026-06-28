@@ -1,0 +1,20 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+// §6.11 logical operands: 'a, 'b, 'r are compiler-allocated registers,
+// substituted into the body text.
+fn mul(a: si4, b: si4) -> si4 {
+    mut r: si4 = 0;
+    airside {
+        asm {
+            mul 'r, 'a, 'b
+        } with {
+            in('a) = a;
+            in('b) = b;
+            out('r) -> r;
+        }
+    }
+    return r;
+}
+fn main() -> ui1 {
+    airside { posix::printf("r=%d\n\0".ptr, mul(6, 7)); }   // 42
+    return 0;
+}
