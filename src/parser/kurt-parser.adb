@@ -951,6 +951,19 @@ package body Kurt.Parser is
             Advance (C);
             while C.Cur.Kind = Punct_ColonColon loop
                Advance (C);
+               --  §6.1.5 wild construction `Enum::#wild#`: a value of the
+               --  enum's implicit `#wild#` (for enums without a declared one).
+               if C.Cur.Kind = Tok_Hash_Wild then
+                  Advance (C);
+                  declare
+                     W : constant Expr_Access :=
+                       new Expr_Node (Kind => E_Variant_New);
+                  begin
+                     W.VN_Enum    := E.Segments.First_Element;
+                     W.VN_Variant := SU.To_Unbounded_String ("#wild#");
+                     return W;
+                  end;
+               end if;
                if C.Cur.Kind /= Tok_Ident then
                   raise Syntax_Error with
                     "expected identifier after '::', got " & Image (C.Cur)
@@ -1443,6 +1456,31 @@ package body Kurt.Parser is
                   Left := Next;
                end;
 
+            when Punct_ColonColon =>
+               --  §6.1.1 qualified path root `(T as Trait)::item…`: the left
+               --  operand is a parenthesized `(T as Trait)` cast. Desugar to
+               --  the path `T::item…` — the trait selects the impl namespace,
+               --  and in the bootstrap an associated item mangles identically
+               --  to `T$item`, so resolution is unambiguous. (The `T`-impl-
+               --  `Trait` relationship is not separately re-validated here.)
+               exit when Left.Kind /= E_Cast
+                 or else not Left.Was_Paren
+                 or else Left.Cast_Bang or else Left.Cast_Disc
+                 or else Left.Cast_Inner = null
+                 or else Left.Cast_Inner.Kind /= E_Path;
+               declare
+                  NP : constant Expr_Access := new Expr_Node (Kind => E_Path);
+               begin
+                  NP.Segments := Left.Cast_Inner.Segments;   --  T
+                  loop
+                     Advance (C);   --  '::'
+                     NP.Segments.Append
+                       (Take_Ident (C, "name after '::' in qualified path"));
+                     exit when C.Cur.Kind /= Punct_ColonColon;
+                  end loop;
+                  Left := NP;
+               end;
+
             when others =>
                exit;
          end case;
@@ -1675,7 +1713,12 @@ package body Kurt.Parser is
    begin
       Expect (C, Punct_LBrace, "'{'");
       while C.Cur.Kind /= Punct_RBrace and then C.Cur.Kind /= Tok_EOF loop
-         Stmts.Append (Parse_Stmt (C));
+         --  §7.1 null statement: a bare `;` performs no operations.
+         if C.Cur.Kind = Punct_Semi then
+            Advance (C);
+         else
+            Stmts.Append (Parse_Stmt (C));
+         end if;
       end loop;
       Expect (C, Punct_RBrace, "'}'");
    end Parse_Block_Stmts;
@@ -1877,8 +1920,8 @@ package body Kurt.Parser is
 
          when Dir_At_Guard | Dir_At_Volatile =>
             --  §8.5.3 ordering fences: `@guard[.start|.end]`,
-            --  `@volatile[.start|.end]`. Fence directives are statements;
-            --  no terminating ';' is required (one is tolerated).
+            --  `@volatile[.start|.end]`. Each fence is a statement terminated
+            --  by a mandatory ';' (part of the grammar, spec 8.5.3).
             S := new Stmt_Node (Kind => S_Fence);
             S.Fn_Guard := C.Cur.Kind = Dir_At_Guard;
             Advance (C);
@@ -1900,9 +1943,8 @@ package body Kurt.Parser is
                   end if;
                end;
             end if;
-            if C.Cur.Kind = Punct_Semi then
-               Advance (C);
-            end if;
+            Expect (C, Punct_Semi,
+              "';' after ordering fence (mandatory, spec 8.5.3)");
             return S;
 
          when Kw_Let =>

@@ -1,0 +1,13 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+// §6.1.1 associated functions: `Type::fn()` and qualified `(T as Trait)::fn()`
+trait Factory { fn build() -> si4; }
+struct widget { id: si4 }
+impl widget { fn origin() -> si4 { return 10; } }       // inherent assoc fn
+impl widget as Factory { fn build() -> si4 { return 32; } }
+fn main() -> ui1 {
+    let a: si4 = widget::origin();              // inherent  -> 10
+    let b: si4 = widget::build();               // trait assoc fn -> 32
+    let c: si4 = (widget as Factory)::build();  // qualified path root -> 32
+    airside { posix::printf("a=%d b=%d c=%d\n\0".ptr, a, b, c); }
+    return (a + b) as ui1;   // 42
+}

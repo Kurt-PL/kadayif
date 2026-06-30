@@ -585,7 +585,10 @@ begin
                         --  A void discriminant (§4.11.3) stores nothing.
                         if Kurt.Layout.Enum_Disc_Size (EN) > 0 then
                            Lower_Imm (F, 9,
-                             Kurt.Layout.Variant_Value (EN, VN), False);
+                             (if VN = "#wild#"
+                              then Kurt.Layout.Implicit_Wild_Value (EN)
+                              else Kurt.Layout.Variant_Value (EN, VN)),
+                             False);
                            Store_Sized
                              (Off, Kurt.Layout.Enum_Disc_Size (EN));
                         end if;

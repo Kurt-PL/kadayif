@@ -1,0 +1,13 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+trait Greet { fn hello(&self) -> si4; }
+struct dog { age: si4 }
+impl dog as Greet {
+    fn hello(&self) -> si4 { return self.age + 100; }
+}
+fn main() -> ui1 {
+    let d: dog = dog { age = 5 };
+    let r1: si4 = d.hello();             // plain
+    let r2: si4 = (d as Greet).hello();  // §6.2.3 qualified → dog$hello = 105
+    airside { posix::printf("r1=%d r2=%d\n\0".ptr, r1, r2); }
+    return 0;
+}

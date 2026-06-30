@@ -534,7 +534,7 @@ is
                                 or else Sizeof (Lhs_Ty) > 4;
    begin
       --  §4.3.3 floating-point comparison via the hardware `fcmp`, which
-      --  follows ISO/IEC/IEEE 60559:2020 (unordered → all relational false,
+      --  follows ISO/IEC 60559:2020 (unordered → all relational false,
       --  ordered-equal handles ±0). The Kurt deviations are patched on top:
       --    == reflexive over NaN (both-NaN → true);
       --    != false when both NaN;
@@ -1457,9 +1457,25 @@ begin
          end if;
 
       when E_Struct_Lit | E_Variant_New | E_Tuple_Lit | E_Array_Lit =>
-         raise Program_Error with
-           "codegen: a struct/variant/tuple/array literal is only supported "
-           & "as a let/mut initialiser in the bootstrap";
+         if E.Kind = E_Variant_New
+           and then SU.To_String (E.VN_Variant) = "#wild#"
+         then
+            --  §6.1.5 `Enum::#wild#` is a scalar discriminant value (like a
+            --  unit variant); load the implicit-wild discriminant.
+            declare
+               EN : constant String :=
+                 (if E.Sem_Ty /= null then SU.To_String (E.Sem_Ty.Name)
+                  else SU.To_String (E.VN_Enum));
+            begin
+               Lower_Imm (F, Target_Reg,
+                 Kurt.Layout.Implicit_Wild_Value (EN),
+                 Sizeof (E.Sem_Ty) > 4);
+            end;
+         else
+            raise Program_Error with
+              "codegen: a struct/variant/tuple/array literal is only "
+              & "supported as a let/mut initialiser in the bootstrap";
+         end if;
 
 
       when E_Dyn_Cast | E_Slice_Cast =>

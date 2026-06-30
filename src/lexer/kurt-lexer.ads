@@ -183,6 +183,11 @@ private
       --  §10.7 active translation-time flags, stored space-delimited and
       --  space-bracketed (" a b "), so membership is a substring test.
       Flags : SU.Unbounded_String := SU.To_Unbounded_String (" ");
+      --  §10.8 line-branch support. When a `@flag_if(...) body @` line branch
+      --  is taken, this holds the source position of the closing `@`; the
+      --  main token loop consumes that `@` (and skips any remaining line
+      --  branches of the chain) when lexing reaches it. Zero when inactive.
+      Line_Close : Natural := 0;
    end record;
 
 end Kurt.Lexer;

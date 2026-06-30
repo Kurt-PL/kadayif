@@ -702,6 +702,17 @@ package body Kurt.Sema is
          return False;
       end Type_Implements;
 
+      --  Is Nm the name of a declared trait?
+      function Is_Trait_Name (Nm : String) return Boolean is
+      begin
+         for I in U.Traits.First_Index .. U.Traits.Last_Index loop
+            if SU.To_String (U.Traits.Element (I).Name) = Nm then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Is_Trait_Name;
+
       --  §9.3 / §5.9: if generic parameter Gen carries a trait bound
       --  whose trait declares method M_Name, return its signature.
       procedure Find_Bound_Method
@@ -1119,6 +1130,54 @@ package body Kurt.Sema is
                --  a non-reference receiver is wrapped in `&`/`$` to match
                --  the self parameter; a reference receiver passes through).
                if E.C_Callee.Kind = E_Field then
+                  --  §6.2.3 qualified method invocation `(e as Trait).m(args)`:
+                  --  the receiver is a cast to a *trait* name. Validate that
+                  --  e's concrete type implements the trait and that the trait
+                  --  declares the method, then strip the cast so resolution
+                  --  proceeds against e's concrete type (the trait method is
+                  --  mangled identically to the inherent `Type$m`).
+                  if E.C_Callee.F_Recv.Kind = E_Cast
+                    and then not E.C_Callee.F_Recv.Cast_Bang
+                    and then not E.C_Callee.F_Recv.Cast_Disc
+                    and then E.C_Callee.F_Recv.Cast_Ty /= null
+                    and then E.C_Callee.F_Recv.Cast_Ty.Kind = T_Named
+                    and then Is_Trait_Name
+                               (SU.To_String (E.C_Callee.F_Recv.Cast_Ty.Name))
+                  then
+                     declare
+                        QTrait : constant String :=
+                          SU.To_String (E.C_Callee.F_Recv.Cast_Ty.Name);
+                        QInner : constant Expr_Access :=
+                          E.C_Callee.F_Recv.Cast_Inner;
+                        QMName : constant String :=
+                          SU.To_String (E.C_Callee.F_Name);
+                        QT  : constant Type_Access := Infer (QInner, null);
+                        QTT : constant Type_Access :=
+                          (if Is_Ref (QT) then QT.Target else QT);
+                        MSig : Fn_Header;
+                        MOK  : Boolean;
+                     begin
+                        if QTT /= null and then QTT.Kind = T_Named then
+                           if not Type_Implements
+                                    (SU.To_String (QTT.Name), QTrait)
+                           then
+                              Error ("type '" & SU.To_String (QTT.Name)
+                                     & "' does not implement trait '" & QTrait
+                                     & "' in qualified method `(e as " & QTrait
+                                     & ").` (spec 6.2.3)");
+                           else
+                              Lookup_Trait_Method (QTrait, QMName, MSig, MOK);
+                              if not MOK then
+                                 Error ("trait '" & QTrait
+                                        & "' has no method '" & QMName
+                                        & "' (spec 6.2.3)");
+                              end if;
+                           end if;
+                        end if;
+                        --  Strip the trait cast.
+                        E.C_Callee.F_Recv := QInner;
+                     end;
+                  end if;
                   declare
                      Recv : constant Expr_Access := E.C_Callee.F_Recv;
                      RT   : constant Type_Access := Infer (Recv, null);
@@ -1279,6 +1338,41 @@ package body Kurt.Sema is
                     and then not Callee.Segments.Is_Empty
                   then
                      Name := Callee.Segments.Last_Element;
+                     --  §6.1.1 associated subroutine `Type::fn(...)`: when the
+                     --  final segment names no free subroutine but `Type$fn`
+                     --  exists (Type = the preceding segment), resolve to the
+                     --  associated function. No receiver is prepended (an
+                     --  associated function has no `self`); a `self`-taking
+                     --  method invoked this way receives its receiver as the
+                     --  ordinary first argument.
+                     if Natural (Callee.Segments.Length) >= 2 then
+                        declare
+                           Last_S : constant String := SU.To_String (Name);
+                           Dummy  : Sig;
+                        begin
+                           if not Find_Sig (Last_S, Dummy) then
+                              declare
+                                 Tn : constant String := SU.To_String
+                                   (Callee.Segments.Element
+                                      (Callee.Segments.Last_Index - 1));
+                                 Mangled : constant String :=
+                                   Tn & "$" & Last_S;
+                              begin
+                                 if Find_Sig (Mangled, Dummy) then
+                                    declare
+                                       NP : constant Expr_Access :=
+                                         new Expr_Node (Kind => E_Path);
+                                    begin
+                                       NP.Segments.Append
+                                         (SU.To_Unbounded_String (Mangled));
+                                       E.C_Callee := NP;
+                                       Name := SU.To_Unbounded_String (Mangled);
+                                    end;
+                                 end if;
+                              end;
+                           end if;
+                        end;
+                     end if;
                   end if;
 
                   if Find_Sig (SU.To_String (Name), S) then
@@ -1765,7 +1859,18 @@ package body Kurt.Sema is
                   EN : constant String := SU.To_String (Conc.Name);
                   VN : constant String := SU.To_String (E.VN_Variant);
                begin
-                  if not Kurt.Layout.Is_Enum (EN) then
+                  if VN = "#wild#" then
+                     --  §6.1.5 wild construction. Permitted only on an enum
+                     --  that does not declare its own `#wild#` variant.
+                     if not Kurt.Layout.Is_Enum (EN) then
+                        Error ("unknown enum type '" & EN & "'");
+                     elsif Kurt.Layout.Has_Wild_Variant (EN) then
+                        Error ("`" & EN & "::#wild#` construction is not "
+                               & "permitted: '" & EN & "' declares a #wild# "
+                               & "variant (spec 6.1.5)");
+                     end if;
+                     E.Sem_Ty := Conc;
+                  elsif not Kurt.Layout.Is_Enum (EN) then
                      Error ("unknown enum type '" & EN & "'");
                   elsif not Kurt.Layout.Has_Variant (EN, VN) then
                      Error ("enum '" & EN & "' has no variant '" & VN & "'");

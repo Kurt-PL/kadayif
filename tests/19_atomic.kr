@@ -5,13 +5,13 @@ fn main() -> ui1 {
     airside {
         *(&atomic c) = 5;            // unordered atomic store (§8.5.2)
         *(&atomic c) += 7;           // atomic fetch-add -> 12
-        @volatile.start
+        @volatile.start;
         *(&guard c) -= 2;            // fully ordered fetch-sub -> 10
-        @volatile.end
-        @guard.start
+        @volatile.end;
+        @guard.start;
         *(&atomic c) |= 32;          // 10 | 32 = 42
-        @guard.end
-        @guard
+        @guard.end;
+        @guard;
         let v: ui4 = *(&guard c);    // load-acquire
         let u: ui4 = *(&atomic c);   // plain (single-copy) atomic load
         posix::printf("v=%u u=%u\n\0".ptr, v, u);

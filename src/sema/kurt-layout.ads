@@ -90,6 +90,10 @@ package Kurt.Layout is
    function Variant_Value
      (Enum_Name, Variant : String) return Long_Long_Integer;
 
+   --  §6.1.5 the discriminant for `Enum::#wild#` construction: the smallest
+   --  non-negative value not assigned to any declared variant.
+   function Implicit_Wild_Value (Enum_Name : String) return Long_Long_Integer;
+
    --  Number of variants, and the Index-th variant's name (1-based),
    --  for exhaustiveness checking.
    function Variant_Count (Enum_Name : String) return Natural;

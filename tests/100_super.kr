@@ -1,0 +1,11 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+fn root_fn() -> si4 { return 42; }
+module a {
+    module b {
+        pub fn deep() -> si4 { return super::super::root_fn(); }
+    }
+}
+fn main() -> ui1 {
+    airside { posix::printf("r=%d\n\0".ptr, a::b::deep()); }   // 42
+    return 0;
+}

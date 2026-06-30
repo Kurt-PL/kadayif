@@ -978,12 +978,136 @@ package body Kurt.Lexer is
       end;
    end Read_Paren_Ident;
 
+   --  §10.8 line branch: is `@` the final non-whitespace character on the
+   --  current line (from L.Pos onward)? That marks a `… @` line branch.
+   function Cur_Line_Ends_With_At (L : Lexer) return Boolean is
+      P        : Natural := L.Pos;
+      Last_NWS : Natural := 0;
+      Len      : constant Natural := SU.Length (L.Src);
+   begin
+      while P <= Len and then SU.Element (L.Src, P) /= ASCII.LF loop
+         if SU.Element (L.Src, P) /= ' '
+           and then SU.Element (L.Src, P) /= ASCII.HT
+         then
+            Last_NWS := P;
+         end if;
+         P := P + 1;
+      end loop;
+      return Last_NWS /= 0 and then SU.Element (L.Src, Last_NWS) = '@';
+   end Cur_Line_Ends_With_At;
+
+   --  Source position of that closing `@` (precondition: the line ends with
+   --  one, per Cur_Line_Ends_With_At).
+   function Find_Line_Close (L : Lexer) return Positive is
+      P        : Natural := L.Pos;
+      Last_NWS : Natural := L.Pos;
+      Len      : constant Natural := SU.Length (L.Src);
+   begin
+      while P <= Len and then SU.Element (L.Src, P) /= ASCII.LF loop
+         if SU.Element (L.Src, P) /= ' '
+           and then SU.Element (L.Src, P) /= ASCII.HT
+         then
+            Last_NWS := P;
+         end if;
+         P := P + 1;
+      end loop;
+      return Last_NWS;
+   end Find_Line_Close;
+
+   --  §10.8 an all-line-branch `@flag_if` chain. `First_Cond` is the already
+   --  evaluated condition of the first branch; L.Pos sits just after its
+   --  `(expr)`. On return either L.Line_Close marks the taken branch's closing
+   --  `@` (and L.Pos is at the branch body), or the whole chain was skipped.
+   procedure Enter_Line_Chain (L : in out Lexer; First_Cond : Boolean) is
+      Cond : Boolean := First_Cond;
+   begin
+      loop
+         if Cond then
+            L.Line_Close := Find_Line_Close (L);
+            return;
+         end if;
+         Skip_Line (L);   --  skip this inactive line branch (body + `@` + LF)
+         declare
+            D : constant Flag_Dir := Peek_Line_Directive (L);
+         begin
+            case D is
+               when FD_None =>
+                  return;                  --  chain ended
+               when FD_Endif =>
+                  Skip_Line (L);           --  tolerate a stray endif
+                  return;
+               when FD_Else =>
+                  if not Cur_Line_Ends_With_At (L) then
+                     raise Translation_Failure with
+                       "mixed line/block `@flag` chain is not supported in "
+                       & "the bootstrap (line `@flag_if` then block "
+                       & "`@flag_else`)";
+                  end if;
+                  Cond := True;
+               when FD_Else_If =>
+                  declare
+                     C2 : constant Boolean := Read_Paren_Cond (L);
+                  begin
+                     if not Cur_Line_Ends_With_At (L) then
+                        raise Translation_Failure with
+                          "mixed line/block `@flag` chain is not supported "
+                          & "in the bootstrap";
+                     end if;
+                     Cond := C2;
+                  end;
+               when FD_If =>
+                  return;                  --  a fresh chain; stop here
+            end case;
+         end;
+      end loop;
+   end Enter_Line_Chain;
+
+   --  After a taken line branch's body, consume its closing `@` and skip any
+   --  remaining (inactive) line branches of the chain.
+   procedure Skip_Line_Chain_Rest (L : in out Lexer) is
+   begin
+      if Peek (L) = '@' then Advance (L); end if;
+      Skip_Line (L);                       --  to and past the LF
+      loop
+         declare
+            Save : constant Positive := L.Pos;
+            D    : constant Flag_Dir := Peek_Line_Directive (L);
+         begin
+            case D is
+               when FD_Else | FD_Else_If =>
+                  if D = FD_Else_If then
+                     declare
+                        Ig : constant Boolean := Read_Paren_Cond (L);
+                        pragma Unreferenced (Ig);
+                     begin null; end;
+                  end if;
+                  if not Cur_Line_Ends_With_At (L) then
+                     raise Translation_Failure with
+                       "mixed line/block `@flag` chain is not supported "
+                       & "in the bootstrap";
+                  end if;
+                  Skip_Line (L);           --  skip this inactive else branch
+               when FD_Endif =>
+                  Skip_Line (L);           --  tolerate a stray endif
+                  return;
+               when others =>
+                  L.Pos := Save;           --  chain ended; lex this line
+                  return;
+            end case;
+         end;
+      end loop;
+   end Skip_Line_Chain_Rest;
+
    --  Handle a `@flag_if` chain at L.Pos (just after the keyword). On return
    --  L.Pos sits at the start of the taken branch's body, or past the whole
    --  chain if no branch is taken.
    procedure Enter_Flag_If (L : in out Lexer) is
       Cond : Boolean := Read_Paren_Cond (L);
    begin
+      if Cur_Line_Ends_With_At (L) then    --  §10.8 line-branch chain
+         Enter_Line_Chain (L, Cond);
+         return;
+      end if;
       loop
          if Cond then
             Skip_Line (L);   --  step past the directive line into the body
@@ -1010,6 +1134,14 @@ package body Kurt.Lexer is
    function Next_Token (L : in out Lexer) return Token is
    begin
       Skip_Trivia (L);
+
+      --  §10.8 the active line branch's body has ended at its closing `@`;
+      --  consume it and skip the remaining branches of the chain.
+      if L.Line_Close /= 0 and then L.Pos >= L.Line_Close then
+         L.Line_Close := 0;
+         Skip_Line_Chain_Rest (L);
+         return Next_Token (L);
+      end if;
 
       if At_End (L) then
          return (Kind => Tok_EOF, Line => L.Line, Col => L.Col, others => <>);

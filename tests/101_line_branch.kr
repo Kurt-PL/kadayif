@@ -1,0 +1,16 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+// §10.8 all-line-branch conditional translation. With no -f flags the
+// `@flag_else` branches are taken; never-set line ifs are skipped (their
+// inactive bodies may even be ill-formed, per §10.8).
+fn main() -> ui1 {
+    @flag_if(windows) let sep: ui1 = 92; @
+    @flag_else_if(mac) let sep: ui1 = 47; @
+    @flag_else let sep: ui1 = 63; @
+
+    mut n: si4 = 10;
+    @flag_if(never_set) garbage ?!#@ tokens here @
+    @flag_else n = n + 32; @
+
+    airside { posix::printf("sep=%d n=%d\n\0".ptr, sep as si4, n); }
+    return n as ui1;   // 42 with no flags
+}

@@ -1,0 +1,21 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+enum colour { Red, Green, Blue }    // no declared #wild#; disc ui1, vals 0/1/2
+fn main() -> ui1 {
+    let w: colour = colour::#wild#;   // §6.1.5 implicit wild = 3 (smallest unused)
+    // match: w is none of Red/Green/Blue, so hits the #wild# arm.
+    let r: si4 = match w {
+        colour::Red   = 100,
+        colour::Green = 200,
+        colour::Blue  = 300,
+        #wild#        = 999,
+    };
+    let g: colour = colour::Green;
+    let rg: si4 = match g {
+        colour::Red   = 100,
+        colour::Green = 200,
+        colour::Blue  = 300,
+        #wild#        = 999,
+    };
+    airside { posix::printf("r=%d rg=%d\n\0".ptr, r, rg); }   // 999 200
+    return 0;
+}
