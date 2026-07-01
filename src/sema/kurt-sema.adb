@@ -3599,6 +3599,73 @@ package body Kurt.Sema is
                                   & "(spec 8.1.2)");
                         end if;
                      end;
+                     --  §8.5.2 `mut` field requirement for atomic stores: a
+                     --  store (including RMW) through an `&atomic`/`&guard`/
+                     --  `&mut`/`$` reference derived from a `.field` access
+                     --  in a non-exclusive context shall not appear unless
+                     --  the field carries the `mut` field modifier (§5.5.1).
+                     --  Loads through such a reference are unrestricted, so
+                     --  this is enforced at the store, not at reference
+                     --  creation. Waived when the containing value is reached
+                     --  through an exclusive (`$`) or `&mut` path, or a `mut`
+                     --  binding of the containing value.
+                     declare
+                        Ref : constant Expr_Access := S.Asn_Lhs.D_Inner;
+                     begin
+                        if Ref.Kind = E_Ref
+                          and then Ref.Rf_Sigil /= R_Raw
+                          and then Ref.Rf_Place.Kind = E_Field
+                          and then (Ref.Rf_Store in RS_Atomic | RS_Guard
+                                                   | RS_Mut
+                                    or else Ref.Rf_Sigil = R_Excl)
+                        then
+                           declare
+                              Recv : constant Expr_Access :=
+                                Ref.Rf_Place.F_Recv;
+                              RT   : constant Type_Access :=
+                                Infer (Recv, null);
+                              RTD  : constant Type_Access :=
+                                (if Is_Ref (RT) then RT.Target else RT);
+                              FN   : constant String :=
+                                SU.To_String (Ref.Rf_Place.F_Name);
+                              Exclusive_Ctx : Boolean := False;
+                           begin
+                              if Is_Ref (RT)
+                                and then (RT.Sigil = R_Excl
+                                          or else RT.R_Store = RS_Mut)
+                              then
+                                 Exclusive_Ctx := True;
+                              elsif not Is_Ref (RT)
+                                and then Recv.Kind = E_Path
+                                and then Natural (Recv.Segments.Length) = 1
+                              then
+                                 declare
+                                    Found : Boolean;
+                                    Mut   : constant Boolean :=
+                                      Lookup_Scope_Mut
+                                        (SU.To_String
+                                           (Recv.Segments.Last_Element),
+                                         Found);
+                                 begin
+                                    Exclusive_Ctx := Found and then Mut;
+                                 end;
+                              end if;
+                              if not Exclusive_Ctx
+                                and then RTD /= null
+                                and then RTD.Kind = T_Named
+                                and then Kurt.Layout.Is_Struct
+                                           (SU.To_String (RTD.Name))
+                                and then not Kurt.Layout.Field_Is_Mut
+                                           (SU.To_String (RTD.Name), FN)
+                              then
+                                 Error ("atomic/exclusive store to non-`mut` "
+                                        & "field '" & FN & "' requires the "
+                                        & "field be declared `mut` "
+                                        & "(spec 8.5.2)");
+                              end if;
+                           end;
+                        end if;
+                     end;
                   end if;
                end;
 

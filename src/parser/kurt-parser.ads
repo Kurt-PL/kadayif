@@ -635,6 +635,10 @@ package Kurt.Parser is
    type Struct_Field is record
       Name : SU.Unbounded_String;
       Ty   : Type_Access;
+      --  §5.5.1 field modifiers.
+      Is_Mut     : Boolean := False;  --  `mut` — field is atomically storable
+      Is_Pub     : Boolean := False;  --  `pub` — field is externally visible
+      Is_Airside : Boolean := False;  --  `airside` — airside-only field
       --  §5.5.3 default-value expression (`= expr`); null when the field has
       --  no default and must be supplied in every composite literal.
       Default : Expr_Access := null;

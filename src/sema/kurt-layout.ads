@@ -45,6 +45,10 @@ package Kurt.Layout is
    function Field_Type
      (Struct_Name, Field : String) return Kurt.Parser.Type_Access;
 
+   --  §5.5.1: True when Field of struct Struct_Name carries the `mut`
+   --  field modifier (atomically storable). False if unknown/not mut.
+   function Field_Is_Mut (Struct_Name, Field : String) return Boolean;
+
    --  §5.5.3 default-value expression for a field; null when it has none.
    function Field_Default
      (Struct_Name, Field : String) return Kurt.Parser.Expr_Access;

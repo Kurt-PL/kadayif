@@ -559,7 +559,10 @@ package body Kurt.Mono is
                       Ty      => Subst (SD.Fields.Element (I).Ty,
                                         SD.Generic_Params, Inst.Args),
                       Default => Copy_Expr (SD.Fields.Element (I).Default,
-                                            SD.Generic_Params, Inst.Args)));
+                                            SD.Generic_Params, Inst.Args),
+                      Is_Mut     => SD.Fields.Element (I).Is_Mut,
+                      Is_Pub     => SD.Fields.Element (I).Is_Pub,
+                      Is_Airside => SD.Fields.Element (I).Is_Airside));
                end loop;
                U.Structs.Append (New_D);
             end;
@@ -594,7 +597,8 @@ package body Kurt.Mono is
                                               ED.Generic_Params, Inst.Args),
                             Default => Copy_Expr
                                          (V.Payload.Element (J).Default,
-                                          ED.Generic_Params, Inst.Args)));
+                                          ED.Generic_Params, Inst.Args),
+                            others => <>));
                      end loop;
                      New_D.Variants.Append (NV);
                   end;
@@ -1078,7 +1082,8 @@ package body Kurt.Mono is
                             Ty   => Self_T, Is_Mut => False));
                         for C of E.Clo_Caps loop
                            Env.Fields.Append
-                             ((Name => C.Name, Ty => null, Default => null));
+                             ((Name => C.Name, Ty => null, Default => null,
+                               others => <>));
                            declare
                               LS : constant Stmt_Access :=
                                 new Stmt_Node (Kind => S_Let);

@@ -1,0 +1,32 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.5.2 `mut` field requirement for atomic stores: an atomic store
+// (RMW) through `&self` to a struct field is permitted precisely when the
+// field carries the `mut` field modifier. `hits` is mut, so the atomic
+// fetch-add below is accepted; a load needs no modifier.
+struct counters {
+    mut hits: ui4,
+    misses: ui4
+}
+
+impl counters {
+    fn record_hit(&self) {
+        airside { *(&atomic self.hits) += 1; }   // OK — hits is mut
+    }
+
+    fn read_misses(&self) -> ui4 {
+        airside { return *(&atomic self.misses); } // OK — load, no mut
+    }
+}
+
+fn main() -> ui1 {
+    let c: counters = counters { hits = 40, misses = 7 };
+    c.record_hit();
+    c.record_hit();
+    airside {
+        let h: ui4 = *(&atomic c.hits);   // 40 + 2 = 42
+        let m: ui4 = c.read_misses();     // 7
+        posix::printf("hits=%u misses=%u\n\0".ptr, h, m);
+    }
+    return 0;
+}
