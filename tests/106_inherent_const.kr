@@ -1,0 +1,8 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+// §9.1 inherent associated const access `Type::NAME`
+struct cfg { v: si4 }
+impl cfg { const LIMIT: si4 = 42; }
+fn main() -> ui1 {
+    airside { posix::printf("limit=%d\n\0".ptr, cfg::LIMIT); }
+    return cfg::LIMIT as ui1;
+}

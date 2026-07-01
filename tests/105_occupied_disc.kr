@@ -1,0 +1,7 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+// §5.7 occupied-set discriminant: C must skip used values {1,0} -> 2
+enum e { A = 1, B = 0, C }
+fn main() -> ui1 {
+    airside { posix::printf("c=%d\n\0".ptr, e::C as ? as si4); }   // 2
+    return e::C as ? as ui1;
+}

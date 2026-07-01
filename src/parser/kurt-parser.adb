@@ -1472,6 +1472,7 @@ package body Kurt.Parser is
                   NP : constant Expr_Access := new Expr_Node (Kind => E_Path);
                begin
                   NP.Segments := Left.Cast_Inner.Segments;   --  T
+                  NP.Path_Trait := Left.Cast_Ty.Name;        --  Trait
                   loop
                      Advance (C);   --  '::'
                      NP.Segments.Append
@@ -2782,11 +2783,20 @@ package body Kurt.Parser is
                   Subst_Self (Fn.Header.Params.Element (I).Ty);
                end loop;
                Subst_Self (Fn.Header.Return_Type);
-               --  §9.2: the method is namespaced under its type. Both
-               --  inherent and trait-impl methods lower to `Type$method`,
-               --  so static dispatch finds them uniformly.
-               Fn.Header.Name := SU.To_Unbounded_String
-                 (SU.To_String (Ty_Name) & "$" & SU.To_String (MN));
+               --  §9.2.1: the method is namespaced under its type. An
+               --  inherent method lowers to `Type$method`; a trait-impl method
+               --  to `Type$Trait$method`, so two traits providing the same
+               --  method name on one type get distinct symbols and are
+               --  disambiguated by `(e as Trait).m()`.
+               if SU.Length (TI.Trait_Name) > 0 then
+                  Fn.Header.Name := SU.To_Unbounded_String
+                    (SU.To_String (Ty_Name) & "$"
+                     & SU.To_String (TI.Trait_Name) & "$"
+                     & SU.To_String (MN));
+               else
+                  Fn.Header.Name := SU.To_Unbounded_String
+                    (SU.To_String (Ty_Name) & "$" & SU.To_String (MN));
+               end if;
                Fns.Append (Fn);
                if SU.Length (TI.Trait_Name) > 0 then
                   TI.Methods.Append (MN);
@@ -2800,7 +2810,12 @@ package body Kurt.Parser is
       --  candidate; a generic trait impl provides static methods only
       --  (per-instance dispatch tables are out of scope for the
       --  bootstrap), so it is not registered here.
-      if SU.Length (TI.Trait_Name) > 0 and then not Is_Generic then
+      --  A concrete `impl Type as Trait` registers a dispatch-table
+      --  candidate; an INHERENT `impl Type` (empty Trait_Name) is registered
+      --  too so its associated constants are discoverable — consumers that
+      --  emit dispatch tables / check trait relationships guard on a
+      --  non-empty Trait_Name.
+      if not Is_Generic then
          Trait_Impls.Append (TI);
       end if;
    end Parse_Impl_Decl;
@@ -3154,7 +3169,8 @@ package body Kurt.Parser is
                         Advance (C);
                         Expect (C, Punct_RParen, "')'");
                      else
-                        V.Value := Next;
+                        --  bare `= #wild#`: discriminant via occupied-set pass.
+                        V.Auto_Disc := True;
                      end if;
                   elsif C.Cur.Kind = Tok_Int_Lit
                     or else C.Cur.Kind = Op_Minus
@@ -3178,8 +3194,7 @@ package body Kurt.Parser is
                         Next := (if Neg then -C.Cur.Int_V else C.Cur.Int_V);
                      end;
                      Advance (C);
-                     V.Value := Next;
-                     Next := Next + 1;
+                     V.Value := Next;          --  explicit value
                   else
                      raise Syntax_Error with
                        "expected discriminant value after '=', got "
@@ -3187,8 +3202,7 @@ package body Kurt.Parser is
                        & " at line" & Positive'Image (C.Cur.Line);
                   end if;
                else
-                  V.Value := Next;
-                  Next := Next + 1;
+                  V.Auto_Disc := True;         --  no `=`: occupied-set pass
                end if;
                D.Variants.Append (V);
             end;
@@ -3198,6 +3212,39 @@ package body Kurt.Parser is
          end loop;
       end if;
       Expect (C, Punct_RBrace, "'}'");
+
+      --  §5.7 automatic discriminant assignment (occupied-set algorithm):
+      --  S = all explicit values + `#wild#(V)` canonical values; counter c=0;
+      --  each variant lacking an explicit value (incl. bare `#wild#`) takes the
+      --  smallest value >= c not in S, which is then added to S and c bumped.
+      declare
+         function In_S (Val : Long_Long_Integer) return Boolean is
+         begin
+            for I in D.Variants.First_Index .. D.Variants.Last_Index loop
+               if not D.Variants.Element (I).Auto_Disc
+                 and then D.Variants.Element (I).Value = Val
+               then
+                  return True;     --  explicit or already-assigned / canonical
+               end if;
+            end loop;
+            return False;
+         end In_S;
+         Cc : Long_Long_Integer := 0;
+      begin
+         for I in D.Variants.First_Index .. D.Variants.Last_Index loop
+            if D.Variants.Element (I).Auto_Disc then
+               while In_S (Cc) loop Cc := Cc + 1; end loop;
+               declare
+                  V : Enum_Variant := D.Variants.Element (I);
+               begin
+                  V.Value := Cc;
+                  V.Auto_Disc := False;   --  now part of S for later variants
+                  D.Variants.Replace_Element (I, V);
+               end;
+               Cc := Cc + 1;
+            end if;
+         end loop;
+      end;
 
       --  Optional `with` clause (§5.10).
       --     `with contract`                       — bare contract clause

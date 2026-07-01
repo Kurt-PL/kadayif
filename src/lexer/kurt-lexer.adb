@@ -238,6 +238,15 @@ package body Kurt.Lexer is
                      D : constant Integer := Digit_Value (C);
                   begin
                      exit when D < 0 or else Long_Long_Integer (D) >= Base;
+                     --  §3.5.1 reject an out-of-range literal with a clean
+                     --  diagnostic instead of an internal overflow.
+                     if V > (Long_Long_Integer'Last - Long_Long_Integer (D))
+                              / Base
+                     then
+                        raise Translation_Failure with
+                          "integer literal is too large to represent (§3.5.1)"
+                          & " at line" & Positive'Image (L.Line);
+                     end if;
                      V := V * Base + Long_Long_Integer (D);
                      SU.Append (Buf, C);
                      Seen_Digit := True;

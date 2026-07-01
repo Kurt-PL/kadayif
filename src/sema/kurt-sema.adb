@@ -713,6 +713,62 @@ package body Kurt.Sema is
          return False;
       end Is_Trait_Name;
 
+      --  §9.2.1 resolve the mangled symbol of a method / associated item on a
+      --  concrete type. An inherent `Type$item` takes priority; in its absence
+      --  a unique trait impl gives `Type$Trait$item`. `Want_Trait` (non-empty)
+      --  forces that trait directly — `(e as Trait).item`. Ambiguous is set
+      --  when two or more trait impls provide the item and there is no inherent
+      --  one and no forced trait.
+      procedure Resolve_Item_Symbol
+        (Ty_Name, Item, Want_Trait : String;
+         Symbol     : out SU.Unbounded_String;
+         Found      : out Boolean;
+         Ambiguous  : out Boolean)
+      is
+         Dummy : Sig;
+      begin
+         Symbol := SU.Null_Unbounded_String;
+         Found := False;
+         Ambiguous := False;
+         if Want_Trait /= "" then
+            Symbol := SU.To_Unbounded_String
+              (Ty_Name & "$" & Want_Trait & "$" & Item);
+            Found := Find_Sig (SU.To_String (Symbol), Dummy);
+            return;
+         end if;
+         if Find_Sig (Ty_Name & "$" & Item, Dummy) then
+            Symbol := SU.To_Unbounded_String (Ty_Name & "$" & Item);
+            Found := True;
+            return;
+         end if;
+         declare
+            Count : Natural := 0;
+         begin
+            for I in U.Trait_Impls.First_Index ..
+                     U.Trait_Impls.Last_Index loop
+               if SU.To_String (U.Trait_Impls.Element (I).Ty_Name) = Ty_Name
+               then
+                  declare
+                     Cand : constant String := Ty_Name & "$"
+                       & SU.To_String (U.Trait_Impls.Element (I).Trait_Name)
+                       & "$" & Item;
+                  begin
+                     if Find_Sig (Cand, Dummy) then
+                        Count := Count + 1;
+                        Symbol := SU.To_Unbounded_String (Cand);
+                     end if;
+                  end;
+               end if;
+            end loop;
+            if Count = 1 then
+               Found := True;
+            elsif Count >= 2 then
+               Ambiguous := True;
+               Symbol := SU.Null_Unbounded_String;
+            end if;
+         end;
+      end Resolve_Item_Symbol;
+
       --  §9.3 / §5.9: if generic parameter Gen carries a trait bound
       --  whose trait declares method M_Name, return its signature.
       procedure Find_Bound_Method
@@ -1174,8 +1230,11 @@ package body Kurt.Sema is
                               end if;
                            end if;
                         end if;
-                        --  Strip the trait cast.
+                        --  Strip the trait cast and force the trait so
+                        --  resolution selects `Type$Trait$method`.
                         E.C_Callee.F_Recv := QInner;
+                        E.C_Callee.F_Trait :=
+                          SU.To_Unbounded_String (QTrait);
                      end;
                   end if;
                   declare
@@ -1260,11 +1319,30 @@ package body Kurt.Sema is
                      end if;
                      if RTT /= null and then RTT.Kind = T_Named then
                         declare
-                           Mangled : constant String :=
-                             SU.To_String (RTT.Name) & "$"
-                             & SU.To_String (E.C_Callee.F_Name);
+                           Sym   : SU.Unbounded_String;
+                           Fnd   : Boolean;
+                           Amb   : Boolean;
                         begin
-                           if Find_Sig (Mangled, S) then
+                           --  §9.2.1 inherent first, else unique trait impl;
+                           --  `(e as Trait).m()` forces F_Trait.
+                           Resolve_Item_Symbol
+                             (SU.To_String (RTT.Name),
+                              SU.To_String (E.C_Callee.F_Name),
+                              SU.To_String (E.C_Callee.F_Trait),
+                              Sym, Fnd, Amb);
+                           if Amb then
+                              Error ("call to method '"
+                                     & SU.To_String (E.C_Callee.F_Name)
+                                     & "' on '" & Image (RTT)
+                                     & "' is ambiguous (provided by two or "
+                                     & "more traits); disambiguate with "
+                                     & "`(e as Trait)." & SU.To_String
+                                       (E.C_Callee.F_Name) & "()` (spec 9.2.1)");
+                              E.Sem_Ty := null;
+                              return null;
+                           elsif Fnd
+                             and then Find_Sig (SU.To_String (Sym), S)
+                           then
                               declare
                                  Self_Ty : constant Type_Access :=
                                    (if not S.Params.Is_Empty
@@ -1285,15 +1363,18 @@ package body Kurt.Sema is
                                     Recv_Arg.Rf_Place := Recv;
                                  end if;
                                  E.C_Args.Prepend (Recv_Arg);
-                                 NP.Segments.Append
-                                   (SU.To_Unbounded_String (Mangled));
+                                 NP.Segments.Append (Sym);
                                  E.C_Callee := NP;
                               end;
                            else
                               Error ("type '" & Image (RTT)
                                      & "' has no method '"
                                      & SU.To_String (E.C_Callee.F_Name)
-                                     & "'");
+                                     & "'"
+                                     & (if SU.Length (E.C_Callee.F_Trait) > 0
+                                        then " in trait '" & SU.To_String
+                                          (E.C_Callee.F_Trait) & "'" else "")
+                                     & " (spec 9.2.1)");
                               E.Sem_Ty := null;
                               return null;
                            end if;
@@ -1355,18 +1436,30 @@ package body Kurt.Sema is
                                  Tn : constant String := SU.To_String
                                    (Callee.Segments.Element
                                       (Callee.Segments.Last_Index - 1));
-                                 Mangled : constant String :=
-                                   Tn & "$" & Last_S;
+                                 Sym : SU.Unbounded_String;
+                                 Fnd, Amb : Boolean;
                               begin
-                                 if Find_Sig (Mangled, Dummy) then
+                                 --  §6.1.1: inherent `Type$fn`, else unique
+                                 --  trait `Type$Trait$fn`; `Path_Trait` (from
+                                 --  `(Type as Trait)::fn`) forces the trait.
+                                 Resolve_Item_Symbol
+                                   (Tn, Last_S,
+                                    SU.To_String (Callee.Path_Trait),
+                                    Sym, Fnd, Amb);
+                                 if Amb then
+                                    Error ("associated subroutine '" & Last_S
+                                           & "' on '" & Tn & "' is ambiguous; "
+                                           & "use `(" & Tn
+                                           & " as Trait)::" & Last_S
+                                           & "` (spec 9.2.1)");
+                                 elsif Fnd then
                                     declare
                                        NP : constant Expr_Access :=
                                          new Expr_Node (Kind => E_Path);
                                     begin
-                                       NP.Segments.Append
-                                         (SU.To_Unbounded_String (Mangled));
+                                       NP.Segments.Append (Sym);
                                        E.C_Callee := NP;
-                                       Name := SU.To_Unbounded_String (Mangled);
+                                       Name := Sym;
                                     end;
                                  end if;
                               end;
@@ -1376,6 +1469,23 @@ package body Kurt.Sema is
                   end if;
 
                   if Find_Sig (SU.To_String (Name), S) then
+                     --  §6.2.1 argument-count check: a non-variadic call must
+                     --  supply exactly one argument per parameter; a variadic
+                     --  call must supply at least the fixed parameters.
+                     declare
+                        NA : constant Natural := Natural (E.C_Args.Length);
+                        NP : constant Natural := Natural (S.Params.Length);
+                     begin
+                        if (S.Is_Variadic and then NA < NP)
+                          or else (not S.Is_Variadic and then NA /= NP)
+                        then
+                           Error ("subroutine '" & SU.To_String (Name)
+                                  & "' expects"
+                                  & (if S.Is_Variadic then " at least" else "")
+                                  & Natural'Image (NP) & " argument(s), got"
+                                  & Natural'Image (NA) & " (spec 6.2.1)");
+                        end if;
+                     end;
                      --  Infer each argument, steering fixed-position
                      --  literals toward the declared parameter type.
                      for I in E.C_Args.First_Index .. E.C_Args.Last_Index
@@ -1609,6 +1719,21 @@ package body Kurt.Sema is
                                   & "' is an opaque layout -- arithmetic "
                                   & "requires a numeric/integer/primitive "
                                   & "bound (spec 5.9)");
+                        end if;
+                        --  §6.4.2 saturating and §6.5 bitwise/shift operators
+                        --  require integer operands; a float lead is a TF (and
+                        --  would otherwise reach an unsupported codegen path).
+                        if LT /= null and then Is_Float_Type (LT)
+                          and then (E.B_Op in B_Sat_Add | B_Sat_Sub
+                                      | B_Sat_Mul | B_Sat_Div
+                                      | B_And | B_Or | B_Xor | B_Shl | B_Shr)
+                        then
+                           Error ((if E.B_Op in B_Sat_Add | B_Sat_Sub
+                                     | B_Sat_Mul | B_Sat_Div
+                                   then "saturating" else "bitwise/shift")
+                                  & " operator requires an integer operand, "
+                                  & "got float '" & Image (LT)
+                                  & "' (spec 6.4.2 / 6.5)");
                         end if;
                         --  Steer a literal rhs toward the lhs type, but
                         --  not when lhs is a reference (§8.6.4 raw
@@ -2473,6 +2598,21 @@ package body Kurt.Sema is
                                   & "may be created from immutable "
                                   & "static '" & Name & "' (spec 5.4)");
                         end if;
+                        --  §2.2.1: an exclusive ('$') or '&mut' reference may
+                        --  be created only from a mutable binding.
+                        declare
+                           Bmut, Found : Boolean;
+                        begin
+                           Bmut := Lookup_Scope_Mut (Name, Found);
+                           if Found and then not Bmut
+                             and then (E.Rf_Sigil = R_Excl
+                                       or else E.Rf_Store = RS_Mut)
+                           then
+                              Error ("an exclusive ('$') or '&mut' reference "
+                                     & "requires a mutable binding; '" & Name
+                                     & "' is an immutable `let` (spec 2.2.1)");
+                           end if;
+                        end;
                      end;
                   end if;
                   E.Sem_Ty :=
@@ -3246,6 +3386,21 @@ package body Kurt.Sema is
                               SC.Sem_Ty   := Ty;
                               S.L_Init    := SC;
                            end;
+                        --  §2.9.1 the initialiser's type must be assignable to
+                        --  the declared type. `&T → &dyn Trait` coercion is
+                        --  resolved downstream, so it is exempted here.
+                        elsif IT /= null
+                          and then not Assignable (Ty, IT)
+                          and then not (Is_Dyn_Ref (Ty) and then Is_Ref (IT))
+                          and then not Is_Generic_Param_Ty (IT)
+                          and then not Is_Generic_Param_Ty (Ty)
+                        then
+                           --  In a generic template, associated-item types are
+                           --  not yet concrete; the assignability is re-checked
+                           --  at each monomorphised instance.
+                           Error ("initialiser of type '" & Image (IT)
+                                  & "' is not assignable to declared type '"
+                                  & Image (Ty) & "' (spec 2.9.1)");
                         end if;
                      end;
                   end if;
@@ -3342,6 +3497,18 @@ package body Kurt.Sema is
                            Error ("assignment to immutable static '"
                                   & Name & "' -- declare it `static "
                                   & "mut` (spec 5.4)");
+                        else
+                           --  §5.3: a `const` is a translation-time value and
+                           --  cannot be assigned to.
+                           for CI in U.Consts.First_Index ..
+                                     U.Consts.Last_Index loop
+                              if SU.To_String (U.Consts.Element (CI).Name)
+                                   = Name
+                              then
+                                 Error ("assignment to `const` '" & Name
+                                        & "' (spec 5.3)");
+                              end if;
+                           end loop;
                         end if;
                      end;
                   end if;
@@ -3774,6 +3941,127 @@ package body Kurt.Sema is
          end loop;
          for I in U.Gen_Fns.First_Index .. U.Gen_Fns.Last_Index loop
             Note (SU.To_String (U.Gen_Fns.Element (I).Header.Name), "fn");
+         end loop;
+      end;
+
+      --  §5.5 field-name uniqueness within a named composite (the anonymous
+      --  `?` padding field is exempt) and §5.1 parameter-name uniqueness.
+      declare
+         procedure Check_Unique_Fields
+           (Owner : String; Fields : Struct_Field_Vectors.Vector) is
+         begin
+            for I in Fields.First_Index .. Fields.Last_Index loop
+               declare
+                  N : constant String :=
+                    SU.To_String (Fields.Element (I).Name);
+               begin
+                  if N /= "" and then N /= "?" then
+                     for J in Fields.First_Index .. I - 1 loop
+                        if SU.To_String (Fields.Element (J).Name) = N then
+                           Error ("duplicate field '" & N & "' in " & Owner
+                                  & " (spec 5.5)");
+                        end if;
+                     end loop;
+                  end if;
+               end;
+            end loop;
+         end Check_Unique_Fields;
+
+         --  §5.9 generic type-parameter names shall be distinct.
+         procedure Check_Unique_Generics (H : Fn_Header) is
+            G : Generic_Param_Vectors.Vector renames H.Generic_Params;
+         begin
+            for I in G.First_Index .. G.Last_Index loop
+               for J in G.First_Index .. I - 1 loop
+                  if SU.To_String (G.Element (J).Name)
+                       = SU.To_String (G.Element (I).Name)
+                  then
+                     Error ("duplicate generic parameter '"
+                            & SU.To_String (G.Element (I).Name)
+                            & "' in '" & SU.To_String (H.Name)
+                            & "' (spec 5.9)");
+                  end if;
+               end loop;
+            end loop;
+         end Check_Unique_Generics;
+
+         procedure Check_Unique_Params (H : Fn_Header) is
+         begin
+            Check_Unique_Generics (H);
+            for I in H.Params.First_Index .. H.Params.Last_Index loop
+               declare
+                  N : constant String :=
+                    SU.To_String (H.Params.Element (I).Name);
+               begin
+                  if N /= "" then
+                     for J in H.Params.First_Index .. I - 1 loop
+                        if SU.To_String (H.Params.Element (J).Name) = N then
+                           Error ("duplicate parameter '" & N
+                                  & "' in subroutine '"
+                                  & SU.To_String (H.Name) & "' (spec 5.1)");
+                        end if;
+                     end loop;
+                  end if;
+               end;
+            end loop;
+         end Check_Unique_Params;
+      begin
+         for I in U.Structs.First_Index .. U.Structs.Last_Index loop
+            Check_Unique_Fields
+              ("struct '" & SU.To_String (U.Structs.Element (I).Name) & "'",
+               U.Structs.Element (I).Fields);
+         end loop;
+         for I in U.Enums.First_Index .. U.Enums.Last_Index loop
+            declare
+               EnV : Enum_Variant_Vectors.Vector renames
+                 U.Enums.Element (I).Variants;
+               EnN : constant String :=
+                 SU.To_String (U.Enums.Element (I).Name);
+               Wilds : Natural := 0;
+            begin
+               for V in EnV.First_Index .. EnV.Last_Index loop
+                  Check_Unique_Fields
+                    ("variant '" & SU.To_String (EnV.Element (V).Name) & "'",
+                     EnV.Element (V).Payload);
+                  --  §5.7 at most one `#wild#` variant per enum.
+                  if EnV.Element (V).Is_Wild then
+                     Wilds := Wilds + 1;
+                     if Wilds = 2 then
+                        Error ("enum '" & EnN & "' declares more than one "
+                               & "`#wild#` variant (spec 5.7)");
+                     end if;
+                  end if;
+                  --  §5.7 variant-name uniqueness within the enum.
+                  for W in EnV.First_Index .. V - 1 loop
+                     if SU.To_String (EnV.Element (W).Name)
+                          = SU.To_String (EnV.Element (V).Name)
+                     then
+                        Error ("duplicate variant '"
+                               & SU.To_String (EnV.Element (V).Name)
+                               & "' in enum '" & EnN & "' (spec 5.7)");
+                     end if;
+                  end loop;
+                  --  §5.7 discriminant collision (explicit values and
+                  --  `#wild#(V)` canonical values must be distinct).
+                  for W in EnV.First_Index .. V - 1 loop
+                     if EnV.Element (W).Value = EnV.Element (V).Value then
+                        Error ("discriminant value"
+                               & Long_Long_Integer'Image (EnV.Element (V).Value)
+                               & " of variant '"
+                               & SU.To_String (EnV.Element (V).Name)
+                               & "' collides with variant '"
+                               & SU.To_String (EnV.Element (W).Name)
+                               & "' in enum '" & EnN & "' (spec 5.7)");
+                     end if;
+                  end loop;
+               end loop;
+            end;
+         end loop;
+         for I in U.Fns.First_Index .. U.Fns.Last_Index loop
+            Check_Unique_Params (U.Fns.Element (I).Header);
+         end loop;
+         for I in U.Gen_Fns.First_Index .. U.Gen_Fns.Last_Index loop
+            Check_Unique_Params (U.Gen_Fns.Element (I).Header);
          end loop;
       end;
 
@@ -4243,50 +4531,19 @@ package body Kurt.Sema is
          end;
       end loop;
 
-      --  §9.2.1 method-name ambiguity: if two different trait impls on the
-      --  same type provide the same method name, a bare `x.m()` call cannot
-      --  resolve (the bootstrap has no `(x as Trait).m()` disambiguation), so
-      --  the overlap is reported here.
-      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
-         for J in I + 1 .. U.Trait_Impls.Last_Index loop
-            if SU.To_String (U.Trait_Impls.Element (I).Ty_Name)
-                 = SU.To_String (U.Trait_Impls.Element (J).Ty_Name)
-            then
-               declare
-                  MI : Path_Segments.Vector renames
-                    U.Trait_Impls.Element (I).Methods;
-                  MJ : Path_Segments.Vector renames
-                    U.Trait_Impls.Element (J).Methods;
-               begin
-                  for A in MI.First_Index .. MI.Last_Index loop
-                     for B in MJ.First_Index .. MJ.Last_Index loop
-                        if SU.To_String (MI.Element (A))
-                             = SU.To_String (MJ.Element (B))
-                        then
-                           Error ("type '"
-                             & SU.To_String (U.Trait_Impls.Element (I).Ty_Name)
-                             & "' has an ambiguous method '"
-                             & SU.To_String (MI.Element (A))
-                             & "' provided by traits '"
-                             & SU.To_String
-                                 (U.Trait_Impls.Element (I).Trait_Name)
-                             & "' and '"
-                             & SU.To_String
-                                 (U.Trait_Impls.Element (J).Trait_Name)
-                             & "' (spec 9.2.1)");
-                        end if;
-                     end loop;
-                  end loop;
-               end;
-            end if;
-         end loop;
-      end loop;
+      --  §9.2.1: two trait impls on one type providing the same method name do
+      --  NOT collide at declaration time (they mangle to distinct
+      --  `Type$Trait$method` symbols); the collision is resolved at each
+      --  invocation — a bare `e.m()` with two providers is the TF, and
+      --  `(e as Trait).m()` always disambiguates. Both are handled at the call
+      --  site (see Resolve_Item_Symbol), so no declaration-time check here.
 
       --  §9.4.2 duplicate detection: a type shall implement a given trait at
       --  most once within the translation unit.
       for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
          for J in I + 1 .. U.Trait_Impls.Last_Index loop
-            if SU.To_String (U.Trait_Impls.Element (I).Ty_Name)
+            if SU.Length (U.Trait_Impls.Element (I).Trait_Name) > 0
+              and then SU.To_String (U.Trait_Impls.Element (I).Ty_Name)
                  = SU.To_String (U.Trait_Impls.Element (J).Ty_Name)
               and then SU.To_String (U.Trait_Impls.Element (I).Trait_Name)
                  = SU.To_String (U.Trait_Impls.Element (J).Trait_Name)
@@ -4298,6 +4555,60 @@ package body Kurt.Sema is
                       & "' more than once (spec 9.4.2)");
             end if;
          end loop;
+      end loop;
+
+      --  §9.1: two items (methods / associated fns) with the same mangled
+      --  symbol on one type — e.g. two inherent `impl Type { fn a }` blocks —
+      --  are a declaration-time TF (they would otherwise collide in codegen).
+      for I in U.Fns.First_Index .. U.Fns.Last_Index loop
+         for J in I + 1 .. U.Fns.Last_Index loop
+            if SU.To_String (U.Fns.Element (I).Header.Name)
+                 = SU.To_String (U.Fns.Element (J).Header.Name)
+            then
+               Error ("duplicate definition of '"
+                      & SU.To_String (U.Fns.Element (I).Header.Name)
+                      & "' (two items with the same name on one type, "
+                      & "spec 9.1)");
+            end if;
+         end loop;
+      end loop;
+
+      --  §9.4: an `impl Type as Trait` shall provide every trait method that
+      --  has no default body. A missing one would otherwise fail at link time.
+      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+         declare
+            TI : Trait_Impl renames U.Trait_Impls.Element (I);
+            Tr : constant String := SU.To_String (TI.Trait_Name);
+
+            function Impl_Provides (Nm : String) return Boolean is
+            begin
+               for K in TI.Methods.First_Index .. TI.Methods.Last_Index loop
+                  if SU.To_String (TI.Methods.Element (K)) = Nm then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            end Impl_Provides;
+         begin
+            for T in U.Traits.First_Index .. U.Traits.Last_Index loop
+               if SU.To_String (U.Traits.Element (T).Name) = Tr then
+                  for M in U.Traits.Element (T).Methods.First_Index ..
+                           U.Traits.Element (T).Methods.Last_Index loop
+                     declare
+                        TM : Trait_Method renames
+                          U.Traits.Element (T).Methods.Element (M);
+                        MN : constant String := SU.To_String (TM.Sig.Name);
+                     begin
+                        if not TM.Has_Body and then not Impl_Provides (MN) then
+                           Error ("`impl " & SU.To_String (TI.Ty_Name)
+                                  & " as " & Tr & "` does not provide method '"
+                                  & MN & "' (spec 9.4)");
+                        end if;
+                     end;
+                  end loop;
+               end if;
+            end loop;
+         end;
       end loop;
 
       --  §9.3.1 associated-type completeness: an `impl T as Trait` shall

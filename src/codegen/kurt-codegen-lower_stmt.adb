@@ -324,12 +324,20 @@ begin
                Is_Agg  : constant Boolean := Is_Aggregate_Type (Ty);
                Is_Fat  : constant Boolean :=
                  Is_Slice_Ref (Ty) or else Is_Dyn_Ref (Ty);
+               --  §2.2.3 automatic objects are laid out contiguously in
+               --  declaration order, each at its natural alignment — not
+               --  rounded to a uniform 8-byte slot. This keeps a `&raw`
+               --  cursor's arithmetic across adjacent locals well-defined
+               --  while preserving natural alignment for aarch64 loads/stores.
                Slot : constant Natural :=
-                 (if Is_Fat then 16
-                  elsif Is_Agg then ((Sizeof (Ty) + 7) / 8) * 8 else 8);
-               Off  : constant Natural := ST.Next_Offset;
+                 (if Is_Fat then 16 else Natural'Max (Sizeof (Ty), 1));
+               Aln  : constant Natural :=
+                 (if Is_Fat then 8
+                  else Natural'Max (Kurt.Layout.Align_Of (Ty), 1));
+               Off  : constant Natural :=
+                 ((ST.Next_Offset + Aln - 1) / Aln) * Aln;
             begin
-               ST.Next_Offset := ST.Next_Offset + Slot;
+               ST.Next_Offset := Off + Slot;
 
                if Is_Fat then
                   --  §4.6 / §9.5 fat-reference initialiser.

@@ -1,0 +1,8 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+trait A { fn act(&self) -> si4; }
+trait B { fn act(&self) -> si4; }
+struct s { v: si4 }
+impl s as A { fn act(&self) -> si4 { return self.v + 1; } }
+impl s as B { fn act(&self) -> si4 { return self.v + 2; } }
+fn main() -> ui1 { let x: s = s { v = 10 };
+  airside { posix::printf("a=%d b=%d\n\0".ptr, (x as A).act(), (x as B).act()); } return 0; }

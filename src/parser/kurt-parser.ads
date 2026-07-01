@@ -267,6 +267,9 @@ package Kurt.Parser is
             Str_Bytes : SU.Unbounded_String;
          when E_Path =>
             Segments    : Path_Segments.Vector;
+            --  §6.1.1 trait forced by a qualified path root
+            --  `(Type as Trait)::item`; empty for an ordinary path.
+            Path_Trait  : SU.Unbounded_String;
             --  §5.9.2 explicit generic arguments on a callee path,
             --  e.g. the `si4` of `max.<si4>(a, b)`. Consumed by
             --  Kurt.Mono (instantiation); empty otherwise.
@@ -286,6 +289,9 @@ package Kurt.Parser is
          when E_Field =>
             F_Recv : Expr_Access;
             F_Name : SU.Unbounded_String;
+            --  §9.2.1 trait forced by a qualified method `(e as Trait).m()`;
+            --  empty for an ordinary `e.m()`.
+            F_Trait : SU.Unbounded_String;
          when E_Call =>
             C_Callee : Expr_Access;
             C_Args   : Expr_Vectors.Vector;
@@ -677,6 +683,7 @@ package Kurt.Parser is
       Value   : Long_Long_Integer;  --  resolved (or canonical) discriminant
       Is_Wild : Boolean := False;   --  declared `= #wild#` / `#wild#(V)`
       Wild_Canon : Boolean := False; --  parenthesised `#wild#(V)` form
+      Auto_Disc  : Boolean := False; --  §5.7 needs occupied-set auto-assignment
       Payload : Struct_Field_Vectors.Vector;  --  named fields; empty = unit
    end record;
 

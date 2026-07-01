@@ -1365,6 +1365,8 @@ package body Kurt.Codegen is
                  new AST_Type'(Kind => T_Named,
                                Name => TI.Ty_Name, Args => <>);
             begin
+               --  §9.1 an inherent `impl` (no trait) has no dispatch table.
+               if TrN = "" then goto Next_Impl; end if;
                IO.Put_Line (F, ".p2align 3");
                IO.Put_Line (F, "_Ldtable_" & TyN & "_" & TrN & ":");
                IO.Put_Line (F, "    .quad " & Img (Sizeof (Conc)));   --  [0]
@@ -1387,17 +1389,19 @@ package body Kurt.Codegen is
                                        (Tr.Supertraits.Element (SI)));
                         end loop;
                         --  Zone C: one pointer per trait method, in
-                        --  declaration order — `Type$method`.
+                        --  declaration order — `Type$Trait$method`.
                         for M in Tr.Methods.First_Index ..
                                  Tr.Methods.Last_Index
                         loop
-                           IO.Put_Line (F, "    .quad _" & TyN & "$"
+                           IO.Put_Line (F, "    .quad _" & TyN & "$" & TrN
+                             & "$"
                              & SU.To_String
                                  (Tr.Methods.Element (M).Sig.Name));
                         end loop;
                      end;
                   end if;
                end loop;
+               <<Next_Impl>> null;
             end;
          end loop;
       end if;

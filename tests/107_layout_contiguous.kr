@@ -1,0 +1,12 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+// §2.2.3 automatic objects laid out contiguously at natural alignment
+fn main() -> ui1 {
+    let a: si4 = 111; let b: si4 = 222;
+    let arr: [si4;3] = [1,2,3]; let i: si4 = 9;
+    airside {
+        let ga: si4 = ((&raw b as uaddr) - (&raw a as uaddr)) as si4;   // 4
+        let gi: si4 = ((&raw i as uaddr) - (arr.ptr as uaddr)) as si4;  // 12
+        posix::printf("ga=%d gi=%d\n\0".ptr, ga, gi);
+    }
+    return 0;
+}

@@ -1331,9 +1331,13 @@ package body Kurt.Mono is
                                  New_Fn : Fn_Decl;
                               begin
                                  New_Fn.Header := TM.Sig;
+                                 --  §9.2.1 trait-qualified mangling: the
+                                 --  synthesised default lowers to
+                                 --  `Type$Trait$method`.
                                  New_Fn.Header.Name :=
                                    SU.To_Unbounded_String
                                      (SU.To_String (TI.Ty_Name) & "$"
+                                      & SU.To_String (TI.Trait_Name) & "$"
                                       & MName);
                                  New_Fn.Header.Params.Clear;
                                  for K in TM.Sig.Params.First_Index ..
