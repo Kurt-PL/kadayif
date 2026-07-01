@@ -75,14 +75,14 @@ package body Kurt.Layout is
       Pass.Value := 1;
       Pass.Payload.Append
         ((Name => SU.To_Unbounded_String ("0"), Ty => Mk_Named ("ui1"),
-          Default => null));
+          Default => null, others => <>));
       Fail.Name       := SU.To_Unbounded_String ("Fail");
       Fail.Value      := 0;
       Fail.Is_Wild    := True;
       Fail.Wild_Canon := True;
       Fail.Payload.Append
         ((Name => SU.To_Unbounded_String ("0"), Ty => Mk_Named ("ui1"),
-          Default => null));
+          Default => null, others => <>));
       D.Variants.Append (Pass);
       D.Variants.Append (Fail);
       return D;
@@ -875,6 +875,21 @@ package body Kurt.Layout is
       end loop;
       return null;
    end Field_Type;
+
+   --  §5.5.1 `mut` field modifier: True when the named field is mut.
+   function Field_Is_Mut (Struct_Name, Field : String) return Boolean is
+      D : Struct_Decl;
+   begin
+      if not Find_Struct (Struct_Name, D) then
+         return False;
+      end if;
+      for I in D.Fields.First_Index .. D.Fields.Last_Index loop
+         if SU.To_String (D.Fields.Element (I).Name) = Field then
+            return D.Fields.Element (I).Is_Mut;
+         end if;
+      end loop;
+      return False;
+   end Field_Is_Mut;
 
    --  §5.5.3 default-value expression for a field, or null when none.
    function Field_Default

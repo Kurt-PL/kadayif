@@ -2931,8 +2931,14 @@ package body Kurt.Parser is
             declare
                Fld : Struct_Field;
             begin
-               --  §5.5.1 field modifiers — parsed and discarded.
+               --  §5.5.1 field modifiers — recorded on the field.
                while C.Cur.Kind in Kw_Pub | Kw_Mut | Kw_Airside loop
+                  case C.Cur.Kind is
+                     when Kw_Pub     => Fld.Is_Pub     := True;
+                     when Kw_Mut     => Fld.Is_Mut     := True;
+                     when Kw_Airside => Fld.Is_Airside := True;
+                     when others     => null;
+                  end case;
                   Advance (C);
                end loop;
                 if C.Cur.Kind = Op_Question then
