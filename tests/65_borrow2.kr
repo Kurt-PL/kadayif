@@ -24,7 +24,7 @@ fn main() -> ui1 {
     // Multiple &mut references coexist (SharedRW); store through one.
     let m1: &mut si4 = &mut x;
     let m2: &mut si4 = &mut x;
-    *m1 = 30;
+    airside { *m1 = 30; }         // §2.6: `&mut` store is airside-only
     airside { posix::printf("m2=%d\n\0".ptr, *m2); }
 
     return 0;

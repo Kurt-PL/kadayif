@@ -1917,6 +1917,20 @@ package body Kurt.Sema is
                                & "permitted only in an `airside` region "
                                & "(spec 2.6)");
                      end if;
+                     --  §2.6: `&mut T` access (load and store) is an
+                     --  airside-only operation. This E_Deref case is
+                     --  reached both for an rvalue load (`*m`) and for a
+                     --  store target (the S_Assign LHS is inferred here),
+                     --  so a single gate covers both directions. `$`
+                     --  (R_Excl) and plain `&`/atomic/guard are not in the
+                     --  §2.6 list and are not gated here.
+                     if IT.Sigil = R_Shared and then IT.R_Store = RS_Mut
+                       and then In_Airside = 0
+                     then
+                        Error ("load/store through a `&mut T` reference is "
+                               & "permitted only in an `airside` region "
+                               & "(spec 2.6)");
+                     end if;
                      E.Sem_Ty := IT.Target;
                   else
                      Error ("dereference of non-reference type '"
@@ -2371,10 +2385,15 @@ package body Kurt.Sema is
                            Error ("reference cast '" & Image (Src)
                                   & "' as '" & Image (E.Cast_Ty)
                                   & "' is not permitted (spec 8.1.3)");
+                        elsif Outcome = 1 and then In_Airside = 0 then
+                           --  §8.1.3: an ascending cast `&raw T` -> a managed
+                           --  reference (`&T`/`&mut T`/`$T`) begins lifetime
+                           --  tracking on an asserted referent and is
+                           --  permitted only in an `airside` region.
+                           Error ("ascending cast from '" & Image (Src)
+                                  & "' to a managed reference is permitted "
+                                  & "only in an `airside` region (spec 8.1.3)");
                         end if;
-                        --  Outcome 1 (airside-required) is accepted; the
-                        --  bootstrap does not statically enforce the
-                        --  airside region for reference casts.
                         E.Sem_Ty := E.Cast_Ty;
                      end;
                   elsif Is_Integer_Type (E.Cast_Ty) then

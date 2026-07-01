@@ -1,0 +1,26 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §2.6 / §8.1.3 airside gates:
+//   - `&mut T` access (load and store) is permitted only in `airside`.
+//   - an ascending sigil cast `&raw T` -> `&T` is permitted only in `airside`.
+// Both accept paths are exercised here inside `airside { ... }` blocks.
+fn main() -> ui1 {
+    mut x: si4 = 40;
+
+    // §2.6: store and load through `&mut` inside an airside region.
+    let m: &mut si4 = &mut x;
+    airside { *m = 42; }
+    airside {
+        let got: si4 = *m;               // &mut load
+        posix::printf("mut=%d\n\0".ptr, got);   // 42
+    }
+
+    // §8.1.3: ascending cast &raw ui4 -> &ui4 inside airside, then load.
+    mut y: ui4 = 7;
+    let raw: &raw ui4 = $y as &raw ui4;  // $ -> &raw (descending, landside)
+    airside {
+        let shared: &ui4 = raw as &ui4;  // &raw -> & (ascending, airside)
+        posix::printf("shared=%d\n\0".ptr, *shared);   // 7
+    }
+    return 0;
+}
