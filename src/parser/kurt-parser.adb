@@ -2607,7 +2607,8 @@ package body Kurt.Parser is
      (C           : in out Cursor;
       Fns         : in out Fn_Vectors.Vector;
       Trait_Impls : in out Trait_Impl_Vectors.Vector;
-      Gen_Methods : in out Gen_Method_Vectors.Vector)
+      Gen_Methods : in out Gen_Method_Vectors.Vector;
+      Traits      : Trait_Vectors.Vector)
    is
       Ty_Name     : SU.Unbounded_String;
       Impl_Params : Generic_Param_Vectors.Vector;  --  §9.1 `impl(...)` list
@@ -2646,6 +2647,34 @@ package body Kurt.Parser is
                               Res := TI.Assoc_Types.Element (I).Ty;
                            end if;
                         end loop;
+                        --  §9.3.1 the impl omitted `type Item = ...` — fall
+                        --  back to the trait's declared default, if any.
+                        if Res = null then
+                           for T in Traits.First_Index .. Traits.Last_Index
+                           loop
+                              if SU.To_String (Traits.Element (T).Name)
+                                   = SU.To_String (TI.Trait_Name)
+                              then
+                                 declare
+                                    TD : Trait_Decl renames Traits.Element (T);
+                                 begin
+                                    for K in TD.Assoc_Types.First_Index ..
+                                             TD.Assoc_Types.Last_Index
+                                    loop
+                                       if SU.To_String
+                                            (TD.Assoc_Types.Element (K).Name)
+                                            = Item
+                                         and then TD.Assoc_Types.Element (K).Ty
+                                                    /= null
+                                       then
+                                          Res :=
+                                            TD.Assoc_Types.Element (K).Ty;
+                                       end if;
+                                    end loop;
+                                 end;
+                              end if;
+                           end loop;
+                        end if;
                         if Res /= null then
                            T.all := Res.all;   --  splice the concrete type in
                         end if;
@@ -3572,7 +3601,8 @@ package body Kurt.Parser is
             when Kw_Enum =>
                U.Enums.Append (Parse_Enum_Decl (C));
             when Kw_Impl =>
-               Parse_Impl_Decl (C, U.Fns, U.Trait_Impls, U.Gen_Methods);
+               Parse_Impl_Decl
+                 (C, U.Fns, U.Trait_Impls, U.Gen_Methods, U.Traits);
             when Kw_Trait =>
                Parse_Trait_Decl (C, U.Traits);
             when Punct_RBrace =>
