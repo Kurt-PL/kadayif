@@ -1660,6 +1660,23 @@ package body Kurt.Sema is
                               end loop;
                               E.Sem_Ty := (if Has then LS.Ret else null);
                            end;
+                           --  §9.9.3: an `xfer` closure that owns `with
+                           --  destruct` captures may be invoked at most once —
+                           --  a second invocation would operate on already-
+                           --  consumed capture storage. Its env struct is the
+                           --  only closure kind that satisfies `destruct` (a
+                           --  non-`xfer` closure cannot capture such bindings),
+                           --  so treat invoking a bare in-scope closure binding
+                           --  as transferring it; a second call to the same
+                           --  name then fails the §8.8.2 use-after-transfer
+                           --  check when its callee path is re-inferred.
+                           if Callee.Kind = E_Path
+                             and then Natural (Callee.Segments.Length) = 1
+                             and then Satisfies_Destruct (CT)
+                           then
+                              Mark_Moved
+                                (SU.To_String (Callee.Segments.Last_Element));
+                           end if;
                         elsif CT /= null and then CT.Kind = T_Fn then
                            E.C_Indirect := True;
                            for I in E.C_Args.First_Index ..
