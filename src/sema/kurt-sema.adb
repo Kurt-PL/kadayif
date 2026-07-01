@@ -614,6 +614,26 @@ package body Kurt.Sema is
                         return TI.Consts.Element (J).Val;
                      end if;
                   end loop;
+                  --  §9.3.2 the impl omitted the const — fall back to the
+                  --  trait's default value, if the trait declares one.
+                  for T in U.Traits.First_Index .. U.Traits.Last_Index loop
+                     if SU.To_String (U.Traits.Element (T).Name)
+                          = SU.To_String (TI.Trait_Name)
+                     then
+                        for K in U.Traits.Element (T).Consts.First_Index ..
+                                 U.Traits.Element (T).Consts.Last_Index loop
+                           if SU.To_String
+                                (U.Traits.Element (T).Consts.Element (K).Name)
+                                = Name
+                             and then U.Traits.Element (T).Consts.Element (K)
+                                        .Has_Val
+                           then
+                              return U.Traits.Element (T).Consts.Element (K)
+                                       .Val;
+                           end if;
+                        end loop;
+                     end if;
+                  end loop;
                end;
             end if;
          end loop;
@@ -1262,6 +1282,19 @@ package body Kurt.Sema is
                                      & "' has no method '"
                                      & SU.To_String (E.C_Callee.F_Name)
                                      & "' (spec 9.5)");
+                              E.Sem_Ty := null;
+                              return null;
+                           end if;
+                           --  §9.5 object-safety: a generic method cannot be
+                           --  dispatched through a `&dyn` fat reference.
+                           if not MSig.Generic_Params.Is_Empty then
+                              Error ("method '"
+                                     & SU.To_String (E.C_Callee.F_Name)
+                                     & "' of trait '"
+                                     & SU.To_String (RTT.Trait_Name)
+                                     & "' is generic and is not object-safe; "
+                                     & "it cannot be called through `&dyn` "
+                                     & "(spec 9.5)");
                               E.Sem_Ty := null;
                               return null;
                            end if;
