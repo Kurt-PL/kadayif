@@ -936,8 +936,9 @@ package body Kurt.Parser is
 
          when Tok_Float_Lit =>
             E := new Expr_Node (Kind => E_Float_Lit);
-            E.Float_V      := C.Cur.Float_V;
-            E.Float_Suffix := C.Cur.Int_Suffix;
+            E.Float_V       := C.Cur.Float_V;
+            E.Float_Suffix  := C.Cur.Int_Suffix;
+            E.Float_Special := C.Cur.Float_Special;
             Advance (C);
             return E;
 

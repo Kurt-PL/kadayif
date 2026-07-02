@@ -22,7 +22,31 @@ is
 begin
    case E.Kind is
       when E_Float_Lit =>
-         Lower_Float_Const (F, D_Reg, E.Float_V, Sizeof (Ty));
+         if E.Float_Special /= 0 then
+            --  §3.5.2 `0nan` (quiet NaN, sign 0, zero payload) / `0inf`
+            --  (positive infinity). Emitted directly as the IEEE bit
+            --  pattern of the target width — the value never exists as a
+            --  Long_Float (validity checks reject non-finite data).
+            declare
+               use Interfaces;
+               Bits : constant Unsigned_64 :=
+                 (if Sizeof (Ty) = 4
+                  then (if E.Float_Special = 1
+                        then 16#7FC0_0000# else 16#7F80_0000#)
+                  else (if E.Float_Special = 1
+                        then 16#7FF8_0000_0000_0000#
+                        else 16#7FF0_0000_0000_0000#));
+            begin
+               Lower_Bits_64 (F, 12, Bits);
+               if Sizeof (Ty) = 4 then
+                  IO.Put_Line (F, "    fmov    s" & Img (D_Reg) & ", w12");
+               else
+                  IO.Put_Line (F, "    fmov    d" & Img (D_Reg) & ", x12");
+               end if;
+            end;
+         else
+            Lower_Float_Const (F, D_Reg, E.Float_V, Sizeof (Ty));
+         end if;
 
       when E_Int_Lit =>
          --  An integer literal in a float context (§3.4.1): its value is

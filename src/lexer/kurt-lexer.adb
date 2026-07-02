@@ -221,6 +221,41 @@ package body Kurt.Lexer is
       Base       : Long_Long_Integer := 10;
       T          : Token;
    begin
+      --  §3.5.2 special floating-point literal `0nan` / `0inf`, with an
+      --  optional float suffix fused on (bare — no separator). `0nan` is a
+      --  NaN with sign bit 0 and all-zero payload (the quiet-NaN pattern);
+      --  `0inf` is positive infinity. Negative forms are unary negation.
+      if Peek (L) = '0'
+        and then ((Peek (L, 1) = 'n' and then Peek (L, 2) = 'a'
+                     and then Peek (L, 3) = 'n')
+                  or else (Peek (L, 1) = 'i' and then Peek (L, 2) = 'n'
+                             and then Peek (L, 3) = 'f'))
+      then
+         declare
+            Is_Nan : constant Boolean := Peek (L, 1) = 'n';
+            Suf    : SU.Unbounded_String;
+         begin
+            Advance (L); Advance (L); Advance (L); Advance (L);
+            while Is_Ident_Continue (Peek (L)) loop
+               SU.Append (Suf, Peek (L));
+               Advance (L);
+            end loop;
+            if SU.Length (Suf) > 0
+              and then not Is_Float_Suffix (SU.To_String (Suf))
+            then
+               raise Translation_Failure with
+                 "invalid float suffix '" & SU.To_String (Suf)
+                 & "' (§3.5.2) at line" & Positive'Image (Start_Line);
+            end if;
+            T.Kind          := Tok_Float_Lit;
+            T.Float_Special := (if Is_Nan then 1 else 2);
+            T.Int_Suffix    := Suf;
+            T.Line          := Start_Line;
+            T.Col           := Start_Col;
+            return T;
+         end;
+      end if;
+
       --  Radix prefix.
       if Peek (L) = '0'
         and then (Peek (L, 1) = 'x' or else Peek (L, 1) = 'o'

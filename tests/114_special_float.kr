@@ -1,0 +1,20 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §3.5.2 special floating-point literals: `0nan` is a quiet NaN (sign 0,
+// zero payload), `0inf` is positive infinity; both accept a float suffix
+// and negate via unary `-`.
+fn main() -> ui1 {
+    let n = 0nan;                    // fe11m52 default
+    let i = 0inf;
+    let n32: fe8m23 = 0nanfe8m23;    // suffixed
+    let ni = -0inf;                  // unary negation
+    airside {
+        posix::printf("n=%f i=%f n32=%f ni=%f\n\0".ptr,
+                      n, i, n32 as fe11m52, ni);
+    }
+    // infinity compares greater than any finite value; NaN compares
+    // unordered (both operand orders false).
+    let big: bool = i > 1.0e300;
+    let unord: bool = n > 0.0;
+    return if big then (if unord then 0 else 42) else 0;
+}

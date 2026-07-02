@@ -208,7 +208,8 @@ package body Kurt.Mono is
             R.Int_Suffix := E.Int_Suffix;
          when E_Float_Lit =>
             R.Float_V      := E.Float_V;
-            R.Float_Suffix := E.Float_Suffix;
+            R.Float_Suffix  := E.Float_Suffix;
+            R.Float_Special := E.Float_Special;
          when E_Bool_Lit =>
             R.Bool_V := E.Bool_V;
          when E_String_Lit =>
