@@ -4440,6 +4440,25 @@ package body Kurt.Sema is
                   end;
                end if;
             end if;
+
+            --  §5.7 at most one `#wild#` variant per enum. (Variant-name
+            --  uniqueness and discriminant-collision are enforced during
+            --  discriminant resolution.) A pure rejection of an ill-formed
+            --  declaration; never affects a valid enum.
+            declare
+               Wild_Count : Natural := 0;
+            begin
+               for J in D.Variants.First_Index .. D.Variants.Last_Index loop
+                  if D.Variants.Element (J).Is_Wild then
+                     Wild_Count := Wild_Count + 1;
+                  end if;
+               end loop;
+               if Wild_Count > 1 then
+                  Error ("enum '" & EN & "' declares" & Wild_Count'Image
+                         & " `#wild#` variants; at most one is permitted "
+                         & "(spec 5.7)");
+               end if;
+            end;
          end;
       end loop;
 
