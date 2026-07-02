@@ -410,11 +410,14 @@ package Kurt.Parser is
             DT_Inner : Expr_Access;
             DT_Undo  : Boolean := False;   --  True for `undestruct`
          when E_Airside_Blk =>
-            --  §6.9 `airside { ... }` in an expression position. Its value
+            --  §6.9/§7.8 a brace block in an expression position. Its value
             --  is yielded by a trailing `express`; with none, `void`.
             --  (Bootstrap: only the trailing-`express` form yields a value —
             --  an early `express` from a nested position is not supported.)
-            AB_Stmts : Stmt_Vectors.Vector;
+            --  `AB_Airside` distinguishes `airside { … }` (§6.9, enters the
+            --  airside region) from a plain `{ … }` express block (§7.8).
+            AB_Stmts   : Stmt_Vectors.Vector;
+            AB_Airside : Boolean := True;
       end case;
    end record;
 

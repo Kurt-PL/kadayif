@@ -337,6 +337,7 @@ package body Kurt.Mono is
             R.DT_Undo  := E.DT_Undo;
          when E_Airside_Blk =>
             R.AB_Stmts := Copy_Block (E.AB_Stmts, Params, Args);
+            R.AB_Airside := E.AB_Airside;
       end case;
       return R;
    end Copy_Expr;

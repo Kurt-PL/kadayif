@@ -1,0 +1,15 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §7.8 a plain brace block `{ … }` in an expression position is an express
+// block: it runs its statements as a scope and yields the value of its
+// trailing `express`. Unlike `airside { … }`, it does not enter the airside
+// region. A block with no `express` has type `void`.
+fn main() -> ui1 {
+    let v: si4 = {
+        let a: si4 = 6;
+        let b: si4 = 7;
+        express a * b;              // block yields 42
+    };
+    airside { posix::printf("v=%d\n\0".ptr, v); }
+    return v as ui1;
+}

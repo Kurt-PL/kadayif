@@ -3119,9 +3119,13 @@ package body Kurt.Sema is
                   Saved : constant Type_Access := Express_Expected;
                begin
                   Express_Expected := Expected;
-                  In_Airside := In_Airside + 1;
+                  if E.AB_Airside then
+                     In_Airside := In_Airside + 1;
+                  end if;
                   Check_Block (E.AB_Stmts);
-                  In_Airside := In_Airside - 1;
+                  if E.AB_Airside then
+                     In_Airside := In_Airside - 1;
+                  end if;
                   Express_Expected := Saved;
                end;
                if not E.AB_Stmts.Is_Empty

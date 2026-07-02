@@ -1351,6 +1351,17 @@ package body Kurt.Parser is
             --  Parse_Stmt claims it first.)
             Advance (C);   --  airside
             E := new Expr_Node (Kind => E_Airside_Blk);
+            E.AB_Airside := True;
+            Parse_Block_Stmts (C, E.AB_Stmts);
+            return E;
+
+         when Punct_LBrace =>
+            --  §7.8 a plain brace block `{ … }` in an expression position:
+            --  an express block. Its value is yielded by a trailing
+            --  `express`; with none the block is `void`. Unlike `airside`,
+            --  it does not enter the airside region.
+            E := new Expr_Node (Kind => E_Airside_Blk);
+            E.AB_Airside := False;
             Parse_Block_Stmts (C, E.AB_Stmts);
             return E;
 
