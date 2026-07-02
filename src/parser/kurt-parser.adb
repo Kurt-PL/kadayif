@@ -1217,16 +1217,59 @@ package body Kurt.Parser is
                declare
                   Negated : Boolean := False;
                   E1, E2  : Expr_Access;
+
+                  --  §6.10 an `if xlatime` branch in the block form. As with
+                  --  a `xlatime { … }` block, the bootstrap restricts the
+                  --  body to a single `express E;` (its value); an empty
+                  --  block yields `void`.
+                  function Xlat_Block return Expr_Access is
+                     R : Expr_Access :=
+                       new Expr_Node (Kind => E_Path);   --  void placeholder
+                  begin
+                     R.Segments.Append (SU.To_Unbounded_String ("void"));
+                     Expect (C, Punct_LBrace, "'{' in `if xlatime` block");
+                     while C.Cur.Kind /= Punct_RBrace
+                       and then C.Cur.Kind /= Tok_EOF
+                     loop
+                        if C.Cur.Kind = Kw_Express then
+                           Advance (C);
+                           R := Parse_Expr (C);
+                           if C.Cur.Kind = Punct_Semi then
+                              Advance (C);
+                           end if;
+                        else
+                           raise Syntax_Error with
+                             "the bootstrap supports only "
+                             & "`if xlatime { express E; }` (no statements) "
+                             & "at line" & Positive'Image (C.Cur.Line);
+                        end if;
+                     end loop;
+                     Expect (C, Punct_RBrace, "'}' to close `if xlatime`");
+                     return R;
+                  end Xlat_Block;
                begin
                   if C.Cur.Kind = Op_Bang then
                      Negated := True;
                      Advance (C);
                   end if;
                   Advance (C);   --  xlatime
-                  Expect (C, Kw_Then, "'then' in `if xlatime`");
-                  E1 := Parse_Expr (C);
-                  Expect (C, Kw_Else, "'else' in `if xlatime`");
-                  E2 := Parse_Expr (C);
+                  if C.Cur.Kind = Punct_LBrace then
+                     --  §6.10 block form: `if xlatime { … } [else { … }]`.
+                     E1 := Xlat_Block;
+                     if C.Cur.Kind = Kw_Else then
+                        Advance (C);
+                        E2 := Xlat_Block;
+                     else
+                        E2 := new Expr_Node (Kind => E_Path);
+                        E2.Segments.Append (SU.To_Unbounded_String ("void"));
+                     end if;
+                  else
+                     --  §6.10 expression form: `if xlatime then E else E`.
+                     Expect (C, Kw_Then, "'then' in `if xlatime`");
+                     E1 := Parse_Expr (C);
+                     Expect (C, Kw_Else, "'else' in `if xlatime`");
+                     E2 := Parse_Expr (C);
+                  end if;
                   return (if Negated then E1 else E2);
                end;
             end if;

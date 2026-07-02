@@ -1,0 +1,16 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §6.10 `if xlatime` in the block form as an expression. At execution time
+// `xlatime` is false, so the `else` branch is selected; the discarded
+// branch is not type-checked (it may name things that do not exist).
+fn main() -> ui1 {
+    let a: si4 = if xlatime {
+        express undefined_discarded();   // discarded — never checked
+    } else {
+        express 42;
+    };
+    // `if !xlatime` selects the `then` branch (true at execution time).
+    let b: si4 = if !xlatime { express 100; } else { express 0; };
+    airside { posix::printf("a=%d b=%d\n\0".ptr, a, b); }
+    return a as ui1;
+}
