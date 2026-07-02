@@ -1,0 +1,1 @@
+pub fn g() -> si4 { return 32; }

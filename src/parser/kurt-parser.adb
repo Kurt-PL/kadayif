@@ -4646,13 +4646,38 @@ package body Kurt.Parser is
             when Dir_At_Dyn =>
                U.Dyns.Append (Parse_Dyn_Decl (C));
             when Dir_At_Add =>
-               --  §10.2/§10.3 `@add [pub] [prefix::]"path" as ident;` — the
-               --  `as ident` namespace name is mandatory and is how the
+               --  §10.3 `@add [pub] [prefix::]( path_form | block_form )`:
+               --    path_form  = "path" as ident ;
+               --    block_form = { "a" as x, "b" as y [,] }
+               --  the `as ident` namespace name is mandatory and is how each
                --  import's `pub` declarations are accessed (`ident::item`).
-               --  (`@add pub` re-export chaining is not modelled.)
+               --  A block simply groups several path entries under one
+               --  prefix — no semantic distinction. (`@add pub` re-export
+               --  chaining is not modelled.)
                Advance (C);
                declare
                   Prefix : SU.Unbounded_String;
+
+                  --  Parse one `"path" as ident` entry (prefix pre-read).
+                  procedure Parse_Entry is
+                  begin
+                     if C.Cur.Kind /= Tok_String_Lit then
+                        raise Syntax_Error with
+                          "`@add` requires a string path at line"
+                          & Positive'Image (C.Cur.Line);
+                     end if;
+                     U.Adds.Append (C.Cur.Str_Bytes);
+                     U.Add_Prefixes.Append (Prefix);
+                     Advance (C);
+                     Expect (C, Kw_As, "`as` in @add (spec 10.3)");
+                     declare
+                        Ns : constant SU.Unbounded_String :=
+                          Take_Ident (C, "@add namespace name");
+                     begin
+                        U.Add_Names.Append (Ns);
+                        C.Add_Aliases.Append (Ns);
+                     end;
+                  end Parse_Entry;
                begin
                   if C.Cur.Kind = Kw_Pub then
                      Advance (C);   --  `pub` re-export (not modelled)
@@ -4664,23 +4689,24 @@ package body Kurt.Parser is
                      Advance (C);   --  prefix
                      Advance (C);   --  ::
                   end if;
-                  if C.Cur.Kind /= Tok_String_Lit then
-                     raise Syntax_Error with
-                       "`@add` requires a string path at line"
-                       & Positive'Image (C.Cur.Line);
+                  if C.Cur.Kind = Punct_LBrace then
+                     --  §10.3 block form.
+                     Advance (C);
+                     loop
+                        Parse_Entry;
+                        exit when C.Cur.Kind /= Punct_Comma;
+                        Advance (C);
+                        exit when C.Cur.Kind = Punct_RBrace;
+                     end loop;
+                     Expect (C, Punct_RBrace, "'}' to close @add block");
+                     if C.Cur.Kind = Punct_Semi then
+                        Advance (C);
+                     end if;
+                  else
+                     --  §10.3 path form.
+                     Parse_Entry;
+                     Expect (C, Punct_Semi, "';' after @add");
                   end if;
-                  U.Adds.Append (C.Cur.Str_Bytes);
-                  U.Add_Prefixes.Append (Prefix);
-                  Advance (C);
-                  Expect (C, Kw_As, "`as` in @add (spec 10.2)");
-                  declare
-                     Ns : constant SU.Unbounded_String :=
-                       Take_Ident (C, "@add namespace name");
-                  begin
-                     U.Add_Names.Append (Ns);
-                     C.Add_Aliases.Append (Ns);
-                  end;
-                  Expect (C, Punct_Semi, "';' after @add");
                end;
             when Dir_At_Path =>
                --  §10.5 `@path "base" as name;` — named search-path prefix.

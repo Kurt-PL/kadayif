@@ -1,0 +1,11 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §10.3 `@add` block form groups several imports under one prefix — no
+// semantic difference from separate `@add` declarations.
+@add { "117_lib/a.kr" as a, "117_lib/b.kr" as b }
+
+fn main() -> ui1 {
+    let s: si4 = a::f() + b::g();   // 42
+    airside { posix::printf("s=%d\n\0".ptr, s); }
+    return s as ui1;
+}
