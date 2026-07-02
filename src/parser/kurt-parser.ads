@@ -857,6 +857,11 @@ package Kurt.Parser is
       --  §5.13 top-level `asm { … }` blocks, emitted verbatim into the text
       --  section (raw bodies, in declaration order).
       Top_Asm : Path_Segments.Vector;
+      --  §10.6 the mangled prefixes of every `module` closed in this unit,
+      --  innermost first (e.g. "a$b" then "a" for `module a { module b …`).
+      --  Each doubles as its own namespace alias so `a::b::item` collapses
+      --  to `a$b$item` through the ordinary alias machinery.
+      Module_Names : Path_Segments.Vector;
    end record;
 
    --  §10.2 merge an imported unit's declarations into Into (appends every
@@ -902,11 +907,16 @@ package Kurt.Parser is
    --  `Rename_From` snapshot marking "everything from here on".
    function Snapshot (U : Translation_Unit) return Rename_From;
 
+   --  `Super_Word` names the path head this rename pass CONSUMES instead of
+   --  mangling: a `module` close pass consumes one leading `super` (stepping
+   --  a reference out to the enclosing scope, §10.6); the whole-file `@add`
+   --  pass consumes a leading `srcroot`. Empty = no head is consumed.
    procedure Apply_Namespace
      (U           : in out Translation_Unit;
       NS_Prefix   : String;
       From        : Rename_From := (others => 1);
-      Extra_Names : Path_Segments.Vector := Path_Segments.Empty_Vector);
+      Extra_Names : Path_Segments.Vector := Path_Segments.Empty_Vector;
+      Super_Word  : String := "");
 
    procedure Resolve_Aliases
      (U              : in out Translation_Unit;

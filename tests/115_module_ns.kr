@@ -1,0 +1,27 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §10.6 modules are real namespaces: qualified access, nesting, `super`,
+// `srcroot`, and composition with `@add` namespaces all resolve through
+// the same alias machinery.
+@add "115_lib/shapes.kr" as lib;
+
+fn top() -> si4 { return 5; }
+
+module m {
+    pub struct pair { a: si4, b: si4 }
+    pub fn sum(p: pair) -> si4 { return p.a + p.b; }
+    module inner {
+        pub fn via_super() -> si4 { return super::super::top(); }   // 5
+    }
+    pub fn from_root() -> si4 { return srcroot::top(); }            // 5
+}
+
+fn main() -> ui1 {
+    let p: m::pair = m::pair { a = 10, b = 4 };
+    let s: si4 = m::sum(p);                       // 14
+    let u: si4 = m::inner::via_super();           // 5
+    let r: si4 = m::from_root();                  // 5
+    let t: si4 = lib::geo::twice(9);              // 18
+    airside { posix::printf("s=%d u=%d r=%d t=%d\n\0".ptr, s, u, r, t); }
+    return (s + u + r + t) as ui1;                // 42
+}

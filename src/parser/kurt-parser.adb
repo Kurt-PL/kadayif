@@ -3570,7 +3570,8 @@ package body Kurt.Parser is
      (U           : in out Translation_Unit;
       NS_Prefix   : String;
       From        : Rename_From := (others => 1);
-      Extra_Names : Path_Segments.Vector := Path_Segments.Empty_Vector)
+      Extra_Names : Path_Segments.Vector := Path_Segments.Empty_Vector;
+      Super_Word  : String := "")
    is
       Names : Path_Segments.Vector := Extra_Names;
 
@@ -3685,24 +3686,43 @@ package body Kurt.Parser is
                | E_Uninit =>
                null;
             when E_Path =>
-               if Natural (E.Segments.Length) = 1 then
-                  E.Segments.Replace_Element
-                    (E.Segments.First_Index,
-                     SU.To_Unbounded_String
-                       (Mangle_Value
-                          (SU.To_String (E.Segments.First_Element))));
-               elsif Natural (E.Segments.Length) >= 2 then
-                  declare
-                     H : constant String :=
-                       SU.To_String (E.Segments.First_Element);
-                  begin
-                     if In_Names (H) then
-                        E.Segments.Replace_Element
-                          (E.Segments.First_Index,
-                           SU.To_Unbounded_String (NS_Prefix & "$" & H));
-                     end if;
-                  end;
-               end if;
+               --  §10.6 a leading `super` / `srcroot` head. `super` (module
+               --  close pass) steps the reference OUT of the scope being
+               --  renamed — consume it and leave the remainder to an
+               --  enclosing pass. `srcroot` (whole-file pass) names THIS
+               --  pass's root — consume it and keep renaming the remainder.
+               declare
+                  Skip_Rename : Boolean := False;
+               begin
+                  if Super_Word /= ""
+                    and then Natural (E.Segments.Length) >= 2
+                    and then SU.To_String (E.Segments.First_Element)
+                               = Super_Word
+                  then
+                     E.Segments.Delete_First;
+                     Skip_Rename := Super_Word = "super";
+                  end if;
+                  if Skip_Rename then
+                     null;
+                  elsif Natural (E.Segments.Length) = 1 then
+                     E.Segments.Replace_Element
+                       (E.Segments.First_Index,
+                        SU.To_Unbounded_String
+                          (Mangle_Value
+                             (SU.To_String (E.Segments.First_Element))));
+                  elsif Natural (E.Segments.Length) >= 2 then
+                     declare
+                        H : constant String :=
+                          SU.To_String (E.Segments.First_Element);
+                     begin
+                        if In_Names (H) then
+                           E.Segments.Replace_Element
+                             (E.Segments.First_Index,
+                              SU.To_Unbounded_String (NS_Prefix & "$" & H));
+                        end if;
+                     end;
+                  end if;
+               end;
                for I in E.P_Type_Args.First_Index ..
                         E.P_Type_Args.Last_Index loop
                   RT (E.P_Type_Args.Element (I));
@@ -4106,30 +4126,44 @@ package body Kurt.Parser is
       --  Collapse a >=2-segment path whose first segment is a known alias:
       --  [alias, Head, Rest...] -> [prefix & "$" & Head, Rest...].
       procedure Collapse (Segs : in out Path_Segments.Vector) is
-         Pfx : constant String :=
-           Prefix_Of (SU.To_String (Segs.First_Element));
       begin
-         if Pfx = "" or else Natural (Segs.Length) < 2 then
-            return;
+         --  §10.6 (root unit): a surviving leading `srcroot` names the top
+         --  level itself — strip it. (`@add`-ed units resolved theirs
+         --  during their whole-file rename pass.)
+         if Natural (Segs.Length) >= 2
+           and then SU.To_String (Segs.First_Element) = "srcroot"
+         then
+            Segs.Delete_First;
          end if;
-         declare
-            Second  : constant String :=
-              SU.To_String (Segs.Element (Segs.First_Index + 1));
-            Mangled : constant String := Pfx & "$" & Second;
-            Tail    : Path_Segments.Vector;
-         begin
-            for I in Segs.First_Index + 2 .. Segs.Last_Index loop
-               Tail.Append (Segs.Element (I));
-            end loop;
-            if not Check_Pub (Mangled) then
-               raise Syntax_Error with
-                 "'" & Second & "' is not `pub` in the imported unit "
-                 & "(spec 10.3)";
-            end if;
-            Segs.Clear;
-            Segs.Append (SU.To_Unbounded_String (Mangled));
-            Segs.Append (Tail);
-         end;
+         --  Fixpoint: nested namespaces collapse one step per round
+         --  (`a::b::f` -> `a$b::f` -> `a$b$f`).
+         loop
+            exit when Natural (Segs.Length) < 2;
+            declare
+               Pfx : constant String :=
+                 Prefix_Of (SU.To_String (Segs.First_Element));
+            begin
+               exit when Pfx = "";
+               declare
+                  Second  : constant String :=
+                    SU.To_String (Segs.Element (Segs.First_Index + 1));
+                  Mangled : constant String := Pfx & "$" & Second;
+                  Tail    : Path_Segments.Vector;
+               begin
+                  for I in Segs.First_Index + 2 .. Segs.Last_Index loop
+                     Tail.Append (Segs.Element (I));
+                  end loop;
+                  if not Check_Pub (Mangled) then
+                     raise Syntax_Error with
+                       "'" & Second & "' is not `pub` in its namespace "
+                       & "(spec 10.3/10.6)";
+                  end if;
+                  Segs.Clear;
+                  Segs.Append (SU.To_Unbounded_String (Mangled));
+                  Segs.Append (Tail);
+               end;
+            end;
+         end loop;
       end Collapse;
 
       --  "alias::Item" -> "prefix$Item" (checking `pub`); anything else
@@ -4155,8 +4189,8 @@ package body Kurt.Parser is
             begin
                if not Check_Pub (Mangled) then
                   raise Syntax_Error with
-                    "'" & Rest & "' is not `pub` in the imported unit '"
-                    & Head & "' (spec 10.3)";
+                    "'" & Rest & "' is not `pub` in namespace '"
+                    & Head & "' (spec 10.3/10.6)";
                end if;
                return Mangled;
             end;
@@ -4432,12 +4466,76 @@ package body Kurt.Parser is
    is
       C : Cursor := (Lex => Lex'Unchecked_Access, others => <>);
       U : Translation_Unit;
-      --  §10.6 `module name { … }` nesting depth. A module is a transparent
-      --  namespace wrapper in the bootstrap: its declarations are flattened
-      --  into the unit (qualified `name::item` access resolves by last
-      --  segment, as for `@dyn` aliases). `super`/`srcroot` path roots and
-      --  strict module-scoped name resolution are deferred.
-      Module_Depth : Natural := 0;
+      --  §10.6 `module name { … }` — a real namespace: when a module body
+      --  closes, every declaration it appended (a slice of U's vectors,
+      --  tracked by the entry Snapshot) is renamed `name$item` and every
+      --  internal reference is rewritten to match (Apply_Namespace); the
+      --  mangled module prefix then doubles as its own access alias
+      --  (`name::item` → `name$item` via Resolve_Aliases). One stack
+      --  entry per open module, innermost last.
+      type Module_Frame is record
+         Name     : SU.Unbounded_String;
+         Snap     : Rename_From;
+         MN_Start : Natural;   --  U.Module_Names length at open
+      end record;
+      package Module_Stacks is new Ada.Containers.Vectors
+        (Index_Type => Positive, Element_Type => Module_Frame);
+      Modules : Module_Stacks.Vector;
+
+      --  Close the innermost open module: namespace its declaration slice
+      --  and register/refresh the module-alias prefixes.
+      procedure Close_Module is
+         Fr    : constant Module_Frame := Modules.Last_Element;
+         Nm    : constant String := SU.To_String (Fr.Name);
+         Extra : Path_Segments.Vector;
+      begin
+         Modules.Delete_Last;
+         --  Heads of the sub-modules closed inside this body — their
+         --  mangled declarations (`b$f`) must pick up this prefix too.
+         for I in Fr.MN_Start + 1 .. Natural (U.Module_Names.Length) loop
+            declare
+               M      : constant String :=
+                 SU.To_String (U.Module_Names.Element (I));
+               Dollar : constant Natural := Ada.Strings.Fixed.Index (M, "$");
+               Head   : constant String :=
+                 (if Dollar = 0 then M else M (M'First .. Dollar - 1));
+               Dup    : Boolean := False;
+            begin
+               for E of Extra loop
+                  if SU.To_String (E) = Head then
+                     Dup := True;
+                  end if;
+               end loop;
+               if not Dup then
+                  Extra.Append (SU.To_Unbounded_String (Head));
+               end if;
+            end;
+         end loop;
+         Apply_Namespace
+           (U, Nm, From => Fr.Snap, Extra_Names => Extra,
+            Super_Word => "super");
+         --  Sub-module prefixes gain this module's prefix; then this
+         --  module itself becomes an alias.
+         for I in Fr.MN_Start + 1 .. Natural (U.Module_Names.Length) loop
+            U.Module_Names.Replace_Element
+              (I, SU.To_Unbounded_String
+                    (Nm & "$" & SU.To_String (U.Module_Names.Element (I))));
+         end loop;
+         U.Module_Names.Append (Fr.Name);
+      end Close_Module;
+
+      --  Open a module: record its frame (after `module name {` is read).
+      --  The name also joins the cursor's namespace-alias set so a
+      --  composite literal `name::Type { ... }` parses as a qualified
+      --  struct literal rather than `Enum::Variant { ... }`.
+      procedure Open_Module (Nm : SU.Unbounded_String) is
+      begin
+         Modules.Append
+           ((Name     => Nm,
+             Snap     => Snapshot (U),
+             MN_Start => Natural (U.Module_Names.Length)));
+         C.Add_Aliases.Append (Nm);
+      end Open_Module;
    begin
       Advance (C);
       while C.Cur.Kind /= Tok_EOF loop
@@ -4479,16 +4577,16 @@ package body Kurt.Parser is
                      U.Consts.Append (CD);
                   end;
                elsif Peek_Tok (C).Kind = Kw_Module then
-                  --  §10.6 `pub module name { … }` (flattened).
+                  --  §10.6 `pub module name { … }`.
                   Advance (C);   --  `pub`
                   Advance (C);   --  `module`
                   declare
                      Nm : constant SU.Unbounded_String :=
                        Take_Ident (C, "module name");
-                     pragma Unreferenced (Nm);
-                  begin null; end;
-                  Expect (C, Punct_LBrace, "'{' to open module body");
-                  Module_Depth := Module_Depth + 1;
+                  begin
+                     Expect (C, Punct_LBrace, "'{' to open module body");
+                     Open_Module (Nm);
+                  end;
                elsif Peek_Tok (C).Kind = Kw_Static then
                   Advance (C);
                   declare
@@ -4608,28 +4706,29 @@ package body Kurt.Parser is
             when Kw_Trait =>
                Parse_Trait_Decl (C, U.Traits);
             when Punct_RBrace =>
-               --  §10.6 closing brace of a `module` body (flattened).
-               if Module_Depth = 0 then
+               --  §10.6 closing brace of a `module` body: namespace the
+               --  slice of declarations the body appended.
+               if Modules.Is_Empty then
                   raise Syntax_Error with
                     "unexpected '}' at top level at line"
                     & Positive'Image (C.Cur.Line);
                end if;
-               Module_Depth := Module_Depth - 1;
+               Close_Module;
                Advance (C);
             when Kw_Static =>
                --  §5.4 `static [mut] NAME: T = expr ;`.
                U.Statics.Append (Parse_Static_Decl (C));
             when Kw_Module =>
-               --  §10.6 `module name { … }` — a transparent namespace wrapper;
-               --  its declarations flatten into the unit. `pub module` too.
+               --  §10.6 `module name { … }` — a namespace: the body's
+               --  declarations are renamed `name$item` when it closes.
                Advance (C);   --  `module`
                declare
                   Nm : constant SU.Unbounded_String :=
                     Take_Ident (C, "module name");
-                  pragma Unreferenced (Nm);
-               begin null; end;
-               Expect (C, Punct_LBrace, "'{' to open module body");
-               Module_Depth := Module_Depth + 1;
+               begin
+                  Expect (C, Punct_LBrace, "'{' to open module body");
+                  Open_Module (Nm);
+               end;
             when Kw_Use =>
                --  §5.12.2 `use path;` — unqualified name introduction. In the
                --  single-unit bootstrap every declaration is already in one
@@ -4676,7 +4775,7 @@ package body Kurt.Parser is
                  & " at line" & Positive'Image (C.Cur.Line);
          end case;
       end loop;
-      if Module_Depth > 0 then
+      if not Modules.Is_Empty then
          raise Syntax_Error with
            "unterminated `module` (missing '}', spec 10.6)";
       end if;

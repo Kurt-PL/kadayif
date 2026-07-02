@@ -1,5 +1,8 @@
 @dyn as posix { variadic fn printf(&raw ui1) -> si4; }
 
+// §10.6 `module` is a real namespace: items are reachable only through the
+// qualified path (`math::square`), bare names do not leak out, and nested
+// modules chain (`math::deep::cube`).
 module math {
     pub fn square(x: si4) -> si4 { return x * x; }
     module deep {
@@ -8,15 +11,15 @@ module math {
 }
 
 pub module util {
-    struct pair { a: si4, b: si4 }
+    pub struct pair { a: si4, b: si4 }
     pub fn sum(p: pair) -> si4 { return p.a + p.b; }
 }
 
 fn main() -> ui1 {
-    let s: si4 = math::square(5);            // 25
-    let c: si4 = math::deep::cube(3);        // 27
-    let p: pair = pair { a = 10, b = 4 };    // struct flattened
-    let t: si4 = util::sum(p);               // 14
+    let s: si4 = math::square(5);                        // 25
+    let c: si4 = math::deep::cube(3);                    // 27
+    let p: util::pair = util::pair { a = 10, b = 4 };
+    let t: si4 = util::sum(p);                           // 14
     airside { posix::printf("s=%d c=%d t=%d\n\0".ptr, s, c, t); }
     return 0;
 }

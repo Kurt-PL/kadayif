@@ -393,8 +393,60 @@ procedure Main is
                end loop;
             end;
             if not Is_Root then
-               Kurt.Parser.Apply_Namespace (U, Prefix);
+               --  §10.3/§10.6 whole-file namespace pass. Module-mangled
+               --  declarations (`a$b$f`) are reached through their module
+               --  heads (Extra_Names); a leading `srcroot` names this
+               --  file's own root and is resolved here.
+               declare
+                  Heads : Kurt.Parser.Path_Segments.Vector;
+               begin
+                  for M of U.Module_Names loop
+                     declare
+                        S      : constant String := To_String (M);
+                        Dollar : Natural := 0;
+                        Dup    : Boolean := False;
+                     begin
+                        for I in S'Range loop
+                           if S (I) = '$' then
+                              Dollar := I;
+                              exit;
+                           end if;
+                        end loop;
+                        declare
+                           H : constant String :=
+                             (if Dollar = 0 then S
+                              else S (S'First .. Dollar - 1));
+                        begin
+                           for E of Heads loop
+                              if To_String (E) = H then
+                                 Dup := True;
+                              end if;
+                           end loop;
+                           if not Dup then
+                              Heads.Append (To_Unbounded_String (H));
+                           end if;
+                        end;
+                     end;
+                  end loop;
+                  Kurt.Parser.Apply_Namespace
+                    (U, Prefix, Extra_Names => Heads,
+                     Super_Word => "srcroot");
+               end;
+               --  The file prefix folds into every module alias.
+               for I in U.Module_Names.First_Index ..
+                        U.Module_Names.Last_Index loop
+                  U.Module_Names.Replace_Element
+                    (I, To_Unbounded_String
+                          (Prefix & "$"
+                           & To_String (U.Module_Names.Element (I))));
+               end loop;
             end if;
+            --  §10.6 every module prefix is its own namespace alias
+            --  (`a::b::item` collapses stepwise to `a$b$item`).
+            for M of U.Module_Names loop
+               Alias_Names.Append (M);
+               Alias_Prefixes.Append (M);
+            end loop;
             Kurt.Parser.Merge_Unit (Unit, U);
          end;
       end Load;

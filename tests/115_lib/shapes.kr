@@ -1,0 +1,4 @@
+// §10.6 a module inside an @add-ed unit: reachable as lib::geo::twice.
+pub module geo {
+    pub fn twice(x: si4) -> si4 { return x * 2; }
+}
