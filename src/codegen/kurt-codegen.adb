@@ -51,9 +51,6 @@ package body Kurt.Codegen is
       case E.Kind is
          when E_Int_Lit | E_Float_Lit | E_Bool_Lit | E_Path | E_Uninit =>
             null;
-         when E_Range =>
-            Collect_Strings_In_Expr (E.Rg_Lo, Pool);
-            Collect_Strings_In_Expr (E.Rg_Hi, Pool);
          when E_Destruct =>
             Collect_Strings_In_Expr (E.DT_Inner, Pool);
          when E_Closure =>
@@ -621,8 +618,7 @@ package body Kurt.Codegen is
                              or else Kurt.Layout.Enum_Has_Payload
                                        (SU.To_String (T.Name))))
                 or else T.Kind = T_Tuple
-                or else T.Kind = T_Array
-                or else T.Kind = T_Range));
+                or else T.Kind = T_Array));
 
    --  §7.2: contract types in codegen. `bool` is the built-in scalar
    --  contract (success = 1, failure = 0); any other contract enum takes

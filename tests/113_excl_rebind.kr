@@ -1,0 +1,17 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.8.2/§8.1: an exclusive reference `$T` is intrinsically bodyless-
+// `destruct` (uncopyable, transfer-only) regardless of referent. Rebinding
+// an *existing* `$si4` binding — not just creating a fresh `$expr` — is a
+// transfer: the source is invalidated, and only the new binding remains
+// live. This test exercises the surviving (moved-to) binding, which shall
+// still read/write the same underlying storage correctly.
+fn main() -> ui1 {
+    mut x: si4 = 10;
+    let a: $si4 = $x;
+    let b = a;               // transfer: `a` is moved, `b` is now the
+                              // sole live handle
+    airside { *b = 42; }
+    airside { posix::printf("via_b=%d\n\0".ptr, *b); }   // 42
+    return 0;
+}

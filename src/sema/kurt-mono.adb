@@ -57,9 +57,6 @@ package body Kurt.Mono is
                return "arr" & Img (Img'First + 1 .. Img'Last)
                  & "_" & Mangle (T.Elem);
             end;
-         when T_Range =>
-            return (if T.Rng_Inclusive then "rangein_" else "rangeex_")
-              & Mangle (T.Rng_Elem);
          when T_Dyn =>
             return "dyn_" & SU.To_String (T.Trait_Name);
          when T_Fn =>
@@ -141,11 +138,6 @@ package body Kurt.Mono is
                R.Len  := T.Len;
                return R;
             end;
-         when T_Range =>
-            return new AST_Type'
-              (Kind          => T_Range,
-               Rng_Inclusive => T.Rng_Inclusive,
-               Rng_Elem      => Subst (T.Rng_Elem, Params, Args));
          when T_Dyn =>
             return T;   --  trait object carries no substitutable parts
          when T_Fn =>
@@ -342,10 +334,6 @@ package body Kurt.Mono is
          when E_Destruct =>
             R.DT_Inner := C (E.DT_Inner);
             R.DT_Undo  := E.DT_Undo;
-         when E_Range =>
-            R.Rg_Lo        := C (E.Rg_Lo);
-            R.Rg_Hi        := C (E.Rg_Hi);
-            R.Rg_Inclusive := E.Rg_Inclusive;
       end case;
       return R;
    end Copy_Expr;
@@ -520,8 +508,6 @@ package body Kurt.Mono is
                for I in T.Elems.First_Index .. T.Elems.Last_Index loop
                   Subst_Self_Name (T.Elems.Element (I), Concrete);
                end loop;
-            when T_Range =>
-               Subst_Self_Name (T.Rng_Elem, Concrete);
             when T_Dyn =>
                null;
             when T_Fn =>
@@ -625,8 +611,6 @@ package body Kurt.Mono is
                Visit_Type (T.Target);
             when T_Array =>
                Visit_Type (T.Elem);
-            when T_Range =>
-               Visit_Type (T.Rng_Elem);   --  intrinsic; no instantiation
             when T_Dyn =>
                null;
             when T_Fn =>
@@ -865,9 +849,6 @@ package body Kurt.Mono is
             when E_Dyn_Cast   => Scan_Expr (E.DC_Inner, Used, Bound);
             when E_Slice_Cast => Scan_Expr (E.SC_Inner, Used, Bound);
             when E_Destruct   => Scan_Expr (E.DT_Inner, Used, Bound);
-            when E_Range =>
-               Scan_Expr (E.Rg_Lo, Used, Bound);
-               Scan_Expr (E.Rg_Hi, Used, Bound);
             when E_Closure =>
                --  A nested closure's params are bound within it; its free
                --  references to our scope are uses we must also satisfy.
@@ -1017,9 +998,6 @@ package body Kurt.Mono is
                loop
                   Visit_Expr (E.SL_Fields.Element (I).Val);
                end loop;
-            when E_Range =>
-               Visit_Expr (E.Rg_Lo);
-               Visit_Expr (E.Rg_Hi);
             when E_Destruct =>
                Visit_Expr (E.DT_Inner);
             when E_Closure =>

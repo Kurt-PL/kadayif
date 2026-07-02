@@ -31,7 +31,7 @@ fn main() -> ui1 {
     airside {
         let zw: &raw mut ui8 = &raw mut z as! &raw mut ui8;
         while i < 5 {
-            *(zw + i) = *(zw + i) * i;                        // 0,7,14,21,28
+            *(zw + i) = *(zw + i) * (i as ui8);               // 0,7,14,21,28
             t += *(zw + i);
             i += 1;
         }

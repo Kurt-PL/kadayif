@@ -1,0 +1,2 @@
+@add "../85_lib/geo.kr" as ga;
+pub fn use_a(p: ga::point) -> si4 { return ga::area(p); }

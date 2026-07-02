@@ -1,14 +1,14 @@
---  Kadayif bootstrap parser.
+--  Kadayif bootstrap parser: recursive-descent / Pratt, producing the
+--  AST consumed by Kurt.Sema / Kurt.Mono / Kurt.Codegen.
 --
---  Coverage: first.kr and hello.kr.
---    * top-level fn definition with parameter list and a body of return /
---      expression / airside-block statements
---    * @dyn declaration with fn prototypes (incl. variadic / pub)
---    * minimal type expressions: NAME, `&` [raw] T, `$` T
---    * minimal expressions: int literal, string literal, path
---      (`a::b::c`), field access (`e.f`), call (`f(args)`)
---
---  Spec references: §3, §5.1, §5.1.2, §6, §7, §10.3.
+--  Covers declarations (§5: fn/let/mut/const/static/struct/enum/type
+--  alias/use, generic clauses with bounds), types (§4: named, refs with
+--  modifiers, tuples, arrays/slices, ranges, subroutine pointers and
+--  invocables, `dyn Trait`), expressions (§6, precedence-climbing with
+--  the full operator set, casts, intrinsics), statements and control
+--  flow (§7: if/if let/match/while/while let/loop/labels/express),
+--  traits and impls (§9), closures (§9.9), and programme structure
+--  (§10: @add/@dyn/@path/module — module namespacing still flattened).
 
 with Ada.Strings.Unbounded;
 with Ada.Containers.Vectors;
@@ -30,7 +30,7 @@ package Kurt.Parser is
      (Index_Type => Positive, Element_Type => Type_Access);
 
    type Type_Kind is
-     (T_Named, T_Ref, T_Tuple, T_Array, T_Dyn, T_Range, T_Fn);
+     (T_Named, T_Ref, T_Tuple, T_Array, T_Dyn, T_Fn);
    type Ref_Sigil is (R_Shared, R_Excl, R_Raw);
 
    --  §8.1 store-discipline modifier: `mut`, `atomic`, and `guard` are
@@ -59,9 +59,12 @@ package Kurt.Parser is
             --  §4.7 anonymous tuple `.{T, T, ...}` (positional fields).
             Elems : Type_Vectors.Vector;
          when T_Array =>
-            --  §4.6 array. `Len > 0` is the fixed-size array `[T; N]`;
-            --  `Len = 0` is the unsized slice `[T]` (only valid as a
-            --  reference target — `&[T]` is a fat reference).
+            --  §4.7 fixed-size array `[T; N]` (`Len > 0`). `Len = 0` is
+            --  the `[T]` bracket of a slice reference (§8.1.4): under the
+            --  spec's grammar `[T]` exists only inside a slice-reference
+            --  production, never as a standalone type, so a bare
+            --  `T_Array (Len = 0)` outside a T_Ref target is rejected by
+            --  sema (params/returns/fields/payloads/bindings).
             Elem : Type_Access;
             Len  : Natural := 0;
          when T_Dyn =>
@@ -69,13 +72,6 @@ package Kurt.Parser is
             --  reference referent; `&dyn Trait` is a fat reference
             --  (value ptr + dispatch-table ptr).
             Trait_Name : SU.Unbounded_String;
-         when T_Range =>
-            --  §4.8 built-in range type. `range_ex.<T>` (exclusive) and
-            --  `range_in.<T>` (inclusive) are intrinsic two-field aggregates
-            --  { start: T, end: T }, handled structurally like `[T; N]` —
-            --  no declaration, no monomorphisation.
-            Rng_Inclusive : Boolean := False;
-            Rng_Elem      : Type_Access;
          when T_Fn =>
             --  §4.10 subroutine pointer `[extern[(iface)]] [variadic]
             --  [airside] fn (T...) [-> U]`. A pointer-sized value (not a
@@ -153,11 +149,11 @@ package Kurt.Parser is
       E_Type_Intrinsic,  --  `T@size` / `T@align` / `T@offset(f)` (§6.12)
       E_Uninit,           --  `uninit` uninitialized value (§6.1.8)
       E_Closure,          --  `/.params/ <- e` / `/.params/ { ... }` (§9.9)
-      E_Destruct,         --  `destruct(e)` / `undestruct(e)` (§8.4, §8.11)
-      E_Range);           --  `a..b` / `a..=b` range literal (§4.8)
+      E_Destruct);        --  `destruct(e)` / `undestruct(e)` (§8.4, §8.11)
       --  Note: Kurt has no `[]` indexing operator (§6.2). Element access
       --  is `*(arr.ptr + i)` (raw reference arithmetic, §8.6.4) or the
-      --  library `.at()` method.
+      --  library `.at()` method. `..`/`..=` are pattern-only tokens
+      --  (§3.7); no value-level range type exists.
 
    --  §6.12 layout intrinsic operations (bootstrap subset).
    type Type_Intrinsic_Op is (TI_Size, TI_Align, TI_Offset);
@@ -404,12 +400,6 @@ package Kurt.Parser is
             --  Both consume (invalidate) the operand binding; type is void.
             DT_Inner : Expr_Access;
             DT_Undo  : Boolean := False;   --  True for `undestruct`
-         when E_Range =>
-            --  §4.8 range literal: low/high bounds and exclusivity. Its type
-            --  is the intrinsic T_Range, resolved by sema from the operands.
-            Rg_Lo        : Expr_Access;
-            Rg_Hi        : Expr_Access;
-            Rg_Inclusive : Boolean := False;
       end case;
    end record;
 
@@ -649,6 +639,8 @@ package Kurt.Parser is
 
    type Struct_Decl is record
       Name           : SU.Unbounded_String;
+      --  §10.3: visible under a `@add`-ing unit's namespace only if `pub`.
+      Is_Pub         : Boolean := False;
       Generic_Params : Path_Segments.Vector;
       Fields         : Struct_Field_Vectors.Vector;
       Repr_Packed    : Boolean := False;   --  §4.11.4 `with repr(packed)`
@@ -696,6 +688,7 @@ package Kurt.Parser is
 
    type Enum_Decl is record
       Name           : SU.Unbounded_String;
+      Is_Pub         : Boolean := False;   --  §10.3
       Generic_Params : Path_Segments.Vector;
       Is_Contract    : Boolean := False;       --  declared `with contract`
       Discrim_Ty     : Type_Access := null;    --  `with discrim(T)` (§4.11.3)
@@ -756,6 +749,8 @@ package Kurt.Parser is
 
    type Trait_Decl is record
       Name        : SU.Unbounded_String;
+      Is_Pub      : Boolean := False;   --  §10.3
+
       Methods     : Trait_Method_Vectors.Vector;
       Consts      : Assoc_Const_Vectors.Vector;
       Assoc_Types : Assoc_Type_Vectors.Vector;   --  §9.3.1 `type Item [= D];`
@@ -799,9 +794,10 @@ package Kurt.Parser is
 
    --  §5.3 top-level translation-time constant.
    type Const_Decl is record
-      Name : SU.Unbounded_String;
-      Ty   : Type_Access;
-      Init : Expr_Access;
+      Name   : SU.Unbounded_String;
+      Is_Pub : Boolean := False;   --  §10.3
+      Ty     : Type_Access;
+      Init   : Expr_Access;
    end record;
 
    package Const_Vectors is new Ada.Containers.Vectors
@@ -811,6 +807,7 @@ package Kurt.Parser is
    type Static_Decl is record
       Name   : SU.Unbounded_String;
       Is_Mut : Boolean := False;
+      Is_Pub : Boolean := False;   --  §10.3
       Ty     : Type_Access;
       Init   : Expr_Access;
    end record;
@@ -837,11 +834,13 @@ package Kurt.Parser is
       --  unit, if one is declared. At most one is permitted.
       Has_Trap_Handler : Boolean := False;
       Trap_Handler     : Stmt_Vectors.Vector;
-      --  §10.2 `@add [prefix::]"path"` source imports declared in this unit,
-      --  in source order. Adds holds the path; Add_Prefixes the parallel
-      --  prefix name (empty = none) used to pick the resolution base.
+      --  §10.2/§10.3 `@add [prefix::]"path" as name;` source imports declared
+      --  in this unit, in source order. Adds holds the path; Add_Prefixes the
+      --  parallel `@path` prefix (empty = none); Add_Names the mandatory
+      --  namespace identifier used to access the import as `name::item`.
       Adds         : Path_Segments.Vector;
       Add_Prefixes : Path_Segments.Vector;
+      Add_Names    : Path_Segments.Vector;
       --  §10.5 `@path "base" as name;` search-path prefixes (parallel).
       Path_Names : Path_Segments.Vector;
       Path_Bases : Path_Segments.Vector;
@@ -854,6 +853,55 @@ package Kurt.Parser is
    --  declaration vector). The trap handler and `Adds` are not merged.
    procedure Merge_Unit
      (Into : in out Translation_Unit; From : Translation_Unit);
+
+   --  §10.3 namespace mangling. A single walker handles both directions:
+   --
+   --  1. Apply_Namespace(U, Prefix): called on a `@add`-ed unit's own AST,
+   --     right before it is merged into its importer. Every name U itself
+   --     declares (struct/enum/trait/fn/const/static) is prefixed
+   --     `Prefix$name` (matching the existing `Type$method` impl-mangling
+   --     scheme), and every reference to those names *within U's own AST*
+   --     is rewritten to match, so U stays internally self-consistent.
+   --     Only `pub`-marked declarations remain externally reachable; non-pub
+   --     ones are still renamed (for internal consistency) but Resolve_Aliases
+   --     below refuses to reach them from outside.
+   --
+   --  2. Resolve_Aliases(U, Alias_Names, Alias_Prefixes): called once on the
+   --     fully-merged top-level unit. A 2-segment reference `alias::item`
+   --     (value path, or a `Head::Item` compound type name) where `alias`
+   --     matches an `@add ... as alias;` site is rewritten to the single
+   --     mangled name `prefix$item` — reusing all of the ordinary
+   --     single-segment resolution machinery unchanged. A 3+-segment
+   --     reference `alias::Head::Rest` collapses the first two segments into
+   --     `prefix$Head` and keeps the remainder, so a qualified enum path or
+   --     similar nested access still resolves against the renamed
+   --     declaration. Both operations no-op instead of mangling a name
+   --     that doesn't need it, so it is safe to call unconditionally.
+   --  Starting index (1-based, into the *current* length of the matching
+   --  Translation_Unit vector) for a slice-restricted Apply_Namespace call —
+   --  used for `module name { ... }`, whose declarations are a SLICE of the
+   --  enclosing file's vectors (appended while the module body was parsed),
+   --  not a whole separate unit. Defaults (all 1) rename the entire unit,
+   --  matching the `@add` use.
+   type Rename_From is record
+      Fns, Gen_Fns, Structs, Enums, Traits, Trait_Impls, Consts, Statics,
+        Gen_Methods : Positive := 1;
+   end record;
+
+   --  Current lengths of U's namespaceable vectors, suitable as a
+   --  `Rename_From` snapshot marking "everything from here on".
+   function Snapshot (U : Translation_Unit) return Rename_From;
+
+   procedure Apply_Namespace
+     (U           : in out Translation_Unit;
+      NS_Prefix   : String;
+      From        : Rename_From := (others => 1);
+      Extra_Names : Path_Segments.Vector := Path_Segments.Empty_Vector);
+
+   procedure Resolve_Aliases
+     (U              : in out Translation_Unit;
+      Alias_Names    : Path_Segments.Vector;
+      Alias_Prefixes : Path_Segments.Vector);
 
    function Parse_Unit (Lex : in out Kurt.Lexer.Lexer)
       return Translation_Unit;

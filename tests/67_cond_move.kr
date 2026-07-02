@@ -4,16 +4,16 @@
 // control-flow paths is destroyed exactly once. `g` is moved into `sink`
 // only when `cond` is true; the runtime drop flag makes the scope-exit
 // destructor run iff the move did not happen.
-struct guard { id: si4 } with destruct {
+struct sentry { id: si4 } with destruct {
     airside { posix::printf("drop %d\n\0".ptr, self.id); }
 };
 
-fn sink(g: guard) -> void {
+fn sink(g: sentry) -> void {
     airside { posix::printf("sink %d\n\0".ptr, g.id); }
 }                                   // sink destroys its parameter g
 
 fn test(cond: bool) -> void {
-    let g: guard = guard { id = 5 };
+    let g: sentry = sentry { id = 5 };
     if cond {
         sink(g);                    // g transferred into sink (cond path only)
     }

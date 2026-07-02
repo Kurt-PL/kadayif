@@ -1,3 +1,5 @@
-// §10.2 imported helper unit (not globbed by run.sh — lives in a subdir).
-struct point { x: si4, y: si4 }
-fn area(p: point) -> si4 { return p.x * p.y; }
+// §10.2/§10.3 imported helper unit (not globbed by run.sh — lives in a
+// subdir). Only `pub` declarations are reachable through the importer's
+// chosen namespace (`geo::point`, `geo::area`) — see 85_multiunit.kr.
+pub struct point { x: si4, y: si4 }
+pub fn area(p: point) -> si4 { return p.x * p.y; }

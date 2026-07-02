@@ -3,14 +3,14 @@
 // §8.4 a loop body is a scope: its `with destruct` locals are destroyed at
 // each iteration's end — including when the iteration ends early via
 // `continue` (before the condition re-test) or `break` (leaving the loop).
-struct guard { id: si4 } with destruct {
+struct sentry { id: si4 } with destruct {
     airside { posix::printf("drop %d\n\0".ptr, self.id); }
 };
 
 fn main() -> ui1 {
     mut i: si4 = 0;
     while i < 5 {
-        let g: guard = guard { id = i };
+        let g: sentry = sentry { id = i };
         i += 1;
         if i == 2 {
             airside { posix::printf("cont\n\0".ptr); }

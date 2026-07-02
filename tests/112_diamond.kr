@@ -1,0 +1,16 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+// §10.2 diamond-imported unit processed exactly once: geo.kr is reached via
+// three different `@add ... as` sites (through 112_lib/diamond_a.kr,
+// 112_lib/diamond_b.kr, and directly), each under its own local alias, and
+// all three resolve to the SAME merged declarations (single canonical
+// mangling prefix per source file).
+@add "112_lib/diamond_a.kr" as a;
+@add "112_lib/diamond_b.kr" as b;
+@add "85_lib/geo.kr" as geo;
+fn main() -> ui1 {
+    let p: geo::point = geo::point { x = 3, y = 5 };
+    let r1: si4 = a::use_a(p);
+    let r2: si4 = b::use_b(p);
+    airside { posix::printf("r1=%d r2=%d\n\0".ptr, r1, r2); }   // 15 15
+    return (r1 - r2) as ui1;
+}

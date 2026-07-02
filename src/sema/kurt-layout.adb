@@ -153,6 +153,13 @@ package body Kurt.Layout is
                end if;
             end loop;
             return False;
+         when T_Ref =>
+            --  §8.1: the `$` (exclusive) sigil is intrinsically
+            --  bodyless-`destruct` regardless of referent — including
+            --  the slice/trait-object-exclusive forms `$[T]`/`$dyn Trait`
+            --  — so a `$`-typed binding is never copyable, only
+            --  transferable.
+            return T.Sigil = R_Excl;
          when others =>
             return False;
       end case;
@@ -422,6 +429,11 @@ package body Kurt.Layout is
          return 0;
       end if;
       return Ceil (Off, Aln);
+   exception
+      when Constraint_Error =>
+         raise Layout_Error with
+           "type size exceeds the representable address range " &
+           "(§4.7: size overflow is a translation failure)";
    end Group_Size;
 
    --  Enum alignment: max of discriminant size and every payload field's
@@ -467,6 +479,11 @@ package body Kurt.Layout is
          return Enum_Disc_Size (Name);
       end if;
       return Ceil (Payload_Region_Offset (Name) + Max_PL, Enum_Align (Name));
+   exception
+      when Constraint_Error =>
+         raise Layout_Error with
+           "type size exceeds the representable address range " &
+           "(§4.7: size overflow is a translation failure)";
    end Enum_Size;
 
    function Variant_Field_Count
@@ -502,6 +519,11 @@ package body Kurt.Layout is
          end;
       end loop;
       raise Layout_Error with "payload field index out of range";
+   exception
+      when Constraint_Error =>
+         raise Layout_Error with
+           "type size exceeds the representable address range " &
+           "(§4.7: size overflow is a translation failure)";
    end Variant_Field_Offset;
 
    function Variant_Field_Type
@@ -620,9 +642,6 @@ package body Kurt.Layout is
          when T_Array =>
             --  §4.6: an array aligns as its element type.
             return Align_Of (T.Elem);
-         when T_Range =>
-            --  §4.8: { start: T, end: T } aligns as T.
-            return Align_Of (T.Rng_Elem);
          when T_Fn =>
             --  §4.10: a subroutine pointer is pointer-sized/aligned.
             return Kurt.Address_Cells;
@@ -686,6 +705,14 @@ package body Kurt.Layout is
          return 8;
       end if;
       case T.Kind is
+         --  §4.7: "An array type `[T; N]` whose `N * T@size` ... exceeds
+         --  the greatest value representable by `uaddr` ... shall not
+         --  appear" — overflow in a size/offset computation is a
+         --  translation failure at the point of declaration, not a
+         --  silent wraparound. `Natural` here is checked (not modular),
+         --  so an overflow raises Constraint_Error; the handler below
+         --  converts it to the proper diagnostic instead of letting it
+         --  escape as an uncaught "internal error".
          when T_Ref =>
             --  §9.5 / §4.6: a fat reference is two pointers — a reference
             --  to a trait object (ptr + dtable) or to a slice `[T]`
@@ -703,10 +730,6 @@ package body Kurt.Layout is
             --  size is a multiple of its alignment, so stride = size.
             --  An unsized slice (Len = 0) has no value size of its own.
             return T.Len * Size_Of (T.Elem);
-         when T_Range =>
-            --  §4.8: two T fields; size = 2*size(T) (size is a multiple of
-            --  align, so `end` sits exactly at size(T)).
-            return 2 * Size_Of (T.Rng_Elem);
          when T_Dyn =>
             --  §9.5: `dyn Trait` is unsized (a placeholder); a reference
             --  to it is the fat pair handled in Ref-size code. Report the
@@ -803,6 +826,11 @@ package body Kurt.Layout is
                end if;
             end;
       end case;
+   exception
+      when Constraint_Error =>
+         raise Layout_Error with
+           "type size exceeds the representable address range " &
+           "(§4.7: size overflow is a translation failure)";
    end Size_Of;
 
    ----------------------------------------------------------------------
@@ -833,6 +861,11 @@ package body Kurt.Layout is
          end;
       end loop;
       return Off;
+   exception
+      when Constraint_Error =>
+         raise Layout_Error with
+           "type size exceeds the representable address range " &
+           "(§4.7: size overflow is a translation failure)";
    end Tuple_Field_Offset;
 
    function Field_Offset (Struct_Name, Field : String) return Natural is
@@ -858,6 +891,11 @@ package body Kurt.Layout is
       end loop;
       raise Layout_Error with
         "struct '" & Struct_Name & "' has no field '" & Field & "'";
+   exception
+      when Constraint_Error =>
+         raise Layout_Error with
+           "type size exceeds the representable address range " &
+           "(§4.7: size overflow is a translation failure)";
    end Field_Offset;
 
    function Field_Type

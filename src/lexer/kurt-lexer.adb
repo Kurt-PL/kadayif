@@ -144,6 +144,25 @@ package body Kurt.Lexer is
          elsif S = "cellbits" then T.Kind := Kw_Cellbits;
          elsif S = "never"    then T.Kind := Kw_Never;
          elsif S = "xlatime"  then T.Kind := Kw_Xlatime;
+         elsif S = "asm"        then T.Kind := Kw_Asm;
+         elsif S = "atomic"     then T.Kind := Kw_Atomic;
+         elsif S = "contract"   then T.Kind := Kw_Contract;
+         elsif S = "destruct"   then T.Kind := Kw_Destruct;
+         elsif S = "guard"      then T.Kind := Kw_Guard;
+         elsif S = "integer"    then T.Kind := Kw_Integer;
+         elsif S = "module"     then T.Kind := Kw_Module;
+         elsif S = "numeric"    then T.Kind := Kw_Numeric;
+         elsif S = "primitive"  then T.Kind := Kw_Primitive;
+         elsif S = "self"       then T.Kind := Kw_Self;
+         elsif S = "self_t"     then T.Kind := Kw_Self_T;
+         elsif S = "srcroot"    then T.Kind := Kw_Srcroot;
+         elsif S = "static"     then T.Kind := Kw_Static;
+         elsif S = "super"      then T.Kind := Kw_Super;
+         elsif S = "type"       then T.Kind := Kw_Type;
+         elsif S = "undestruct" then T.Kind := Kw_Undestruct;
+         elsif S = "use"        then T.Kind := Kw_Use;
+         elsif S = "volatile"   then T.Kind := Kw_Volatile;
+         elsif S = "xfer"       then T.Kind := Kw_Xfer;
          else                       T.Kind := Tok_Ident;
          end if;
 
@@ -182,6 +201,17 @@ package body Kurt.Lexer is
           or else S = "si8" or else S = "si16" or else S = "si32"
           or else S = "uaddr" or else S = "saddr";
    end Is_Int_Suffix;
+
+   --  §3.5.2: a floating-point type suffix is one of the six `feEmM`
+   --  forms or one of their aliases (f16/bf16/f32/f64/f128/f256).
+   function Is_Float_Suffix (S : String) return Boolean is
+   begin
+      return S = "fe5m10" or else S = "fe8m7" or else S = "fe8m23"
+          or else S = "fe11m52" or else S = "fe15m112"
+          or else S = "fe19m236"
+          or else S = "f16" or else S = "bf16" or else S = "f32"
+          or else S = "f64" or else S = "f128" or else S = "f256";
+   end Is_Float_Suffix;
 
    function Scan_Int (L : in out Lexer) return Token is
       Start_Line : constant Positive := L.Line;
@@ -335,7 +365,14 @@ package body Kurt.Lexer is
                         SU.Append (Suf, Peek (L));
                         Advance (L);
                      end loop;
-                     T.Int_Suffix := Suf;
+                     if Is_Float_Suffix (SU.To_String (Suf)) then
+                        T.Int_Suffix := Suf;
+                     else
+                        raise Translation_Failure
+                          with "invalid floating-point suffix '"
+                             & SU.To_String (Suf) & "' (§3.5.2) at line"
+                             & Positive'Image (Start_Line);
+                     end if;
                   end;
                end if;
                T.Kind    := Tok_Float_Lit;
@@ -433,7 +470,14 @@ package body Kurt.Lexer is
                         SU.Append (Suf, Peek (L));
                         Advance (L);
                      end loop;
-                     T.Int_Suffix := Suf;
+                     if Is_Float_Suffix (SU.To_String (Suf)) then
+                        T.Int_Suffix := Suf;
+                     else
+                        raise Translation_Failure
+                          with "invalid floating-point suffix '"
+                             & SU.To_String (Suf) & "' (§3.5.2) at line"
+                             & Positive'Image (Start_Line);
+                     end if;
                   end;
                end if;
                T.Kind    := Tok_Float_Lit;
@@ -1206,10 +1250,9 @@ package body Kurt.Lexer is
             begin
                --  §6.11 `asm { … }`: capture the brace body verbatim. `asm`
                --  followed (on the same line) by `{` opens a raw block; any
-               --  other `asm` stays an ordinary identifier.
-               if T.Kind = Tok_Ident
-                 and then SU.To_String (T.Lexeme) = "asm"
-               then
+               --  other `asm` stays the bare keyword (usable only where the
+               --  grammar names it, e.g. a top-level asm declaration).
+               if T.Kind = Kw_Asm then
                   declare
                      Save_Pos : constant Positive := L.Pos;
                      Save_Col : constant Positive := L.Col;

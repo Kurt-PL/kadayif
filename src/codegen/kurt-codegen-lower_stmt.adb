@@ -554,31 +554,6 @@ begin
                            end if;
                         end;
                      end;
-                  elsif S.L_Init.Kind = E_Range then
-                     --  §4.8 range literal: store `start` at offset 0 and
-                     --  `end` at size(T), the two T-typed fields in place.
-                     declare
-                        Elem_Sz : constant Natural :=
-                          (if Ty.Rng_Elem /= null
-                           then Sizeof (Ty.Rng_Elem) else 8);
-                        Is_FP   : constant Boolean := Is_Float (Ty.Rng_Elem);
-                     begin
-                        if Is_FP then
-                           Lower_Float_Into_D (F, S.L_Init.Rg_Lo, 0, ST);
-                           IO.Put_Line (F, "    str     "
-                             & (if Elem_Sz = 4 then "s0" else "d0")
-                             & ", [x29, #" & Img (Off) & "]");
-                           Lower_Float_Into_D (F, S.L_Init.Rg_Hi, 0, ST);
-                           IO.Put_Line (F, "    str     "
-                             & (if Elem_Sz = 4 then "s0" else "d0")
-                             & ", [x29, #" & Img (Off + Elem_Sz) & "]");
-                        else
-                           Lower_Expr_Into_Reg (F, S.L_Init.Rg_Lo, 9, ST);
-                           Store_Sized (Off, Elem_Sz);
-                           Lower_Expr_Into_Reg (F, S.L_Init.Rg_Hi, 9, ST);
-                           Store_Sized (Off + Elem_Sz, Elem_Sz);
-                        end if;
-                     end;
                    elsif S.L_Init.Kind = E_Variant_New then
                       Zero_Fill (Off, Sizeof (Ty));
                       --  Discriminant at the slot start, then payload.

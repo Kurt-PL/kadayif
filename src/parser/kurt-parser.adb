@@ -1,3 +1,5 @@
+with Ada.Strings.Fixed;
+
 package body Kurt.Parser is
 
    use Kurt.Lexer;
@@ -29,6 +31,12 @@ package body Kurt.Parser is
       --  (Same disambiguation Rust applies.)
       No_Struct_Lit : Boolean := False;
       Aliases : Alias_Vectors.Vector;
+      --  §10.3 `@add ... as name;` namespace names seen so far in this file
+      --  (declare-before-use, same discipline as `Aliases`). Lets a
+      --  composite literal `alias::Type { ... }` be recognised as a
+      --  (namespace-qualified) struct literal rather than the default
+      --  `Enum::Variant { ... }` reading of a 2-segment path.
+      Add_Aliases : Path_Segments.Vector;
    end record;
 
    procedure Advance (C : in out Cursor) is
@@ -102,6 +110,25 @@ package body Kurt.Parser is
       return Name;
    end Take_Ident;
 
+   --  §3.4.1: like Take_Ident, but for positions where the grammar admits
+   --  keywords as words — bound names (`numeric`, `destruct`, ...) and
+   --  with-clause items (`contract`, `destruct`, ...). Keywords keep their
+   --  spelling in Lexeme, so callers match on the returned string.
+   function Take_Word (C : in out Cursor; What : String)
+      return SU.Unbounded_String
+   is
+      Name : SU.Unbounded_String;
+   begin
+      if not Kurt.Lexer.Is_Word (C.Cur.Kind) then
+         raise Syntax_Error with
+           "expected word (" & What & "), got " & Image (C.Cur)
+           & " at line" & Positive'Image (C.Cur.Line);
+      end if;
+      Name := C.Cur.Lexeme;
+      Advance (C);
+      return Name;
+   end Take_Word;
+
    ----------------------------------------------------------------------
    --  Types
    ----------------------------------------------------------------------
@@ -140,19 +167,13 @@ package body Kurt.Parser is
          if C.Cur.Kind = Kw_Mut then
             Advance (C);
             Set_Store (RS_Mut);
-         elsif C.Cur.Kind = Tok_Ident
-           and then SU.To_String (C.Cur.Lexeme) = "volatile"
-         then
+         elsif C.Cur.Kind = Kw_Volatile then
             Advance (C);
             Volatile := True;
-         elsif C.Cur.Kind = Tok_Ident
-           and then SU.To_String (C.Cur.Lexeme) = "atomic"
-         then
+         elsif C.Cur.Kind = Kw_Atomic then
             Advance (C);
             Set_Store (RS_Atomic);
-         elsif C.Cur.Kind = Tok_Ident
-           and then SU.To_String (C.Cur.Lexeme) = "guard"
-         then
+         elsif C.Cur.Kind = Kw_Guard then
             Advance (C);
             Set_Store (RS_Guard);
          else
@@ -306,8 +327,6 @@ package body Kurt.Parser is
             for I in T.Elems.First_Index .. T.Elems.Last_Index loop
                R.Elems.Append (Copy_Subst (T.Elems.Element (I), Params, Args));
             end loop;
-         when T_Range =>
-            R.Rng_Elem := Copy_Subst (T.Rng_Elem, Params, Args);
          when T_Fn =>
             R.Fn_Params := Type_Vectors.Empty_Vector;
             for I in T.Fn_Params.First_Index .. T.Fn_Params.Last_Index loop
@@ -325,15 +344,26 @@ package body Kurt.Parser is
       Node : Type_Access;
    begin
       if C.Cur.Kind = Op_Amp then
-         Advance (C);
-         Node := new AST_Type (Kind => T_Ref);
-         Node.Sigil := R_Shared;
-         if C.Cur.Kind = Tok_Ident
-           and then SU.To_String (C.Cur.Lexeme) = "raw"
-         then
+         declare
+            Amp_Line : constant Positive := C.Cur.Line;
+            Amp_Col  : constant Positive := C.Cur.Col;
+         begin
             Advance (C);
-            Node.Sigil := R_Raw;
-         end if;
+            Node := new AST_Type (Kind => T_Ref);
+            Node.Sigil := R_Shared;
+            --  §8.1 `&raw` is a single fused token — no separator may
+            --  appear between `&` and `raw` (strict EBNF, ch. 3/8). A
+            --  `raw` that follows any whitespace is an ordinary type
+            --  name, not the raw-reference qualifier.
+            if C.Cur.Kind = Tok_Ident
+              and then SU.To_String (C.Cur.Lexeme) = "raw"
+              and then C.Cur.Line = Amp_Line
+              and then C.Cur.Col = Amp_Col + 1
+            then
+               Advance (C);
+               Node.Sigil := R_Raw;
+            end if;
+         end;
          --  §8.4 optional lifetime annotation, e.g. `&'static T`.
          if C.Cur.Kind = Tok_Label then
             Node.R_Life := C.Cur.Lexeme;
@@ -428,8 +458,7 @@ package body Kurt.Parser is
          end if;
          return Node;
       elsif C.Cur.Kind = Op_Slash
-        or else (C.Cur.Kind = Tok_Ident
-                 and then SU.To_String (C.Cur.Lexeme) = "xfer"
+        or else (C.Cur.Kind = Kw_Xfer
                  and then Peek_Tok (C).Kind = Op_Slash)
       then
          --  §9.9.2 invocable type: `[xfer] /. T, ... / [ -> ( type | never ) ]`.
@@ -437,7 +466,7 @@ package body Kurt.Parser is
          --  it, Fn_Xfer the consuming `xfer /.T/ -> U` form.
          Node := new AST_Type (Kind => T_Fn);
          Node.Fn_Invocable := True;
-         if C.Cur.Kind = Tok_Ident then
+         if C.Cur.Kind = Kw_Xfer then
             Advance (C);   --  'xfer'
             Node.Fn_Xfer := True;
          end if;
@@ -482,6 +511,17 @@ package body Kurt.Parser is
                  "array length must be a positive integer literal at line"
                  & Positive'Image (C.Cur.Line);
             end if;
+            --  §4.7: an array length that overflows the layout engine's
+            --  representable range is a translation failure, not a
+            --  wraparound or an uncaught crash. (Kadayif represents
+            --  lengths/sizes in `Natural`, narrower than the spec's
+            --  64-bit `uaddr`; a length that does not fit here is
+            --  rejected cleanly rather than silently truncated.)
+            if C.Cur.Int_V > Long_Long_Integer (Natural'Last) then
+               raise Syntax_Error with
+                 "array length exceeds the representable range at line"
+                 & Positive'Image (C.Cur.Line);
+            end if;
             Node.Len := Natural (C.Cur.Int_V);
             Advance (C);
          else
@@ -504,7 +544,9 @@ package body Kurt.Parser is
          end if;
          Expect (C, Punct_RBrace, "'}' to close tuple type");
          return Node;
-      elsif C.Cur.Kind = Tok_Ident then
+      elsif C.Cur.Kind = Tok_Ident or else C.Cur.Kind = Kw_Self_T then
+         --  §9.2: `self_t` is the one keyword admissible as a type name —
+         --  the implementing-type placeholder, substituted in Subst_Self.
          Node := new AST_Type (Kind => T_Named);
          Node.Name := SU.To_Unbounded_String
            (Canon_Float (SU.To_String (C.Cur.Lexeme)));
@@ -534,20 +576,6 @@ package body Kurt.Parser is
               (SU.To_String (Node.Name) & "::"
                & SU.To_String (Take_Ident (C, "associated type name")));
          end if;
-         --  §4.8: the built-in range types are intrinsic — rewrite
-         --  `range_ex.<T>` / `range_in.<T>` to the dedicated T_Range kind.
-         declare
-            NN : constant String := SU.To_String (Node.Name);
-         begin
-            if (NN = "range_ex" or else NN = "range_in")
-              and then Natural (Node.Args.Length) = 1
-            then
-               return new AST_Type'
-                 (Kind          => T_Range,
-                  Rng_Inclusive => NN = "range_in",
-                  Rng_Elem      => Node.Args.First_Element);
-            end if;
-         end;
          --  §5.8: a type-alias name is replaced by its underlying type at
          --  every use site. A non-generic alias substitutes directly; a
          --  generic alias `Name.<Args>` expands its template with the
@@ -604,7 +632,11 @@ package body Kurt.Parser is
                   if C.Cur.Kind = Punct_Colon then
                      Advance (C);
                      loop
-                        P.Bounds.Append (Take_Ident (C, "bound name"));
+                        --  §9.8: built-in bound names are keywords
+                        --  (`numeric`, `integer`, `primitive`, `contract`,
+                        --  `destruct`, `variadic`); trait bounds are
+                        --  ordinary identifiers.
+                        P.Bounds.Append (Take_Word (C, "bound name"));
                         exit when C.Cur.Kind /= Op_Plus;
                         Advance (C);
                      end loop;
@@ -663,9 +695,15 @@ package body Kurt.Parser is
       --  placeholder `self_t`, substituted with the impl type by
       --  Parse_Impl_Decl.
       if (C.Cur.Kind = Op_Amp or else C.Cur.Kind = Op_Dollar)
-        and then Peek_Tok (C).Kind = Tok_Ident
-        and then SU.To_String (Peek_Tok (C).Lexeme) = "self"
+        and then Peek_Tok (C).Kind = Kw_Self
       then
+         --  §9.2 self_param: `mut` and a reference sigil are mutually
+         --  exclusive alternatives — `mut &self` shall not appear.
+         if P.Is_Mut then
+            raise Syntax_Error with
+              "`mut` and a reference sigil are mutually exclusive on "
+              & "`self` (spec 9.2) at line" & Positive'Image (C.Cur.Line);
+         end if;
          declare
             Sigil : constant Ref_Sigil :=
               (if C.Cur.Kind = Op_Amp then R_Shared else R_Excl);
@@ -733,6 +771,16 @@ package body Kurt.Parser is
       if C.Cur.Kind /= Punct_RParen then
          loop
             Params.Append (Parse_Param (C, Allow_Unnamed));
+            --  §9.2: the self_param production fixes `self` as the FIRST
+            --  parameter; a self parameter in any later position shall
+            --  not appear.
+            if Natural (Params.Length) > 1
+              and then SU.To_String (Params.Last_Element.Name) = "self"
+            then
+               raise Syntax_Error with
+                 "`self` shall be the first parameter (spec 9.2) at line"
+                 & Positive'Image (C.Cur.Line);
+            end if;
             exit when C.Cur.Kind /= Punct_Comma;
             Advance (C);
             exit when C.Cur.Kind = Punct_RParen;
@@ -917,35 +965,31 @@ package body Kurt.Parser is
             Advance (C);
             return E;
 
-         when Tok_Ident =>
+         when Kw_Xfer =>
             --  §9.9 `xfer /.params/ ...` consuming closure: the `xfer` keyword
             --  immediately precedes the `/.` opener.
-            if SU.To_String (C.Cur.Lexeme) = "xfer"
-              and then Peek_Tok (C).Kind = Op_Slash
-            then
-               Advance (C);   --  'xfer'
-               return Parse_Closure (C, Xfer => True);
-            end if;
-            --  §8.4/§8.11: `destruct(e)` and `undestruct(e)` are reserved
-            --  expression forms (the words are keywords by the EBNF rule of
-            --  §3.4.1). Intercept them before the generic path/call parse.
-            if (SU.To_String (C.Cur.Lexeme) = "destruct"
-                or else SU.To_String (C.Cur.Lexeme) = "undestruct")
-              and then Peek_Tok (C).Kind = Punct_LParen
-            then
-               declare
-                  Undo : constant Boolean :=
-                    SU.To_String (C.Cur.Lexeme) = "undestruct";
-               begin
-                  Advance (C);   --  the keyword
-                  Expect (C, Punct_LParen, "'(' after destruct/undestruct");
-                  E := new Expr_Node (Kind => E_Destruct);
-                  E.DT_Undo  := Undo;
-                  E.DT_Inner := Parse_Expr (C);
-                  Expect (C, Punct_RParen, "')' to close destruct/undestruct");
-                  return E;
-               end;
-            end if;
+            Advance (C);   --  'xfer'
+            return Parse_Closure (C, Xfer => True);
+
+         when Kw_Destruct | Kw_Undestruct =>
+            --  §8.11: `destruct(e)` and `undestruct(e)` expression forms.
+            declare
+               Undo : constant Boolean := C.Cur.Kind = Kw_Undestruct;
+            begin
+               Advance (C);   --  the keyword
+               Expect (C, Punct_LParen, "'(' after destruct/undestruct");
+               E := new Expr_Node (Kind => E_Destruct);
+               E.DT_Undo  := Undo;
+               E.DT_Inner := Parse_Expr (C);
+               Expect (C, Punct_RParen, "')' to close destruct/undestruct");
+               return E;
+            end;
+
+         when Tok_Ident | Kw_Self | Kw_Super | Kw_Srcroot =>
+            --  §9.2 / §10.6: the keywords admissible as a path head are
+            --  `self` (method receiver), `super`, and `srcroot` (module
+            --  paths); every other keyword in an identifier position
+            --  fails below.
             E := new Expr_Node (Kind => E_Path);
             E.Segments.Append (C.Cur.Lexeme);
             Advance (C);
@@ -964,7 +1008,11 @@ package body Kurt.Parser is
                      return W;
                   end;
                end if;
-               if C.Cur.Kind /= Tok_Ident then
+               --  §10.6 `super::super::name` — chained enclosing-module
+               --  references.
+               if C.Cur.Kind /= Tok_Ident
+                 and then C.Cur.Kind /= Kw_Super
+               then
                   raise Syntax_Error with
                     "expected identifier after '::', got " & Image (C.Cur)
                     & " at line" & Positive'Image (C.Cur.Line);
@@ -1033,6 +1081,19 @@ package body Kurt.Parser is
                     (Kind => T_Named,
                      Name => E.Segments.First_Element,
                      Args => Type_Vectors.Empty_Vector);
+                  --  §5.8: an alias name is replaced by its underlying type
+                  --  at every use site — including as intrinsic operand.
+                  for I in C.Aliases.First_Index ..
+                           C.Aliases.Last_Index
+                  loop
+                     if C.Aliases.Element (I).Params.Is_Empty
+                       and then SU."=" (C.Aliases.Element (I).Name,
+                                        TI.TI_Ty.Name)
+                     then
+                        TI.TI_Ty := C.Aliases.Element (I).Target;
+                        exit;
+                     end if;
+                  end loop;
                   case C.Cur.Kind is
                      when Dir_At_Size  => TI.TI_Op := TI_Size;
                      when Dir_At_Align => TI.TI_Op := TI_Align;
@@ -1052,8 +1113,19 @@ package body Kurt.Parser is
               and then Natural (E.Segments.Length) in 1 .. 2
             then
                declare
+                  --  §10.3: `alias::Type { ... }` (alias a known `@add ...
+                  --  as alias;` name in this file) is a namespace-qualified
+                  --  struct literal, not `Enum::Variant { ... }` — stored as
+                  --  a compound `SL_Name` ("alias::Type"), mirroring how
+                  --  qualified type names are stored, and mangled later by
+                  --  Resolve_Aliases.
+                  Is_Add_Alias : constant Boolean :=
+                    Natural (E.Segments.Length) = 2
+                    and then (for some A of C.Add_Aliases =>
+                                SU."=" (A, E.Segments.First_Element));
                   Two  : constant Boolean :=
-                    Natural (E.Segments.Length) = 2;
+                    Natural (E.Segments.Length) = 2
+                    and then not Is_Add_Alias;
                   Lit  : constant Expr_Access :=
                     (if Two then new Expr_Node (Kind => E_Variant_New)
                             else new Expr_Node (Kind => E_Struct_Lit));
@@ -1061,6 +1133,10 @@ package body Kurt.Parser is
                   if Two then
                      Lit.VN_Enum    := E.Segments.First_Element;
                      Lit.VN_Variant := E.Segments.Last_Element;
+                  elsif Is_Add_Alias then
+                     Lit.SL_Name := SU.To_Unbounded_String
+                       (SU.To_String (E.Segments.First_Element) & "::"
+                        & SU.To_String (E.Segments.Last_Element));
                   else
                      Lit.SL_Name := E.Segments.Last_Element;
                   end if;
@@ -1502,15 +1578,23 @@ package body Kurt.Parser is
       elsif C.Cur.Kind = Op_Amp then
          --  §8.1 reference creation. Prefix position only — the infix
          --  bitwise `&` is consumed by Parse_Binary before reaching here.
-         Advance (C);
-         E := new Expr_Node (Kind => E_Ref);
-         E.Rf_Sigil := R_Shared;
-         if C.Cur.Kind = Tok_Ident
-           and then SU.To_String (C.Cur.Lexeme) = "raw"
-         then
+         declare
+            Amp_Line : constant Positive := C.Cur.Line;
+            Amp_Col  : constant Positive := C.Cur.Col;
+         begin
             Advance (C);
-            E.Rf_Sigil := R_Raw;
-         end if;
+            E := new Expr_Node (Kind => E_Ref);
+            E.Rf_Sigil := R_Shared;
+            --  §8.1 `&raw` is a single fused token — see Parse_Type.
+            if C.Cur.Kind = Tok_Ident
+              and then SU.To_String (C.Cur.Lexeme) = "raw"
+              and then C.Cur.Line = Amp_Line
+              and then C.Cur.Col = Amp_Col + 1
+            then
+               Advance (C);
+               E.Rf_Sigil := R_Raw;
+            end if;
+         end;
          Parse_Ref_Modifiers (C, E.Rf_Volatile, E.Rf_Store);
          E.Rf_Place := Parse_Unary (C);
          return E;
@@ -1654,25 +1738,12 @@ package body Kurt.Parser is
    function Parse_Expr (C : in out Cursor) return Expr_Access is
       E : Expr_Access := Parse_Binary (C, 0);
    begin
-      --  §4.8 range literal `a..b` / `a..=b`. The `..`/`..=` operators
-      --  produce the intrinsic range type (T_Range); sema resolves the
-      --  element type from the operands. Non-associative (`a..b..c` is
-      --  ill-formed).
+      --  §3.7: `..`/`..=` are pattern-only tokens — no value-level range
+      --  type exists, so a range in expression position is ill-formed.
       if C.Cur.Kind = Op_DotDot or else C.Cur.Kind = Op_DotDotEq then
-         declare
-            Rng : constant Expr_Access := new Expr_Node (Kind => E_Range);
-         begin
-            Rng.Rg_Inclusive := C.Cur.Kind = Op_DotDotEq;
-            Advance (C);
-            Rng.Rg_Lo := E;
-            Rng.Rg_Hi := Parse_Binary (C, 0);
-            if C.Cur.Kind = Op_DotDot or else C.Cur.Kind = Op_DotDotEq then
-               raise Syntax_Error with
-                 "range operators are non-associative (§4.8) at line"
-                 & Positive'Image (C.Cur.Line);
-            end if;
-            return Rng;
-         end;
+         raise Syntax_Error with
+           "`..`/`..=` form patterns only; no range value exists (§3.7) "
+           & "at line" & Positive'Image (C.Cur.Line);
       end if;
       if C.Cur.Kind = Op_EqCas or else C.Cur.Kind = Op_NeCas then
          declare
@@ -2692,8 +2763,6 @@ package body Kurt.Parser is
                for I in T.Elems.First_Index .. T.Elems.Last_Index loop
                   Subst_Self (T.Elems.Element (I));
                end loop;
-            when T_Range =>
-               Subst_Self (T.Rng_Elem);
             when T_Dyn =>
                null;   --  `dyn Trait` names a trait, never `self_t`
             when T_Fn =>
@@ -2754,9 +2823,7 @@ package body Kurt.Parser is
       end if;
       Expect (C, Punct_LBrace, "'{' to open impl block");
       while C.Cur.Kind /= Punct_RBrace and then C.Cur.Kind /= Tok_EOF loop
-       if C.Cur.Kind = Tok_Ident
-         and then SU.To_String (C.Cur.Lexeme) = "type"
-       then
+       if C.Cur.Kind = Kw_Type then
          --  §9.3.1 associated-type definition `type Item = Concrete;`.
          Advance (C);
          declare
@@ -2861,7 +2928,8 @@ package body Kurt.Parser is
       D : Trait_Decl;
    begin
       if C.Cur.Kind = Kw_Pub then
-         Advance (C);          --  visibility not modelled in bootstrap
+         D.Is_Pub := True;
+         Advance (C);
       end if;
       Expect (C, Kw_Trait, "'trait'");
       D.Name := Take_Ident (C, "trait name");
@@ -2871,10 +2939,7 @@ package body Kurt.Parser is
          Expect (C, Punct_LBrace, "'{' after 'with' on a trait");
          --  Expect `self_t : Trait { '+' Trait }`. (The bootstrap models
          --  only the single `self_t: ...` form.)
-         declare
-            Head : constant SU.Unbounded_String :=
-              Take_Ident (C, "'self_t' in supertrait bound");
-            pragma Unreferenced (Head);
+         Expect (C, Kw_Self_T, "'self_t' in supertrait bound");
          begin
             Expect (C, Punct_Colon, "':' in supertrait bound");
             loop
@@ -2887,9 +2952,7 @@ package body Kurt.Parser is
       end if;
       Expect (C, Punct_LBrace, "'{' to open trait body");
       while C.Cur.Kind /= Punct_RBrace and then C.Cur.Kind /= Tok_EOF loop
-         if C.Cur.Kind = Tok_Ident
-           and then SU.To_String (C.Cur.Lexeme) = "type"
-         then
+         if C.Cur.Kind = Kw_Type then
             --  §9.3.1 associated type: `type Item [= Default];`.
             Advance (C);
             declare
@@ -2951,6 +3014,10 @@ package body Kurt.Parser is
    function Parse_Struct_Decl (C : in out Cursor) return Struct_Decl is
       D : Struct_Decl;
    begin
+      if C.Cur.Kind = Kw_Pub then
+         D.Is_Pub := True;
+         Advance (C);
+      end if;
       Expect (C, Kw_Struct, "'struct'");
       D.Name := Take_Ident (C, "struct name");
       Parse_Opt_Generic_Params (C, D.Generic_Params);
@@ -3001,9 +3068,11 @@ package body Kurt.Parser is
             procedure Parse_Struct_With_Item is
                Item : constant String := SU.To_String (C.Cur.Lexeme);
             begin
-               if C.Cur.Kind /= Tok_Ident then
+               --  §5.11: with-item words include keywords (`destruct`,
+               --  `contract`) and contextual words (`repr`, `align`, ...).
+               if not Kurt.Lexer.Is_Word (C.Cur.Kind) then
                   raise Syntax_Error with
-                    "expected with-item identifier, got " & Image (C.Cur)
+                    "expected with-item word, got " & Image (C.Cur)
                     & " at line" & Positive'Image (C.Cur.Line);
                end if;
                Advance (C);
@@ -3104,6 +3173,10 @@ package body Kurt.Parser is
       D    : Enum_Decl;
       Next : Long_Long_Integer := 0;
    begin
+      if C.Cur.Kind = Kw_Pub then
+         D.Is_Pub := True;
+         Advance (C);
+      end if;
       Expect (C, Kw_Enum, "'enum'");
       D.Name := Take_Ident (C, "enum name");
       Parse_Opt_Generic_Params (C, D.Generic_Params);
@@ -3296,7 +3369,7 @@ package body Kurt.Parser is
             Advance (C);
             loop
                exit when C.Cur.Kind = Punct_RBrace;
-               if C.Cur.Kind = Tok_Ident then
+               if Kurt.Lexer.Is_Word (C.Cur.Kind) then
                   declare
                      Item : constant String := SU.To_String (C.Cur.Lexeme);
                   begin
@@ -3358,16 +3431,14 @@ package body Kurt.Parser is
                   end;
                else
                   raise Syntax_Error with
-                    "expected with-item identifier, got " & Image (C.Cur)
+                    "expected with-item word, got " & Image (C.Cur)
                     & " at line" & Positive'Image (C.Cur.Line);
                end if;
                exit when C.Cur.Kind /= Punct_Comma;
                Advance (C);
             end loop;
             Expect (C, Punct_RBrace, "'}'");
-         elsif C.Cur.Kind = Tok_Ident
-           and then SU.To_String (C.Cur.Lexeme) = "contract"
-         then
+         elsif C.Cur.Kind = Kw_Contract then
             D.Is_Contract := True;
             Advance (C);
          elsif C.Cur.Kind = Tok_Ident
@@ -3378,9 +3449,7 @@ package body Kurt.Parser is
             Expect (C, Punct_LParen, "'('");
             D.Discrim_Ty := Parse_Type (C);
             Expect (C, Punct_RParen, "')'");
-         elsif C.Cur.Kind = Tok_Ident
-           and then SU.To_String (C.Cur.Lexeme) = "destruct"
-         then
+         elsif C.Cur.Kind = Kw_Destruct then
             --  §8.11 bare `with destruct [block]`.
             Advance (C);
             D.Has_Destruct := True;
@@ -3462,6 +3531,882 @@ package body Kurt.Parser is
       end if;
    end Merge_Unit;
 
+   ----------------------------------------------------------------------
+   --  §10.3 namespace mangling (see kurt-parser.ads for the design note).
+   ----------------------------------------------------------------------
+
+   function Snapshot (U : Translation_Unit) return Rename_From is
+      function P1 (N : Natural) return Positive is (Positive (N + 1));
+   begin
+      return
+        (Fns         => P1 (Natural (U.Fns.Length)),
+         Gen_Fns     => P1 (Natural (U.Gen_Fns.Length)),
+         Structs     => P1 (Natural (U.Structs.Length)),
+         Enums       => P1 (Natural (U.Enums.Length)),
+         Traits      => P1 (Natural (U.Traits.Length)),
+         Trait_Impls => P1 (Natural (U.Trait_Impls.Length)),
+         Consts      => P1 (Natural (U.Consts.Length)),
+         Statics     => P1 (Natural (U.Statics.Length)),
+         Gen_Methods => P1 (Natural (U.Gen_Methods.Length)));
+   end Snapshot;
+
+   procedure Apply_Namespace
+     (U           : in out Translation_Unit;
+      NS_Prefix   : String;
+      From        : Rename_From := (others => 1);
+      Extra_Names : Path_Segments.Vector := Path_Segments.Empty_Vector)
+   is
+      Names : Path_Segments.Vector := Extra_Names;
+
+      function In_Names (Nm : String) return Boolean is
+      begin
+         for I in Names.First_Index .. Names.Last_Index loop
+            if SU.To_String (Names.Element (I)) = Nm then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end In_Names;
+
+      --  "area" -> "NS$area" (whole name declared); "point$area" ->
+      --  "NS$point$area" (owner segment, up to the first '$', declared).
+      function Mangle_Value (Nm : String) return String is
+         Dollar : constant Natural := Ada.Strings.Fixed.Index (Nm, "$");
+         Head   : constant String :=
+           (if Dollar = 0 then Nm else Nm (Nm'First .. Dollar - 1));
+      begin
+         if In_Names (Head) then
+            return NS_Prefix & "$" & Nm;
+         end if;
+         return Nm;
+      end Mangle_Value;
+
+      --  "point" -> "NS$point"; "self_t::Item" untouched (self_t is never a
+      --  local declared name); "point::Assoc" -> "NS$point::Assoc".
+      function Mangle_Type_Name (Nm : String) return String is
+         Sep : constant Natural := Ada.Strings.Fixed.Index (Nm, "::");
+      begin
+         if Sep = 0 then
+            if In_Names (Nm) then
+               return NS_Prefix & "$" & Nm;
+            end if;
+            return Nm;
+         end if;
+         declare
+            Head : constant String := Nm (Nm'First .. Sep - 1);
+            Rest : constant String := Nm (Sep .. Nm'Last);
+         begin
+            if In_Names (Head) then
+               return NS_Prefix & "$" & Head & Rest;
+            end if;
+            return Nm;
+         end;
+      end Mangle_Type_Name;
+
+      procedure RT (T : Type_Access) is
+      begin
+         if T = null then
+            return;
+         end if;
+         case T.Kind is
+            when T_Named =>
+               T.Name := SU.To_Unbounded_String
+                 (Mangle_Type_Name (SU.To_String (T.Name)));
+               for I in T.Args.First_Index .. T.Args.Last_Index loop
+                  RT (T.Args.Element (I));
+               end loop;
+            when T_Ref =>
+               RT (T.Target);
+            when T_Tuple =>
+               for I in T.Elems.First_Index .. T.Elems.Last_Index loop
+                  RT (T.Elems.Element (I));
+               end loop;
+            when T_Array =>
+               RT (T.Elem);
+            when T_Dyn =>
+               T.Trait_Name := SU.To_Unbounded_String
+                 (Mangle_Value (SU.To_String (T.Trait_Name)));
+            when T_Fn =>
+               for I in T.Fn_Params.First_Index .. T.Fn_Params.Last_Index loop
+                  RT (T.Fn_Params.Element (I));
+               end loop;
+               RT (T.Fn_Ret);
+         end case;
+      end RT;
+
+      procedure RE (E : Expr_Access);
+      procedure RS (S : Stmt_Access);
+
+      procedure RBlk (V : Stmt_Vectors.Vector) is
+      begin
+         for I in V.First_Index .. V.Last_Index loop
+            RS (V.Element (I));
+         end loop;
+      end RBlk;
+
+      procedure RPat (P : in out Pattern) is
+      begin
+         if not P.Path.Is_Empty then
+            declare
+               H : constant String := SU.To_String (P.Path.First_Element);
+            begin
+               if In_Names (H) then
+                  P.Path.Replace_Element
+                    (P.Path.First_Index,
+                     SU.To_Unbounded_String (NS_Prefix & "$" & H));
+               end if;
+            end;
+         end if;
+      end RPat;
+
+      procedure RE (E : Expr_Access) is
+      begin
+         if E = null then
+            return;
+         end if;
+         case E.Kind is
+            when E_Int_Lit | E_Float_Lit | E_Bool_Lit | E_String_Lit
+               | E_Uninit =>
+               null;
+            when E_Path =>
+               if Natural (E.Segments.Length) = 1 then
+                  E.Segments.Replace_Element
+                    (E.Segments.First_Index,
+                     SU.To_Unbounded_String
+                       (Mangle_Value
+                          (SU.To_String (E.Segments.First_Element))));
+               elsif Natural (E.Segments.Length) >= 2 then
+                  declare
+                     H : constant String :=
+                       SU.To_String (E.Segments.First_Element);
+                  begin
+                     if In_Names (H) then
+                        E.Segments.Replace_Element
+                          (E.Segments.First_Index,
+                           SU.To_Unbounded_String (NS_Prefix & "$" & H));
+                     end if;
+                  end;
+               end if;
+               for I in E.P_Type_Args.First_Index ..
+                        E.P_Type_Args.Last_Index loop
+                  RT (E.P_Type_Args.Element (I));
+               end loop;
+            when E_Field =>
+               RE (E.F_Recv);
+            when E_Call =>
+               RE (E.C_Callee);
+               for I in E.C_Args.First_Index .. E.C_Args.Last_Index loop
+                  RE (E.C_Args.Element (I));
+               end loop;
+            when E_If =>
+               RE (E.I_Cond); RE (E.I_Then); RE (E.I_Else);
+            when E_Binary =>
+               RE (E.B_Lhs); RE (E.B_Rhs);
+            when E_Deref =>
+               RE (E.D_Inner);
+            when E_Struct_Lit =>
+               E.SL_Name := SU.To_Unbounded_String
+                 (Mangle_Value (SU.To_String (E.SL_Name)));
+               for I in E.SL_Fields.First_Index .. E.SL_Fields.Last_Index
+               loop
+                  RE (E.SL_Fields.Element (I).Val);
+               end loop;
+            when E_Variant_New =>
+               E.VN_Enum := SU.To_Unbounded_String
+                 (Mangle_Value (SU.To_String (E.VN_Enum)));
+               for I in E.VN_Fields.First_Index .. E.VN_Fields.Last_Index
+               loop
+                  RE (E.VN_Fields.Element (I).Val);
+               end loop;
+            when E_Match =>
+               RE (E.M_Scrut);
+               for I in E.M_Arms.First_Index .. E.M_Arms.Last_Index loop
+                  declare
+                     A : Match_Arm := E.M_Arms.Element (I);
+                  begin
+                     RPat (A.Pat);
+                     RE (A.Guard);
+                     RE (A.Arm_Body);
+                     E.M_Arms.Replace_Element (I, A);
+                  end;
+               end loop;
+            when E_Cast =>
+               RE (E.Cast_Inner);
+               RT (E.Cast_Ty);
+            when E_Unary =>
+               RE (E.U_Operand);
+            when E_Tuple_Lit =>
+               for I in E.TL_Elems.First_Index .. E.TL_Elems.Last_Index loop
+                  RE (E.TL_Elems.Element (I));
+               end loop;
+            when E_Question =>
+               RE (E.Q_Inner);
+            when E_Ref =>
+               RE (E.Rf_Place);
+            when E_CAS =>
+               RE (E.CAS_Tgt); RE (E.CAS_Exp); RE (E.CAS_New);
+            when E_Array_Lit =>
+               for I in E.AL_Elems.First_Index .. E.AL_Elems.Last_Index loop
+                  RE (E.AL_Elems.Element (I));
+               end loop;
+            when E_Dyn_Cast =>
+               RE (E.DC_Inner);
+               E.DC_Conc := SU.To_Unbounded_String
+                 (Mangle_Value (SU.To_String (E.DC_Conc)));
+               E.DC_Trait := SU.To_Unbounded_String
+                 (Mangle_Value (SU.To_String (E.DC_Trait)));
+            when E_Slice_Cast =>
+               RE (E.SC_Inner);
+            when E_Type_Intrinsic =>
+               RT (E.TI_Ty);
+            when E_Closure =>
+               for I in E.Clo_Params.First_Index .. E.Clo_Params.Last_Index
+               loop
+                  RT (E.Clo_Params.Element (I).Ty);
+               end loop;
+               RT (E.Clo_Ret);
+               RBlk (E.Clo_Body);
+            when E_Destruct =>
+               RE (E.DT_Inner);
+         end case;
+      end RE;
+
+      procedure RS (S : Stmt_Access) is
+      begin
+         if S = null then
+            return;
+         end if;
+         case S.Kind is
+            when S_Return => RE (S.R_Val);
+            when S_Expr    => RE (S.E_Val);
+            when S_Airside_Block => RBlk (S.A_Stmts);
+            when S_Let | S_Mut =>
+               RT (S.L_Ty);
+               RE (S.L_Init);
+               if S.L_Is_Refut then
+                  RPat (S.L_Refut_Pat);
+               end if;
+               RBlk (S.L_Else);
+            when S_Assign =>
+               RE (S.Asn_Lhs); RE (S.Asn_Rhs);
+            when S_While =>
+               RE (S.W_Cond);
+               RBlk (S.W_Body);
+               RBlk (S.W_Then);
+               if S.W_Is_Let then
+                  RPat (S.W_Let_Pat);
+               end if;
+            when S_If =>
+               RE (S.SI_Cond);
+               RBlk (S.SI_Then);
+               RBlk (S.SI_Else);
+               if S.SI_Is_Let then
+                  RPat (S.SI_Let_Pat);
+               end if;
+            when S_Extract =>
+               RE (S.X_Expr);
+               RBlk (S.X_Else);
+            when S_Break => RE (S.Brk_Val);
+            when S_Continue => null;
+            when S_Express => RE (S.Xp_Val);
+            when S_Fence => null;
+            when S_Trap => null;
+            when S_Asm =>
+               for I in S.Asm_In_Exprs.First_Index ..
+                        S.Asm_In_Exprs.Last_Index loop
+                  RE (S.Asm_In_Exprs.Element (I));
+               end loop;
+         end case;
+      end RS;
+
+      procedure RHeader (H : in out Fn_Header) is
+      begin
+         H.Name := SU.To_Unbounded_String
+           (Mangle_Value (SU.To_String (H.Name)));
+         for I in H.Params.First_Index .. H.Params.Last_Index loop
+            RT (H.Params.Element (I).Ty);
+         end loop;
+         RT (H.Return_Type);
+      end RHeader;
+   begin
+      --  1. Collect the bare top-level names U itself declares.
+      for I in From.Structs .. U.Structs.Last_Index loop
+         Names.Append (U.Structs.Element (I).Name);
+      end loop;
+      for I in From.Enums .. U.Enums.Last_Index loop
+         Names.Append (U.Enums.Element (I).Name);
+      end loop;
+      for I in From.Traits .. U.Traits.Last_Index loop
+         Names.Append (U.Traits.Element (I).Name);
+      end loop;
+      for I in From.Consts .. U.Consts.Last_Index loop
+         Names.Append (U.Consts.Element (I).Name);
+      end loop;
+      for I in From.Statics .. U.Statics.Last_Index loop
+         Names.Append (U.Statics.Element (I).Name);
+      end loop;
+      for I in From.Fns .. U.Fns.Last_Index loop
+         if Ada.Strings.Fixed.Index
+              (SU.To_String (U.Fns.Element (I).Header.Name), "$") = 0
+         then
+            Names.Append (U.Fns.Element (I).Header.Name);
+         end if;
+      end loop;
+      for I in From.Gen_Fns .. U.Gen_Fns.Last_Index loop
+         Names.Append (U.Gen_Fns.Element (I).Header.Name);
+      end loop;
+      for I in From.Gen_Methods .. U.Gen_Methods.Last_Index loop
+         Names.Append (U.Gen_Methods.Element (I).Owner);
+      end loop;
+
+      --  2. Rename the declaration labels themselves.
+      for I in From.Structs .. U.Structs.Last_Index loop
+         declare
+            D : Struct_Decl := U.Structs.Element (I);
+         begin
+            D.Name := SU.To_Unbounded_String
+              (Mangle_Value (SU.To_String (D.Name)));
+            U.Structs.Replace_Element (I, D);
+         end;
+      end loop;
+      for I in From.Enums .. U.Enums.Last_Index loop
+         declare
+            D : Enum_Decl := U.Enums.Element (I);
+         begin
+            D.Name := SU.To_Unbounded_String
+              (Mangle_Value (SU.To_String (D.Name)));
+            U.Enums.Replace_Element (I, D);
+         end;
+      end loop;
+      for I in From.Traits .. U.Traits.Last_Index loop
+         declare
+            D : Trait_Decl := U.Traits.Element (I);
+         begin
+            D.Name := SU.To_Unbounded_String
+              (Mangle_Value (SU.To_String (D.Name)));
+            U.Traits.Replace_Element (I, D);
+         end;
+      end loop;
+      for I in From.Consts .. U.Consts.Last_Index loop
+         declare
+            D : Const_Decl := U.Consts.Element (I);
+         begin
+            D.Name := SU.To_Unbounded_String
+              (Mangle_Value (SU.To_String (D.Name)));
+            U.Consts.Replace_Element (I, D);
+         end;
+      end loop;
+      for I in From.Statics .. U.Statics.Last_Index loop
+         declare
+            D : Static_Decl := U.Statics.Element (I);
+         begin
+            D.Name := SU.To_Unbounded_String
+              (Mangle_Value (SU.To_String (D.Name)));
+            U.Statics.Replace_Element (I, D);
+         end;
+      end loop;
+      for I in From.Trait_Impls .. U.Trait_Impls.Last_Index loop
+         declare
+            TI : Trait_Impl := U.Trait_Impls.Element (I);
+         begin
+            TI.Ty_Name := SU.To_Unbounded_String
+              (Mangle_Value (SU.To_String (TI.Ty_Name)));
+            TI.Trait_Name := SU.To_Unbounded_String
+              (Mangle_Value (SU.To_String (TI.Trait_Name)));
+            U.Trait_Impls.Replace_Element (I, TI);
+         end;
+      end loop;
+      for I in From.Gen_Methods .. U.Gen_Methods.Last_Index loop
+         declare
+            GM : Gen_Method := U.Gen_Methods.Element (I);
+         begin
+            GM.Owner := SU.To_Unbounded_String
+              (Mangle_Value (SU.To_String (GM.Owner)));
+            if SU.Length (GM.Trait_Name) > 0 then
+               GM.Trait_Name := SU.To_Unbounded_String
+                 (Mangle_Value (SU.To_String (GM.Trait_Name)));
+            end if;
+            RHeader (GM.Method.Header);
+            RBlk (GM.Method.Body_Stmts);
+            U.Gen_Methods.Replace_Element (I, GM);
+         end;
+      end loop;
+
+      --  3. Walk every reachable type/expr/stmt and rename references.
+      for I in From.Fns .. U.Fns.Last_Index loop
+         declare
+            F : Fn_Decl := U.Fns.Element (I);
+         begin
+            RHeader (F.Header);
+            RBlk (F.Body_Stmts);
+            U.Fns.Replace_Element (I, F);
+         end;
+      end loop;
+      for I in From.Gen_Fns .. U.Gen_Fns.Last_Index loop
+         declare
+            F : Fn_Decl := U.Gen_Fns.Element (I);
+         begin
+            RHeader (F.Header);
+            RBlk (F.Body_Stmts);
+            U.Gen_Fns.Replace_Element (I, F);
+         end;
+      end loop;
+      for I in From.Structs .. U.Structs.Last_Index loop
+         declare
+            D : constant Struct_Decl := U.Structs.Element (I);
+         begin
+            for K in D.Fields.First_Index .. D.Fields.Last_Index loop
+               RT (D.Fields.Element (K).Ty);
+               RE (D.Fields.Element (K).Default);
+            end loop;
+            RBlk (D.Destruct_Block);
+         end;
+      end loop;
+      for I in From.Enums .. U.Enums.Last_Index loop
+         declare
+            D : constant Enum_Decl := U.Enums.Element (I);
+         begin
+            for V in D.Variants.First_Index .. D.Variants.Last_Index loop
+               for K in D.Variants.Element (V).Payload.First_Index ..
+                        D.Variants.Element (V).Payload.Last_Index loop
+                  RT (D.Variants.Element (V).Payload.Element (K).Ty);
+                  RE (D.Variants.Element (V).Payload.Element (K).Default);
+               end loop;
+            end loop;
+            RT (D.Discrim_Ty);
+            RBlk (D.Destruct_Block);
+         end;
+      end loop;
+      for I in From.Consts .. U.Consts.Last_Index loop
+         RT (U.Consts.Element (I).Ty);
+         RE (U.Consts.Element (I).Init);
+      end loop;
+      for I in From.Statics .. U.Statics.Last_Index loop
+         RT (U.Statics.Element (I).Ty);
+         RE (U.Statics.Element (I).Init);
+      end loop;
+      for I in From.Traits .. U.Traits.Last_Index loop
+         declare
+            D : Trait_Decl := U.Traits.Element (I);
+         begin
+            for K in D.Methods.First_Index .. D.Methods.Last_Index loop
+               declare
+                  M : Trait_Method := D.Methods.Element (K);
+               begin
+                  RHeader (M.Sig);
+                  RBlk (M.Body_Stmts);
+                  D.Methods.Replace_Element (K, M);
+               end;
+            end loop;
+            for K in D.Consts.First_Index .. D.Consts.Last_Index loop
+               RT (D.Consts.Element (K).Ty);
+               RE (D.Consts.Element (K).Val);
+            end loop;
+            for K in D.Assoc_Types.First_Index ..
+                     D.Assoc_Types.Last_Index loop
+               RT (D.Assoc_Types.Element (K).Ty);
+            end loop;
+            U.Traits.Replace_Element (I, D);
+         end;
+      end loop;
+      for I in From.Trait_Impls .. U.Trait_Impls.Last_Index loop
+         declare
+            TI : constant Trait_Impl := U.Trait_Impls.Element (I);
+         begin
+            for K in TI.Consts.First_Index .. TI.Consts.Last_Index loop
+               RT (TI.Consts.Element (K).Ty);
+               RE (TI.Consts.Element (K).Val);
+            end loop;
+            for K in TI.Assoc_Types.First_Index ..
+                     TI.Assoc_Types.Last_Index loop
+               RT (TI.Assoc_Types.Element (K).Ty);
+            end loop;
+         end;
+      end loop;
+      RBlk (U.Trap_Handler);
+   end Apply_Namespace;
+
+   ----------------------------------------------------------------------
+
+   procedure Resolve_Aliases
+     (U              : in out Translation_Unit;
+      Alias_Names    : Path_Segments.Vector;
+      Alias_Prefixes : Path_Segments.Vector)
+   is
+      --  Find the mangled prefix bound to a local `@add ... as alias;` name;
+      --  "" (empty) if Head is not a known alias.
+      function Prefix_Of (Head : String) return String is
+      begin
+         for I in Alias_Names.First_Index .. Alias_Names.Last_Index loop
+            if SU.To_String (Alias_Names.Element (I)) = Head then
+               return SU.To_String (Alias_Prefixes.Element (I));
+            end if;
+         end loop;
+         return "";
+      end Prefix_Of;
+
+      --  §10.3: the target of an `alias::item` reference shall be `pub` in
+      --  the imported unit. Scans U's own (already-merged, already-mangled)
+      --  declaration vectors for Mangled; a name absent from all of them
+      --  (e.g. an enum variant, which isn't independently `pub`-tracked) is
+      --  not flagged here — ordinary name resolution catches a bad access.
+      function Check_Pub (Mangled : String) return Boolean is
+      begin
+         for I in U.Fns.First_Index .. U.Fns.Last_Index loop
+            if SU.To_String (U.Fns.Element (I).Header.Name) = Mangled then
+               return U.Fns.Element (I).Header.Is_Pub;
+            end if;
+         end loop;
+         for I in U.Structs.First_Index .. U.Structs.Last_Index loop
+            if SU.To_String (U.Structs.Element (I).Name) = Mangled then
+               return U.Structs.Element (I).Is_Pub;
+            end if;
+         end loop;
+         for I in U.Enums.First_Index .. U.Enums.Last_Index loop
+            if SU.To_String (U.Enums.Element (I).Name) = Mangled then
+               return U.Enums.Element (I).Is_Pub;
+            end if;
+         end loop;
+         for I in U.Traits.First_Index .. U.Traits.Last_Index loop
+            if SU.To_String (U.Traits.Element (I).Name) = Mangled then
+               return U.Traits.Element (I).Is_Pub;
+            end if;
+         end loop;
+         for I in U.Consts.First_Index .. U.Consts.Last_Index loop
+            if SU.To_String (U.Consts.Element (I).Name) = Mangled then
+               return U.Consts.Element (I).Is_Pub;
+            end if;
+         end loop;
+         for I in U.Statics.First_Index .. U.Statics.Last_Index loop
+            if SU.To_String (U.Statics.Element (I).Name) = Mangled then
+               return U.Statics.Element (I).Is_Pub;
+            end if;
+         end loop;
+         return True;   --  not a tracked top-level decl; let sema judge it
+      end Check_Pub;
+
+      --  Collapse a >=2-segment path whose first segment is a known alias:
+      --  [alias, Head, Rest...] -> [prefix & "$" & Head, Rest...].
+      procedure Collapse (Segs : in out Path_Segments.Vector) is
+         Pfx : constant String :=
+           Prefix_Of (SU.To_String (Segs.First_Element));
+      begin
+         if Pfx = "" or else Natural (Segs.Length) < 2 then
+            return;
+         end if;
+         declare
+            Second  : constant String :=
+              SU.To_String (Segs.Element (Segs.First_Index + 1));
+            Mangled : constant String := Pfx & "$" & Second;
+            Tail    : Path_Segments.Vector;
+         begin
+            for I in Segs.First_Index + 2 .. Segs.Last_Index loop
+               Tail.Append (Segs.Element (I));
+            end loop;
+            if not Check_Pub (Mangled) then
+               raise Syntax_Error with
+                 "'" & Second & "' is not `pub` in the imported unit "
+                 & "(spec 10.3)";
+            end if;
+            Segs.Clear;
+            Segs.Append (SU.To_Unbounded_String (Mangled));
+            Segs.Append (Tail);
+         end;
+      end Collapse;
+
+      --  "alias::Item" -> "prefix$Item" (checking `pub`); anything else
+      --  (no "::", or an unrecognised head) is returned unchanged. Used for
+      --  compound names stored as a single string (qualified struct-literal
+      --  `SL_Name`, qualified type names).
+      function Mangle_Compound (Nm : String) return String is
+         Sep : constant Natural := Ada.Strings.Fixed.Index (Nm, "::");
+      begin
+         if Sep = 0 then
+            return Nm;
+         end if;
+         declare
+            Head : constant String := Nm (Nm'First .. Sep - 1);
+            Rest : constant String := Nm (Sep + 2 .. Nm'Last);
+            Pfx  : constant String := Prefix_Of (Head);
+         begin
+            if Pfx = "" then
+               return Nm;
+            end if;
+            declare
+               Mangled : constant String := Pfx & "$" & Rest;
+            begin
+               if not Check_Pub (Mangled) then
+                  raise Syntax_Error with
+                    "'" & Rest & "' is not `pub` in the imported unit '"
+                    & Head & "' (spec 10.3)";
+               end if;
+               return Mangled;
+            end;
+         end;
+      end Mangle_Compound;
+
+      procedure RT (T : Type_Access) is
+      begin
+         if T = null then
+            return;
+         end if;
+         case T.Kind is
+            when T_Named =>
+               declare
+                  Nm : constant String := SU.To_String (T.Name);
+               begin
+                  T.Name := SU.To_Unbounded_String (Mangle_Compound (Nm));
+               end;
+               for I in T.Args.First_Index .. T.Args.Last_Index loop
+                  RT (T.Args.Element (I));
+               end loop;
+            when T_Ref =>
+               RT (T.Target);
+            when T_Tuple =>
+               for I in T.Elems.First_Index .. T.Elems.Last_Index loop
+                  RT (T.Elems.Element (I));
+               end loop;
+            when T_Array =>
+               RT (T.Elem);
+            when T_Dyn =>
+               null;
+            when T_Fn =>
+               for I in T.Fn_Params.First_Index .. T.Fn_Params.Last_Index
+               loop
+                  RT (T.Fn_Params.Element (I));
+               end loop;
+               RT (T.Fn_Ret);
+         end case;
+      end RT;
+
+      procedure RE (E : Expr_Access);
+      procedure RS (S : Stmt_Access);
+
+      procedure RBlk (V : Stmt_Vectors.Vector) is
+      begin
+         for I in V.First_Index .. V.Last_Index loop
+            RS (V.Element (I));
+         end loop;
+      end RBlk;
+
+      procedure RE (E : Expr_Access) is
+      begin
+         if E = null then
+            return;
+         end if;
+         case E.Kind is
+            when E_Int_Lit | E_Float_Lit | E_Bool_Lit | E_String_Lit
+               | E_Uninit =>
+               null;
+            when E_Path =>
+               if Natural (E.Segments.Length) >= 2 then
+                  Collapse (E.Segments);
+               end if;
+               for I in E.P_Type_Args.First_Index ..
+                        E.P_Type_Args.Last_Index loop
+                  RT (E.P_Type_Args.Element (I));
+               end loop;
+            when E_Field =>
+               RE (E.F_Recv);
+            when E_Call =>
+               RE (E.C_Callee);
+               for I in E.C_Args.First_Index .. E.C_Args.Last_Index loop
+                  RE (E.C_Args.Element (I));
+               end loop;
+            when E_If =>
+               RE (E.I_Cond); RE (E.I_Then); RE (E.I_Else);
+            when E_Binary =>
+               RE (E.B_Lhs); RE (E.B_Rhs);
+            when E_Deref =>
+               RE (E.D_Inner);
+            when E_Struct_Lit =>
+               E.SL_Name := SU.To_Unbounded_String
+                 (Mangle_Compound (SU.To_String (E.SL_Name)));
+               for I in E.SL_Fields.First_Index .. E.SL_Fields.Last_Index
+               loop
+                  RE (E.SL_Fields.Element (I).Val);
+               end loop;
+            when E_Variant_New =>
+               for I in E.VN_Fields.First_Index .. E.VN_Fields.Last_Index
+               loop
+                  RE (E.VN_Fields.Element (I).Val);
+               end loop;
+            when E_Match =>
+               RE (E.M_Scrut);
+               for I in E.M_Arms.First_Index .. E.M_Arms.Last_Index loop
+                  declare
+                     A : Match_Arm := E.M_Arms.Element (I);
+                  begin
+                     if Natural (A.Pat.Path.Length) >= 2 then
+                        Collapse (A.Pat.Path);
+                     end if;
+                     RE (A.Guard);
+                     RE (A.Arm_Body);
+                     E.M_Arms.Replace_Element (I, A);
+                  end;
+               end loop;
+            when E_Cast =>
+               RE (E.Cast_Inner);
+               RT (E.Cast_Ty);
+            when E_Unary =>
+               RE (E.U_Operand);
+            when E_Tuple_Lit =>
+               for I in E.TL_Elems.First_Index .. E.TL_Elems.Last_Index loop
+                  RE (E.TL_Elems.Element (I));
+               end loop;
+            when E_Question =>
+               RE (E.Q_Inner);
+            when E_Ref =>
+               RE (E.Rf_Place);
+            when E_CAS =>
+               RE (E.CAS_Tgt); RE (E.CAS_Exp); RE (E.CAS_New);
+            when E_Array_Lit =>
+               for I in E.AL_Elems.First_Index .. E.AL_Elems.Last_Index loop
+                  RE (E.AL_Elems.Element (I));
+               end loop;
+            when E_Dyn_Cast =>
+               RE (E.DC_Inner);
+            when E_Slice_Cast =>
+               RE (E.SC_Inner);
+            when E_Type_Intrinsic =>
+               RT (E.TI_Ty);
+            when E_Closure =>
+               for I in E.Clo_Params.First_Index .. E.Clo_Params.Last_Index
+               loop
+                  RT (E.Clo_Params.Element (I).Ty);
+               end loop;
+               RT (E.Clo_Ret);
+               RBlk (E.Clo_Body);
+            when E_Destruct =>
+               RE (E.DT_Inner);
+         end case;
+      end RE;
+
+      procedure RS (S : Stmt_Access) is
+      begin
+         if S = null then
+            return;
+         end if;
+         case S.Kind is
+            when S_Return => RE (S.R_Val);
+            when S_Expr    => RE (S.E_Val);
+            when S_Airside_Block => RBlk (S.A_Stmts);
+            when S_Let | S_Mut =>
+               RT (S.L_Ty);
+               RE (S.L_Init);
+               if S.L_Is_Refut and then Natural (S.L_Refut_Pat.Path.Length)
+                                          >= 2
+               then
+                  Collapse (S.L_Refut_Pat.Path);
+               end if;
+               RBlk (S.L_Else);
+            when S_Assign =>
+               RE (S.Asn_Lhs); RE (S.Asn_Rhs);
+            when S_While =>
+               RE (S.W_Cond);
+               RBlk (S.W_Body);
+               RBlk (S.W_Then);
+               if S.W_Is_Let and then Natural (S.W_Let_Pat.Path.Length) >= 2
+               then
+                  Collapse (S.W_Let_Pat.Path);
+               end if;
+            when S_If =>
+               RE (S.SI_Cond);
+               RBlk (S.SI_Then);
+               RBlk (S.SI_Else);
+               if S.SI_Is_Let and then Natural (S.SI_Let_Pat.Path.Length)
+                                         >= 2
+               then
+                  Collapse (S.SI_Let_Pat.Path);
+               end if;
+            when S_Extract =>
+               RE (S.X_Expr);
+               RBlk (S.X_Else);
+            when S_Break => RE (S.Brk_Val);
+            when S_Continue => null;
+            when S_Express => RE (S.Xp_Val);
+            when S_Fence => null;
+            when S_Trap => null;
+            when S_Asm =>
+               for I in S.Asm_In_Exprs.First_Index ..
+                        S.Asm_In_Exprs.Last_Index loop
+                  RE (S.Asm_In_Exprs.Element (I));
+               end loop;
+         end case;
+      end RS;
+   begin
+      if Alias_Names.Is_Empty then
+         return;
+      end if;
+      for I in U.Fns.First_Index .. U.Fns.Last_Index loop
+         declare
+            F : Fn_Decl := U.Fns.Element (I);
+         begin
+            for K in F.Header.Params.First_Index ..
+                     F.Header.Params.Last_Index loop
+               RT (F.Header.Params.Element (K).Ty);
+            end loop;
+            RT (F.Header.Return_Type);
+            RBlk (F.Body_Stmts);
+            U.Fns.Replace_Element (I, F);
+         end;
+      end loop;
+      for I in U.Gen_Fns.First_Index .. U.Gen_Fns.Last_Index loop
+         declare
+            F : Fn_Decl := U.Gen_Fns.Element (I);
+         begin
+            for K in F.Header.Params.First_Index ..
+                     F.Header.Params.Last_Index loop
+               RT (F.Header.Params.Element (K).Ty);
+            end loop;
+            RT (F.Header.Return_Type);
+            RBlk (F.Body_Stmts);
+            U.Gen_Fns.Replace_Element (I, F);
+         end;
+      end loop;
+      for I in U.Structs.First_Index .. U.Structs.Last_Index loop
+         declare
+            D : constant Struct_Decl := U.Structs.Element (I);
+         begin
+            for K in D.Fields.First_Index .. D.Fields.Last_Index loop
+               RT (D.Fields.Element (K).Ty);
+               RE (D.Fields.Element (K).Default);
+            end loop;
+         end;
+      end loop;
+      for I in U.Enums.First_Index .. U.Enums.Last_Index loop
+         declare
+            D : constant Enum_Decl := U.Enums.Element (I);
+         begin
+            for V in D.Variants.First_Index .. D.Variants.Last_Index loop
+               for K in D.Variants.Element (V).Payload.First_Index ..
+                        D.Variants.Element (V).Payload.Last_Index loop
+                  RT (D.Variants.Element (V).Payload.Element (K).Ty);
+               end loop;
+            end loop;
+         end;
+      end loop;
+      for I in U.Consts.First_Index .. U.Consts.Last_Index loop
+         RT (U.Consts.Element (I).Ty);
+         RE (U.Consts.Element (I).Init);
+      end loop;
+      for I in U.Statics.First_Index .. U.Statics.Last_Index loop
+         RT (U.Statics.Element (I).Ty);
+         RE (U.Statics.Element (I).Init);
+      end loop;
+      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+         declare
+            TI : constant Trait_Impl := U.Trait_Impls.Element (I);
+         begin
+            for K in TI.Consts.First_Index .. TI.Consts.Last_Index loop
+               RT (TI.Consts.Element (K).Ty);
+               RE (TI.Consts.Element (K).Val);
+            end loop;
+         end;
+      end loop;
+      RBlk (U.Trap_Handler);
+   end Resolve_Aliases;
+
    function Parse_Unit (Lex : in out Kurt.Lexer.Lexer)
       return Translation_Unit
    is
@@ -3496,17 +4441,24 @@ package body Kurt.Parser is
                | Dir_At_Symbol =>                    --  §5.15
                U.Fns.Append (Parse_Fn_Decl (C));
             when Kw_Pub =>
-               --  `pub` heads a subroutine, trait, const, or static. The
-               --  bootstrap has no visibility model — `pub` on const /
-               --  static is consumed and discarded.
+               --  `pub` heads a subroutine, trait, struct, enum, const, or
+               --  static. §10.3: `pub` governs whether the declaration is
+               --  reachable through a `@add`-ing unit's namespace.
                if Peek_Tok (C).Kind = Kw_Trait then
                   Parse_Trait_Decl (C, U.Traits);
+               elsif Peek_Tok (C).Kind = Kw_Struct then
+                  U.Structs.Append (Parse_Struct_Decl (C));
+               elsif Peek_Tok (C).Kind = Kw_Enum then
+                  U.Enums.Append (Parse_Enum_Decl (C));
                elsif Peek_Tok (C).Kind = Kw_Const then
                   Advance (C);
-                  U.Consts.Append (Parse_Const_Decl (C));
-               elsif Peek_Tok (C).Kind = Tok_Ident
-                 and then SU.To_String (Peek_Tok (C).Lexeme) = "module"
-               then
+                  declare
+                     CD : Const_Decl := Parse_Const_Decl (C);
+                  begin
+                     CD.Is_Pub := True;
+                     U.Consts.Append (CD);
+                  end;
+               elsif Peek_Tok (C).Kind = Kw_Module then
                   --  §10.6 `pub module name { … }` (flattened).
                   Advance (C);   --  `pub`
                   Advance (C);   --  `module`
@@ -3517,11 +4469,14 @@ package body Kurt.Parser is
                   begin null; end;
                   Expect (C, Punct_LBrace, "'{' to open module body");
                   Module_Depth := Module_Depth + 1;
-               elsif Peek_Tok (C).Kind = Tok_Ident
-                 and then SU.To_String (Peek_Tok (C).Lexeme) = "static"
-               then
+               elsif Peek_Tok (C).Kind = Kw_Static then
                   Advance (C);
-                  U.Statics.Append (Parse_Static_Decl (C));
+                  declare
+                     SD : Static_Decl := Parse_Static_Decl (C);
+                  begin
+                     SD.Is_Pub := True;
+                     U.Statics.Append (SD);
+                  end;
                else
                   U.Fns.Append (Parse_Fn_Decl (C));
                end if;
@@ -3530,16 +4485,16 @@ package body Kurt.Parser is
             when Dir_At_Dyn =>
                U.Dyns.Append (Parse_Dyn_Decl (C));
             when Dir_At_Add =>
-               --  §10.2 `@add [pub] [prefix::]"path" as ident;` — the
-               --  `as ident` namespace name is mandatory. The import is
-               --  resolved and merged by the driver. (Namespacing of the
-               --  imported names under `ident` is deferred — flat merge.)
+               --  §10.2/§10.3 `@add [pub] [prefix::]"path" as ident;` — the
+               --  `as ident` namespace name is mandatory and is how the
+               --  import's `pub` declarations are accessed (`ident::item`).
+               --  (`@add pub` re-export chaining is not modelled.)
                Advance (C);
                declare
                   Prefix : SU.Unbounded_String;
                begin
                   if C.Cur.Kind = Kw_Pub then
-                     Advance (C);   --  `pub` re-export (no visibility model)
+                     Advance (C);   --  `pub` re-export (not modelled)
                   end if;
                   if C.Cur.Kind = Tok_Ident
                     and then Peek_Tok (C).Kind = Punct_ColonColon
@@ -3560,8 +4515,10 @@ package body Kurt.Parser is
                   declare
                      Ns : constant SU.Unbounded_String :=
                        Take_Ident (C, "@add namespace name");
-                     pragma Unreferenced (Ns);
-                  begin null; end;
+                  begin
+                     U.Add_Names.Append (Ns);
+                     C.Add_Aliases.Append (Ns);
+                  end;
                   Expect (C, Punct_Semi, "';' after @add");
                end;
             when Dir_At_Path =>
@@ -3620,67 +4577,60 @@ package body Kurt.Parser is
                end if;
                Module_Depth := Module_Depth - 1;
                Advance (C);
-            when Tok_Ident =>
-               --  §5.4 `static [mut] NAME: T = expr ;` (the word
-               --  `static` is not a bootstrap keyword).
-               if SU.To_String (C.Cur.Lexeme) = "static" then
-                  U.Statics.Append (Parse_Static_Decl (C));
+            when Kw_Static =>
+               --  §5.4 `static [mut] NAME: T = expr ;`.
+               U.Statics.Append (Parse_Static_Decl (C));
+            when Kw_Module =>
                --  §10.6 `module name { … }` — a transparent namespace wrapper;
                --  its declarations flatten into the unit. `pub module` too.
-               elsif SU.To_String (C.Cur.Lexeme) = "module" then
-                  Advance (C);   --  `module`
-                  declare
-                     Nm : constant SU.Unbounded_String :=
-                       Take_Ident (C, "module name");
-                     pragma Unreferenced (Nm);
-                  begin null; end;
-                  Expect (C, Punct_LBrace, "'{' to open module body");
-                  Module_Depth := Module_Depth + 1;
+               Advance (C);   --  `module`
+               declare
+                  Nm : constant SU.Unbounded_String :=
+                    Take_Ident (C, "module name");
+                  pragma Unreferenced (Nm);
+               begin null; end;
+               Expect (C, Punct_LBrace, "'{' to open module body");
+               Module_Depth := Module_Depth + 1;
+            when Kw_Use =>
                --  §5.12.2 `use path;` — unqualified name introduction. In the
                --  single-unit bootstrap every declaration is already in one
                --  flat scope, so a `use` is consumed and has no effect (it
                --  becomes meaningful only with the module model, §10).
-               elsif SU.To_String (C.Cur.Lexeme) = "use" then
+               Advance (C);
+               while C.Cur.Kind /= Punct_Semi
+                 and then C.Cur.Kind /= Tok_EOF
+               loop
                   Advance (C);
-                  while C.Cur.Kind /= Punct_Semi
-                    and then C.Cur.Kind /= Tok_EOF
-                  loop
-                     Advance (C);
-                  end loop;
-                  Expect (C, Punct_Semi, "';' after `use`");
+               end loop;
+               Expect (C, Punct_Semi, "';' after `use`");
+            when Kw_Type =>
                --  §5.8 `type NAME = type ;` — alias declaration. The
                --  substitution happens at later use sites (Parse_Type),
                --  so nothing is recorded in the translation unit.
-               elsif SU.To_String (C.Cur.Lexeme) = "type" then
-                  Advance (C);
-                  declare
-                     A : Alias_Entry;
-                  begin
-                     A.Name := Take_Ident (C, "alias name after 'type'");
-                     --  §5.8 generic alias `type Name.<T, U> = ...`.
-                     if C.Cur.Kind = Punct_Dot
-                       and then Peek_Tok (C).Kind = Op_Lt
-                     then
-                        Advance (C);   --  '.'
-                        Advance (C);   --  '<'
-                        loop
-                           A.Params.Append
-                             (Take_Ident (C, "alias type parameter"));
-                           exit when C.Cur.Kind /= Punct_Comma;
-                           Advance (C);
-                        end loop;
-                        Expect (C, Op_Gt, "'>' to close alias parameters");
-                     end if;
-                     Expect (C, Punct_Eq, "'=' in type alias");
-                     A.Target := Parse_Type (C);
-                     Expect (C, Punct_Semi, "';' after type alias");
-                     C.Aliases.Append (A);
-                  end;
-               else
-                  raise Syntax_Error with
-                    "expected top-level declaration, got " & Image (C.Cur)
-                    & " at line" & Positive'Image (C.Cur.Line);
-               end if;
+               Advance (C);
+               declare
+                  A : Alias_Entry;
+               begin
+                  A.Name := Take_Ident (C, "alias name after 'type'");
+                  --  §5.8 generic alias `type Name.<T, U> = ...`.
+                  if C.Cur.Kind = Punct_Dot
+                    and then Peek_Tok (C).Kind = Op_Lt
+                  then
+                     Advance (C);   --  '.'
+                     Advance (C);   --  '<'
+                     loop
+                        A.Params.Append
+                          (Take_Ident (C, "alias type parameter"));
+                        exit when C.Cur.Kind /= Punct_Comma;
+                        Advance (C);
+                     end loop;
+                     Expect (C, Op_Gt, "'>' to close alias parameters");
+                  end if;
+                  Expect (C, Punct_Eq, "'=' in type alias");
+                  A.Target := Parse_Type (C);
+                  Expect (C, Punct_Semi, "';' after type alias");
+                  C.Aliases.Append (A);
+               end;
             when others =>
                raise Syntax_Error with
                  "expected top-level declaration, got " & Image (C.Cur)

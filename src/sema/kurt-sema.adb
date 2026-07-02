@@ -108,9 +108,6 @@ package body Kurt.Sema is
                return "[" & Image (T.Elem) & ";"
                  & L & "]";
             end;
-         when T_Range =>
-            return (if T.Rng_Inclusive then "range_in.<" else "range_ex.<")
-              & Image (T.Rng_Elem) & ">";
          when T_Dyn =>
             return "dyn " & SU.To_String (T.Trait_Name);
          when T_Fn =>
@@ -230,6 +227,17 @@ package body Kurt.Sema is
              or else N = "uaddr";
       end;
    end Is_Unsigned_Int_Type;
+
+   --  §6.5: the unsigned integer type of a given size in cells — the
+   --  contextual type of an unsuffixed shift-count literal.
+   function Unsigned_Of_Size (Size : Natural) return Type_Access is
+      S : constant String := Natural'Image (Size);
+   begin
+      return new AST_Type'
+        (Kind => T_Named,
+         Name => SU.To_Unbounded_String ("ui" & S (S'First + 1 .. S'Last)),
+         Args => Kurt.Parser.Type_Vectors.Empty_Vector);
+   end Unsigned_Of_Size;
 
    --  §8.1.3 sigil strength rank along the descending chain
    --  `$T(4) → &mut T(3) → &T(2) → &raw T(1) → uaddr(0)`. A storable
@@ -352,9 +360,6 @@ package body Kurt.Sema is
             return True;
          when T_Array =>
             return A.Len = B.Len and then Same_Type (A.Elem, B.Elem);
-         when T_Range =>
-            return A.Rng_Inclusive = B.Rng_Inclusive
-              and then Same_Type (A.Rng_Elem, B.Rng_Elem);
          when T_Dyn =>
             return SU.To_String (A.Trait_Name)
               = SU.To_String (B.Trait_Name);
@@ -1167,11 +1172,6 @@ package body Kurt.Sema is
                         end if;
                         E.Sem_Ty := FT;
                      end;
-                  elsif RTD /= null and then RTD.Kind = T_Range
-                    and then (FN = "start" or else FN = "end")
-                  then
-                     --  §4.8 range fields `start` / `end`, both type T.
-                     E.Sem_Ty := RTD.Rng_Elem;
                   elsif RT /= null and then RT.Kind = T_Tuple then
                      --  §6.2.2 tuple field by index `.0`, `.1`, ...
                      declare
@@ -1807,7 +1807,44 @@ package body Kurt.Sema is
                            end if;
                            E.Sem_Ty := LT;       --  modifiers preserved
                         else
-                           RT := Infer (E.B_Rhs, LT);
+                           if E.B_Op in B_Shl | B_Shr then
+                              --  §6.5: the shift count satisfies `primitive`
+                              --  (unsigned) and has the same size as the
+                              --  lead — so an unsuffixed literal count takes
+                              --  the unsigned type of the lead's size.
+                              RT := Infer
+                                (E.B_Rhs,
+                                 (if LT = null then null
+                                  else Unsigned_Of_Size
+                                    (Kurt.Layout.Size_Of (LT))));
+                              if LT /= null and then RT /= null then
+                                 if not Is_Unsigned_Int_Type (RT) then
+                                    Error ("shift count must satisfy "
+                                           & "`primitive` (unsigned); got '"
+                                           & Image (RT) & "' (spec 6.5)");
+                                 elsif Kurt.Layout.Size_Of (LT)
+                                       /= Kurt.Layout.Size_Of (RT)
+                                 then
+                                    Error ("shift operands must have the "
+                                           & "same size; got '" & Image (LT)
+                                           & "' and '" & Image (RT)
+                                           & "' (spec 6.5)");
+                                 end if;
+                              end if;
+                           else
+                              RT := Infer (E.B_Rhs, LT);
+                              if LT /= null and then RT /= null
+                                and then not Same_Type (LT, RT)
+                              then
+                                 --  §6.4/§6.5: both operands of a binary
+                                 --  arithmetic / bitwise operator shall be
+                                 --  the same type T.
+                                 Error ("operands of a binary arithmetic "
+                                        & "operator must be the same type; "
+                                        & "got '" & Image (LT) & "' and '"
+                                        & Image (RT) & "' (spec 6.4)");
+                              end if;
+                           end if;
                            E.Sem_Ty := LT;
                         end if;
                         return E.Sem_Ty;
@@ -1836,8 +1873,17 @@ package body Kurt.Sema is
                      declare
                         LT : constant Type_Access := Infer (E.B_Lhs, null);
                         RT : constant Type_Access := Infer (E.B_Rhs, LT);
-                        pragma Unreferenced (RT);
                      begin
+                        --  §6.6: both operands of a comparison shall be the
+                        --  same type; different numeric types shall not be
+                        --  compared without an explicit `as` cast.
+                        if LT /= null and then RT /= null
+                          and then not Same_Type (LT, RT)
+                        then
+                           Error ("operands of a comparison must be the "
+                                  & "same type; got '" & Image (LT)
+                                  & "' and '" & Image (RT) & "' (spec 6.6)");
+                        end if;
                         --  §5.9.2 type erasure: comparison on a generic
                         --  parameter also needs an arithmetic bound.
                         if Is_Generic_Param_Ty (LT)
@@ -2547,54 +2593,6 @@ package body Kurt.Sema is
                   return E.Sem_Ty;
                end;
 
-            when E_Range =>
-               --  §4.8: `a..b` / `a..=b`. Both bounds share one numeric
-               --  element type T. A bare (unsuffixed) integer-literal bound
-               --  is flexible and adopts the other bound's type (§4.12).
-               declare
-                  function Flex (X : Expr_Access) return Boolean is
-                    (X.Kind = E_Int_Lit and then SU.Length (X.Int_Suffix) = 0);
-
-                  Exp_Elem : constant Type_Access :=
-                    (if Expected /= null and then Expected.Kind = T_Range
-                     then Expected.Rng_Elem else null);
-                  LT, HT, Elem : Type_Access;
-               begin
-                  if Exp_Elem /= null then
-                     LT := Infer (E.Rg_Lo, Exp_Elem);
-                     HT := Infer (E.Rg_Hi, Exp_Elem);
-                     Elem := Exp_Elem;
-                  elsif Flex (E.Rg_Lo) and then not Flex (E.Rg_Hi) then
-                     HT := Infer (E.Rg_Hi, null);
-                     LT := Infer (E.Rg_Lo, HT);
-                     Elem := HT;
-                  else
-                     LT := Infer (E.Rg_Lo, null);
-                     HT := Infer (E.Rg_Hi, LT);
-                     Elem := LT;
-                  end if;
-
-                  if Elem = null
-                    or else not (Is_Integer_Type (Elem)
-                                 or else Is_Float_Type (Elem))
-                  then
-                     Error ("range bounds shall be a numeric type (spec 4.8);"
-                            & " got '" & Image (Elem) & "'");
-                  elsif not Assignable (Elem, LT)
-                    or else not Assignable (Elem, HT)
-                  then
-                     Error ("range bounds have differing types '"
-                            & Image (LT) & "' and '" & Image (HT)
-                            & "' (spec 4.8)");
-                  end if;
-
-                  E.Sem_Ty := new AST_Type'
-                    (Kind          => T_Range,
-                     Rng_Inclusive => E.Rg_Inclusive,
-                     Rng_Elem      => Elem);
-                  return E.Sem_Ty;
-               end;
-
             when E_Tuple_Lit =>
                --  §6.1.7: type is .{T1, ..., TN} from element types. When an
                --  expected tuple type is in context, steer each element.
@@ -2834,10 +2832,12 @@ package body Kurt.Sema is
                      declare
                         TN : constant String := SU.To_String (E.TI_Ty.Name);
                      begin
+                        --  §4: `void` is a complete type — size 0, align 0.
                         Known :=
                           Is_Integer_Type (E.TI_Ty)
                           or else Is_Float_Type (E.TI_Ty)
                           or else TN = "bool"
+                          or else TN = "void"
                           or else Kurt.Layout.Is_Struct (TN)
                           or else Kurt.Layout.Is_Enum (TN);
                      end;
@@ -2846,10 +2846,12 @@ package body Kurt.Sema is
                   if E.TI_Ty.Kind = T_Array and then E.TI_Ty.Len = 0
                     and then E.TI_Op in TI_Size | TI_Align
                   then
-                     --  §4.6: `T@size`/`T@align` shall not be applied to a
-                     --  dynamically-sized array `[T]` (it has no static size).
-                     Error ("`@size`/`@align` cannot be applied to a "
-                            & "dynamically-sized array `[T]` (spec 4.6)");
+                     --  §8.1.4: `[T]` is not a type — it exists only inside
+                     --  a slice-reference production, so it has no size of
+                     --  its own to query.
+                     Error ("`@size`/`@align` cannot be applied to `[T]`: "
+                            & "a slice exists only behind a reference "
+                            & "(spec 8.1.4)");
                   elsif not Known then
                      declare
                         TypeNameStr : constant String :=
@@ -3117,6 +3119,90 @@ package body Kurt.Sema is
          Error ("`break`/`continue` names loop label ''" & SU.To_String (Label)
                 & "' which is not in scope (spec 7.9)");
       end Check_Loop_Label;
+
+      --------------------------------------------------------------------
+      --  §7.11 divergence analysis (bootstrap subset). A statement list
+      --  diverges when control cannot reach its end. The diverging forms
+      --  recognised here: `@trap`, `return`, `break`, `continue`,
+      --  `express`, a `-> never` call, a `loop {}` with no `break`, an
+      --  `if`/`else` whose both arms diverge, and an `airside` block
+      --  whose body diverges.
+      function Cond_Is_True (E : Expr_Access) return Boolean is
+        (E /= null and then E.Kind = E_Bool_Lit and then E.Bool_V);
+
+      --  §7.11: a `loop {}` diverges only when no `break` (targeting it or
+      --  an enclosing loop) and no `express` (targeting an enclosing
+      --  block) is reachable in its body. Conservative: any such escape
+      --  anywhere in V disqualifies it, even one bound to a nested
+      --  construct — a false negative is safe; a false positive is not.
+      function Has_Escape (V : Stmt_Vectors.Vector) return Boolean is
+      begin
+         for I in V.First_Index .. V.Last_Index loop
+            declare
+               S : constant Stmt_Access := V.Element (I);
+            begin
+               case S.Kind is
+                  when S_Break | S_Express => return True;
+                  when S_Airside_Block =>
+                     if Has_Escape (S.A_Stmts) then return True; end if;
+                  when S_If =>
+                     if Has_Escape (S.SI_Then)
+                       or else Has_Escape (S.SI_Else)
+                     then return True; end if;
+                  when S_While =>
+                     if Has_Escape (S.W_Body)
+                       or else Has_Escape (S.W_Then)
+                     then return True; end if;
+                  when S_Extract =>
+                     if Has_Escape (S.X_Else) then return True; end if;
+                  when others => null;
+               end case;
+            end;
+         end loop;
+         return False;
+      end Has_Escape;
+
+      function Stmts_Diverge (V : Stmt_Vectors.Vector) return Boolean;
+
+      function Stmt_Diverges (S : Stmt_Access) return Boolean is
+      begin
+         if S = null then
+            return False;
+         end if;
+         case S.Kind is
+            when S_Trap | S_Return | S_Break | S_Continue | S_Express =>
+               return True;
+            when S_Expr =>
+               --  §7.11: a `-> never` call (its value type is `never`).
+               return Is_Never_Ty (S.E_Val.Sem_Ty);
+            when S_Airside_Block =>
+               return Stmts_Diverge (S.A_Stmts);
+            when S_If =>
+               return (not S.SI_Else.Is_Empty)
+                 and then Stmts_Diverge (S.SI_Then)
+                 and then Stmts_Diverge (S.SI_Else);
+            when S_While =>
+               --  `loop { ... }` desugars to `while true`; with no escaping
+               --  break/express it never transfers control onward.
+               return Cond_Is_True (S.W_Cond)
+                 and then not Has_Escape (S.W_Body);
+            when S_Let | S_Mut | S_Assign | S_Fence | S_Extract
+               | S_Asm =>
+               return False;
+         end case;
+      end Stmt_Diverges;
+
+      function Stmts_Diverge (V : Stmt_Vectors.Vector) return Boolean is
+      begin
+         --  Once a statement diverges, the rest of the list is
+         --  unreachable, so the list diverges from that point.
+         for I in V.First_Index .. V.Last_Index loop
+            if Stmt_Diverges (V.Element (I)) then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Stmts_Diverge;
 
       --------------------------------------------------------------------
       procedure Check_Stmt (S : Stmt_Access);
@@ -3887,6 +3973,15 @@ package body Kurt.Sema is
                      while Natural (Scope.Length) > Saved loop
                         Scope.Delete_Last;
                      end loop;
+                     --  §7.2.3: the `else` block shall either diverge or
+                     --  yield a fallback value via `express`; otherwise
+                     --  the extracted binding would continue uninitialized
+                     --  on the failure path.
+                     if not Stmts_Diverge (S.X_Else) then
+                        Error ("the `else` of `<-` must diverge (return/"
+                               & "break/continue/@trap) or yield a value "
+                               & "via `express` (spec 7.2.3)");
+                     end if;
                      declare
                         Succ_Ty : constant Type_Access :=
                           Kurt.Layout.Variant_Field_Type
@@ -4450,89 +4545,6 @@ package body Kurt.Sema is
       --  an empty generic context; §5.9 templates are checked ONCE under
       --  the type-erasure rule with their parameters abstract.
       declare
-         --  §7.11 divergence analysis (bootstrap subset). A statement list
-         --  diverges when control cannot reach its end. The diverging forms
-         --  recognised here: `@trap`, `return`, `break`, `continue`,
-         --  `express`, a `-> never` call, a `loop {}` with no `break`, an
-         --  `if`/`else` whose both arms diverge, and an `airside` block
-         --  whose body diverges.
-         function Cond_Is_True (E : Expr_Access) return Boolean is
-           (E /= null and then E.Kind = E_Bool_Lit and then E.Bool_V);
-
-         --  §7.11: a `loop {}` diverges only when no `break` (targeting it or
-         --  an enclosing loop) and no `express` (targeting an enclosing
-         --  block) is reachable in its body. Conservative: any such escape
-         --  anywhere in V disqualifies it, even one bound to a nested
-         --  construct — a false negative is safe; a false positive is not.
-         function Has_Escape (V : Stmt_Vectors.Vector) return Boolean is
-         begin
-            for I in V.First_Index .. V.Last_Index loop
-               declare
-                  S : constant Stmt_Access := V.Element (I);
-               begin
-                  case S.Kind is
-                     when S_Break | S_Express => return True;
-                     when S_Airside_Block =>
-                        if Has_Escape (S.A_Stmts) then return True; end if;
-                     when S_If =>
-                        if Has_Escape (S.SI_Then)
-                          or else Has_Escape (S.SI_Else)
-                        then return True; end if;
-                     when S_While =>
-                        if Has_Escape (S.W_Body)
-                          or else Has_Escape (S.W_Then)
-                        then return True; end if;
-                     when S_Extract =>
-                        if Has_Escape (S.X_Else) then return True; end if;
-                     when others => null;
-                  end case;
-               end;
-            end loop;
-            return False;
-         end Has_Escape;
-
-         function Stmts_Diverge (V : Stmt_Vectors.Vector) return Boolean;
-
-         function Stmt_Diverges (S : Stmt_Access) return Boolean is
-         begin
-            if S = null then
-               return False;
-            end if;
-            case S.Kind is
-               when S_Trap | S_Return | S_Break | S_Continue | S_Express =>
-                  return True;
-               when S_Expr =>
-                  --  §7.11: a `-> never` call (its value type is `never`).
-                  return Is_Never_Ty (S.E_Val.Sem_Ty);
-               when S_Airside_Block =>
-                  return Stmts_Diverge (S.A_Stmts);
-               when S_If =>
-                  return (not S.SI_Else.Is_Empty)
-                    and then Stmts_Diverge (S.SI_Then)
-                    and then Stmts_Diverge (S.SI_Else);
-               when S_While =>
-                  --  `loop { ... }` desugars to `while true`; with no escaping
-                  --  break/express it never transfers control onward.
-                  return Cond_Is_True (S.W_Cond)
-                    and then not Has_Escape (S.W_Body);
-               when S_Let | S_Mut | S_Assign | S_Fence | S_Extract
-                  | S_Asm =>
-                  return False;
-            end case;
-         end Stmt_Diverges;
-
-         function Stmts_Diverge (V : Stmt_Vectors.Vector) return Boolean is
-         begin
-            --  Once a statement diverges, the rest of the list is
-            --  unreachable, so the list diverges from that point.
-            for I in V.First_Index .. V.Last_Index loop
-               if Stmt_Diverges (V.Element (I)) then
-                  return True;
-               end if;
-            end loop;
-            return False;
-         end Stmts_Diverge;
-
          procedure Check_Fn (Fn : Fn_Decl) is
          begin
             Cur_Generics := Fn.Header.Generic_Params;
@@ -4663,6 +4675,26 @@ package body Kurt.Sema is
                   Error ("`[T]`/`dyn Trait` cannot be a struct field type "
                          & "(use a reference) (spec 4.6/9.5)");
                end if;
+            end loop;
+         end;
+      end loop;
+      for I in U.Enums.First_Index .. U.Enums.Last_Index loop
+         declare
+            ED : Enum_Decl renames U.Enums.Element (I);
+         begin
+            for Vi in ED.Variants.First_Index .. ED.Variants.Last_Index loop
+               declare
+                  P : Struct_Field_Vectors.Vector renames
+                    ED.Variants.Element (Vi).Payload;
+               begin
+                  for Fi in P.First_Index .. P.Last_Index loop
+                     if Is_Unsized_Value (P.Element (Fi).Ty) then
+                        Error ("`[T]`/`dyn Trait` cannot be an enum "
+                               & "payload field type (use a reference) "
+                               & "(spec 4.6/9.5)");
+                     end if;
+                  end loop;
+               end;
             end loop;
          end;
       end loop;

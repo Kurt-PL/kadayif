@@ -3,29 +3,29 @@
 // §8.4 inner-scope destruction timing: an object declared inside a block is
 // destroyed at that block's textual end — before any enclosing-scope object
 // — and an early `return` destroys exactly the objects live at that point.
-struct guard { id: si4 } with destruct {
+struct sentry { id: si4 } with destruct {
     airside { posix::printf("drop %d\n\0".ptr, self.id); }
 };
 
 // Early return from inside a nested block: y then x drop on the taken path.
 fn early(flag: bool) -> ui1 {
-    let x: guard = guard { id = 7 };
+    let x: sentry = sentry { id = 7 };
     if flag {
-        let y: guard = guard { id = 8 };
+        let y: sentry = sentry { id = 8 };
         return 0;                 // drops y(8), x(7) — both live here
     }
     return 1;                     // drops x(7) only
 }
 
 fn main() -> ui1 {
-    let a: guard = guard { id = 1 };
+    let a: sentry = sentry { id = 1 };
     airside {
-        let b: guard = guard { id = 2 };
+        let b: sentry = sentry { id = 2 };
         posix::printf("in-air\n\0".ptr);
     }                             // b drops at airside-block end: drop 2
     airside { posix::printf("mid\n\0".ptr); }
     if true {
-        let c: guard = guard { id = 3 };
+        let c: sentry = sentry { id = 3 };
         airside { posix::printf("in-if\n\0".ptr); }
     }                             // c drops at if-block end: drop 3
     airside { posix::printf("--early(true)--\n\0".ptr); }

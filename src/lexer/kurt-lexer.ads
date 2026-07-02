@@ -1,10 +1,11 @@
---  Kadayif bootstrap lexer.
---  Scope: enough to tokenise first.kr and hello.kr.
+--  Kadayif bootstrap lexer (§3, Lexical structure).
 --
---  Spec references §3.2, §3.3, §3.4.1, §3.4.5, §3.4.7, §3.5, §3.6.
---  The full lexer (raw strings, i# prefix, all keywords/operators,
---  every @-directive, digit separators, multi-radix literals, etc.)
---  is deferred. See kadayif/design.md §2.
+--  Covers the full §3.4.1 keyword list, multi-radix integer and
+--  floating-point literals with digit separators and type suffixes,
+--  string/char/raw-string literals with escapes, `i#` raw identifiers,
+--  nested comments, the operator/punctuation set, `@`-directives, and
+--  §10.7/§10.8 conditional-translation scanning. Not yet lexed:
+--  `0nan`/`0inf` special float literals.
 
 with Ada.Strings.Unbounded;
 
@@ -51,15 +52,37 @@ package Kurt.Lexer is
       Kw_Trait,          --  trait declaration (§9.3)
       Kw_Dyn,            --  `dyn Trait` trait-object type (§9.5)
       Kw_Const,          --  associated constant (§9.3.2)
-      --  §3.3.1 explicit-by-declaration keywords (do not appear in EBNF as
-      --  double-quoted terminals).
       Kw_True,
       Kw_False,
       Kw_Cellbits,       --  cell-width keyword (§4.2.1, replaces CELL_BITS)
       Kw_Never,          --  `never` diverging return type (§4.10, §7.11)
       Kw_Xlatime,        --  `xlatime` translation-time evaluation (§6.10)
+      --  §3.4.1: the keyword list is exhaustive and normative — all 50
+      --  words are reserved in every context. The remaining members of
+      --  the list, admissible only where the grammar names them:
+      Kw_Asm,            --  `asm { ... }` opener (§6.11); Tok_Asm carries
+                         --  the brace body when one follows
+      Kw_Atomic,         --  reference modifier (§8.1)
+      Kw_Contract,       --  `with contract` / bound name (§7.2, §9.8.4)
+      Kw_Destruct,       --  `with destruct` / `destruct(e)` / bound (§8.11)
+      Kw_Guard,          --  reference modifier (§8.1)
+      Kw_Integer,        --  built-in bound (§9.8.2)
+      Kw_Module,         --  inline namespace (§10.6)
+      Kw_Numeric,        --  built-in bound (§9.8.1)
+      Kw_Primitive,      --  built-in bound (§9.8.3)
+      Kw_Self,           --  method receiver (§9.2)
+      Kw_Self_T,         --  implementing type placeholder (§9.2)
+      Kw_Srcroot,        --  source-unit-root path head (§10.6)
+      Kw_Static,         --  static binding declaration (§5.4)
+      Kw_Super,          --  enclosing-module path head (§10.6)
+      Kw_Type,           --  type alias declaration (§5.8)
+      Kw_Undestruct,     --  `undestruct(e)` (§8.11.3)
+      Kw_Use,            --  `use path;` (§5.12.2)
+      Kw_Volatile,       --  reference modifier (§8.1)
+      Kw_Xfer,           --  ownership-transferring closure (§9.9)
       --  Reference sigils (§4.9, §8.1). The `raw` qualifier in `&raw T`
-      --  is a normal identifier; the parser splices the two tokens.
+      --  is grammatically bound to `&` with no separator; the parser
+      --  splices the two tokens after verifying adjacency.
       Op_Amp,            --  &
       Op_Dollar,         --  $
       Op_Star,           --  *  (dereference / multiplication)
@@ -161,6 +184,13 @@ package Kurt.Lexer is
       Line      : Positive     := 1;
       Col       : Positive     := 1;
    end record;
+
+   --  §3.4.1: an identifier-shaped token — an identifier or a keyword.
+   --  Keywords retain their spelling in Lexeme, so grammar positions
+   --  that admit specific keywords as words (with-items, bound names)
+   --  test this and then match on the lexeme.
+   function Is_Word (K : Token_Kind) return Boolean is
+     (K = Tok_Ident or else K in Kw_Fn .. Kw_Xfer);
 
    type Lexer is tagged limited private;
 

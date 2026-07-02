@@ -1229,12 +1229,6 @@ is
 
 begin
    case E.Kind is
-      when E_Range =>
-         --  §4.8: a range is an aggregate; it is built in place by the
-         --  let/mut initialiser path, never produced in a register.
-         raise Program_Error with
-           "codegen: range value outside a binding initialiser";
-
       when E_Uninit =>
          --  §6.1.8: an uninitialized value. Valid `uninit` positions
          --  (let/mut/assign) are intercepted earlier and store nothing;
@@ -1410,13 +1404,7 @@ begin
                      end if;
                      return;
                   end if;
-                  if B.Ty /= null and then B.Ty.Kind = T_Range then
-                     --  §4.8 range fields: `start` at offset 0, `end` at
-                     --  size(T); both have type T.
-                     FT  := B.Ty.Rng_Elem;
-                     Off := B.Offset
-                       + (if FName = "end" then Sizeof (B.Ty.Rng_Elem) else 0);
-                  elsif B.Ty /= null and then B.Ty.Kind = T_Tuple then
+                  if B.Ty /= null and then B.Ty.Kind = T_Tuple then
                      --  §6.2.2 tuple field by index `.N`.
                      declare
                         TI : constant Natural := Natural'Value (FName);
