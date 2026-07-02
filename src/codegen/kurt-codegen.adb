@@ -60,6 +60,10 @@ package body Kurt.Codegen is
             for I in E.AB_Stmts.First_Index .. E.AB_Stmts.Last_Index loop
                Collect_Strings_In_Stmt (E.AB_Stmts.Element (I), Pool);
             end loop;
+         when E_Loop =>
+            for I in E.Loop_Body.First_Index .. E.Loop_Body.Last_Index loop
+               Collect_Strings_In_Stmt (E.Loop_Body.Element (I), Pool);
+            end loop;
          when E_Closure =>
             null;  --  §9.9 the body's strings are collected when the
                    --  synthesised closure subroutine is itself processed
@@ -416,6 +420,10 @@ package body Kurt.Codegen is
       --  §8.4 binding count at the loop body's entry, so `break`/`continue`
       --  destroy the body locals live at the jump before leaving the body.
       Body_Entry : Natural := 0;
+      --  §7.7 frame offset of the loop-expression's result slot; a `break
+      --  expr` targeting this loop stores its value here. -1 for a statement
+      --  loop (the break value, if any, is discarded).
+      Result_Off : Integer := -1;
    end record;
 
    package Loop_Stack_Pkg is new Ada.Containers.Vectors

@@ -1071,7 +1071,8 @@ begin
                                (if Has_Then then L_Thn else L_Top),
                 Break_Lbl => SU.To_Unbounded_String (L_End),
                 Name      => S.W_Label,
-                Body_Entry => Natural (ST.Bindings.Length)));
+                Body_Entry => Natural (ST.Bindings.Length),
+                Result_Off => -1));
             IO.Put_Line (F, L_Top & ":");
             if S.W_Is_Let then
                --  §7.5.1 `while let Enum::Variant { binds } = e`. Like
@@ -1511,9 +1512,20 @@ begin
             raise Program_Error with "codegen: 'break' outside a loop";
          end if;
          if S.Brk_Val /= null then
-            --  §7.7 value form: evaluate for effect. Loop values are not
-            --  yet propagated in the bootstrap; the value is discarded.
+            --  §7.7 value form: evaluate the break value; when the targeted
+            --  loop is used as an expression, park it in that loop's result
+            --  slot (which survives the binding drops below) — otherwise the
+            --  value has no destination and is evaluated only for effect.
             Lower_Expr_Into_Reg (F, S.Brk_Val, 9, ST);
+            declare
+               R_Off : constant Integer :=
+                 Target_Loop (ST, S.Brk_Label).Result_Off;
+            begin
+               if R_Off >= 0 then
+                  IO.Put_Line (F, "    str     x9, [x29, #"
+                                  & Img (Natural (R_Off)) & "]");
+               end if;
+            end;
          end if;
          --  §8.4 destroy every body local live at this jump, across all
          --  scopes down to the targeted loop's body (it leaves the loop).

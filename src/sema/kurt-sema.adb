@@ -3137,6 +3137,56 @@ package body Kurt.Sema is
                   E.Sem_Ty := Mk_Named ("void");
                end if;
                return E.Sem_Ty;
+
+            when E_Loop =>
+               --  §7.7 `loop { … }` as an expression. The body is checked in
+               --  a loop context; its type is the annotated (expected) type
+               --  when known, otherwise the type of the first `break expr`
+               --  targeting this loop, or `never` when no break carries a
+               --  value (a diverging loop).
+               declare
+                  Found : Type_Access := null;
+
+                  --  Scan for a `break`-with-value that targets this loop:
+                  --  descend into `if`/`airside` bodies but not into a nested
+                  --  loop (whose breaks target the inner loop).
+                  procedure Scan (V : Stmt_Vectors.Vector) is
+                  begin
+                     for I in V.First_Index .. V.Last_Index loop
+                        declare
+                           BS : constant Stmt_Access := V.Element (I);
+                        begin
+                           case BS.Kind is
+                              when S_Break =>
+                                 if Found = null
+                                   and then BS.Brk_Val /= null
+                                 then
+                                    Found := BS.Brk_Val.Sem_Ty;
+                                 end if;
+                              when S_If =>
+                                 Scan (BS.SI_Then);
+                                 Scan (BS.SI_Else);
+                              when S_Airside_Block =>
+                                 Scan (BS.A_Stmts);
+                              when others =>
+                                 null;   --  skip S_While (nested loop)
+                           end case;
+                        end;
+                     end loop;
+                  end Scan;
+               begin
+                  In_Loop := In_Loop + 1;
+                  Check_Block (E.Loop_Body);
+                  In_Loop := In_Loop - 1;
+                  if Expected /= null and then not Is_Void_Type (Expected) then
+                     E.Sem_Ty := Expected;
+                  else
+                     Scan (E.Loop_Body);
+                     E.Sem_Ty :=
+                       (if Found /= null then Found else Mk_Named ("never"));
+                  end if;
+               end;
+               return E.Sem_Ty;
          end case;
       end Infer;
 

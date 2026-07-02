@@ -1285,6 +1285,43 @@ begin
             end if;
          end;
 
+      when E_Loop =>
+         --  §7.7 `loop { … }` as an expression: an unconditional loop whose
+         --  value is written by every `break expr` targeting it into a frame
+         --  result slot, loaded into the target register once the loop exits.
+         declare
+            FN      : constant String  := SU.To_String (ST.Fn_Name);
+            Idx     : constant Natural := ST.Loop_Idx;
+            L_Top   : constant String  := "Lloop_" & FN & "_top_" & Img (Idx);
+            L_End   : constant String  := "Lloop_" & FN & "_end_" & Img (Idx);
+            Res_Off : constant Natural := ST.Next_Offset;
+            Entry_Len : constant Natural := Natural (ST.Bindings.Length);
+         begin
+            ST.Loop_Idx := ST.Loop_Idx + 1;
+            ST.Next_Offset := ST.Next_Offset + 8;   --  result slot
+            ST.Loops.Append
+              ((Cont_Lbl   => SU.To_Unbounded_String (L_Top),
+                Break_Lbl  => SU.To_Unbounded_String (L_End),
+                Name       => SU.Null_Unbounded_String,
+                Body_Entry => Entry_Len,
+                Result_Off => Res_Off));
+            IO.Put_Line (F, L_Top & ":");
+            for I in E.Loop_Body.First_Index .. E.Loop_Body.Last_Index loop
+               Lower_Stmt (F, E.Loop_Body.Element (I), ST);
+            end loop;
+            --  §8.4 drop this iteration's body locals before looping back.
+            Emit_Binding_Drops
+              (F, ST, Keep => Entry_Len, Preserve_Ret => False);
+            while Natural (ST.Bindings.Length) > Entry_Len loop
+               ST.Bindings.Delete_Last;
+            end loop;
+            IO.Put_Line (F, "    b       " & L_Top);
+            IO.Put_Line (F, L_End & ":");
+            ST.Loops.Delete_Last;
+            IO.Put_Line (F, "    ldr     " & Xreg
+                            & ", [x29, #" & Img (Res_Off) & "]");
+         end;
+
       when E_Destruct =>
          --  §8.4/§8.11: `destruct(g)` runs g's destructor immediately;
          --  `undestruct(g)` reclaims g's storage without running it. Either

@@ -1,0 +1,16 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §7.7 `loop { … }` as an expression: it runs until a `break expr` supplies
+// its value. `continue` skips to the next iteration as usual.
+fn main() -> ui1 {
+    mut i: si4 = 0;
+    mut sum: si4 = 0;
+    let v: si4 = loop {
+        i += 1;
+        if i == 3 { continue; }          // skip 3
+        sum += i;
+        if i >= 5 { break sum; }         // 1 + 2 + 4 + 5 = 12
+    };
+    airside { posix::printf("v=%d\n\0".ptr, v); }
+    return v as ui1;
+}

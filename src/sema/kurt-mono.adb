@@ -338,6 +338,8 @@ package body Kurt.Mono is
          when E_Airside_Blk =>
             R.AB_Stmts := Copy_Block (E.AB_Stmts, Params, Args);
             R.AB_Airside := E.AB_Airside;
+         when E_Loop =>
+            R.Loop_Body := Copy_Block (E.Loop_Body, Params, Args);
       end case;
       return R;
    end Copy_Expr;
@@ -864,6 +866,8 @@ package body Kurt.Mono is
                Scan_Stmts (E.Clo_Body, Used, Bound);
             when E_Airside_Blk =>
                Scan_Stmts (E.AB_Stmts, Used, Bound);
+            when E_Loop =>
+               Scan_Stmts (E.Loop_Body, Used, Bound);
          end case;
       end Scan_Expr;
 
@@ -1008,6 +1012,8 @@ package body Kurt.Mono is
                Visit_Expr (E.DT_Inner);
             when E_Airside_Blk =>
                Visit_Block (E.AB_Stmts);
+            when E_Loop =>
+               Visit_Block (E.Loop_Body);
             when E_Closure =>
                --  §9.9 lift the closure to a fresh top-level subroutine so it
                --  follows the normal sema/codegen path. The expression keeps

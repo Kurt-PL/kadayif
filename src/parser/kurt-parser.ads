@@ -150,7 +150,8 @@ package Kurt.Parser is
       E_Uninit,           --  `uninit` uninitialized value (§6.1.8)
       E_Closure,          --  `/.params/ <- e` / `/.params/ { ... }` (§9.9)
       E_Destruct,         --  `destruct(e)` / `undestruct(e)` (§8.4, §8.11)
-      E_Airside_Blk);     --  `airside { ... }` block expression (§6.9)
+      E_Airside_Blk,      --  `airside { ... }` block expression (§6.9)
+      E_Loop);            --  `loop { ... }` as an expression (§7.7)
       --  Note: Kurt has no `[]` indexing operator (§6.2). Element access
       --  is `*(arr.ptr + i)` (raw reference arithmetic, §8.6.4) or the
       --  library `.at()` method. `..`/`..=` are pattern-only tokens
@@ -418,6 +419,11 @@ package Kurt.Parser is
             --  airside region) from a plain `{ … }` express block (§7.8).
             AB_Stmts   : Stmt_Vectors.Vector;
             AB_Airside : Boolean := True;
+         when E_Loop =>
+            --  §7.7 `loop { … }` as an expression. Its value is supplied by
+            --  a `break expr` targeting it; an infinite loop with no such
+            --  break has type `never`.
+            Loop_Body : Stmt_Vectors.Vector;
       end case;
    end record;
 

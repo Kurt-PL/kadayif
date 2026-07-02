@@ -1365,6 +1365,15 @@ package body Kurt.Parser is
             Parse_Block_Stmts (C, E.AB_Stmts);
             return E;
 
+         when Kw_Loop =>
+            --  §7.7 `loop { … }` as an expression, yielding a `break` value.
+            --  (Statement-position `loop` never reaches here — Parse_Stmt
+            --  claims it first and desugars it to `while true`.)
+            Advance (C);   --  loop
+            E := new Expr_Node (Kind => E_Loop);
+            Parse_Block_Stmts (C, E.Loop_Body);
+            return E;
+
          when Kw_Match =>
             --  §7: match scrut { pattern = expr, ... }
             --  Bootstrap: expression-bodied arms only.
@@ -3883,6 +3892,8 @@ package body Kurt.Parser is
                RE (E.DT_Inner);
             when E_Airside_Blk =>
                RBlk (E.AB_Stmts);
+            when E_Loop =>
+               RBlk (E.Loop_Body);
          end case;
       end RE;
 
@@ -4410,6 +4421,8 @@ package body Kurt.Parser is
                RE (E.DT_Inner);
             when E_Airside_Blk =>
                RBlk (E.AB_Stmts);
+            when E_Loop =>
+               RBlk (E.Loop_Body);
          end case;
       end RE;
 
