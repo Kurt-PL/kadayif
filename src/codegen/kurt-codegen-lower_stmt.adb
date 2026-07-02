@@ -217,7 +217,10 @@ begin
                   end if;
                end;
             when Not_Agg | One_Reg =>
-               Lower_Expr_Into_Reg (F, S.R_Val, 0, ST);
+               --  §5.1 bare `return;` (void): no value to place in x0.
+               if S.R_Val /= null then
+                  Lower_Expr_Into_Reg (F, S.R_Val, 0, ST);
+               end if;
          end case;
          --  §8.8.2: returning a binding transfers it (skip its drop).
          Note_Move (F, ST, S.R_Val);

@@ -1,0 +1,15 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.1 a bare `return;` (no value) is well-formed in a `void` subroutine,
+// both as an early exit and as the final statement.
+fn greet(n: si4) -> void {
+    if n < 0 { return; }             // early exit, no value
+    airside { posix::printf("n=%d\n\0".ptr, n); }
+    return;                          // final bare return
+}
+
+fn main() -> ui1 {
+    greet(-1);                       // prints nothing
+    greet(7);                        // prints n=7
+    return 0;
+}

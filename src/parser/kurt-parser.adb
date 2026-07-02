@@ -1961,7 +1961,12 @@ package body Kurt.Parser is
          when Kw_Return =>
             Advance (C);
             S := new Stmt_Node (Kind => S_Return);
-            S.R_Val := Parse_Expr (C);
+            --  §5.1 bare `return;` in a void subroutine: no value expression.
+            if C.Cur.Kind = Punct_Semi then
+               S.R_Val := null;
+            else
+               S.R_Val := Parse_Expr (C);
+            end if;
             Expect (C, Punct_Semi, "';'");
             return S;
 

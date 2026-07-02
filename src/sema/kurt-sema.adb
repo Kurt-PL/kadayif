@@ -3487,6 +3487,16 @@ package body Kurt.Sema is
       begin
          case S.Kind is
             when S_Return =>
+               if S.R_Val = null then
+                  --  §5.1 bare `return;` is well-formed only in a subroutine
+                  --  whose return type is `void`.
+                  if Cur_Ret /= null and then not Is_Void_Type (Cur_Ret) then
+                     Error ("bare `return;` in a subroutine returning '"
+                            & Image (Cur_Ret) & "'; a value is required "
+                            & "(spec 5.1)");
+                  end if;
+                  return;
+               end if;
                declare
                   RT : constant Type_Access := Infer (S.R_Val, Cur_Ret);
                begin
