@@ -291,9 +291,9 @@ begin
                      ST.Bindings.Append
                        ((Name   => S.L_Refut_Pat.Bindings.Element (K),
                          Offset => B.Offset
-                           + Kurt.Layout.Variant_Field_Offset (B.Ty, VN, K),
-                         Ty     => Kurt.Layout.Variant_Field_Type
-                                     (B.Ty, VN, K)));
+                           + Pat_Field_Off (S.L_Refut_Pat, B.Ty, VN, K),
+                         Ty     => Pat_Field_Ty
+                                        (S.L_Refut_Pat, B.Ty, VN, K)));
                   end loop;
                end;
             end;
@@ -1122,9 +1122,9 @@ begin
                         ST.Bindings.Append
                           ((Name   => S.W_Let_Pat.Bindings.Element (K),
                             Offset => B.Offset
-                              + Kurt.Layout.Variant_Field_Offset (B.Ty, VN, K),
-                            Ty     => Kurt.Layout.Variant_Field_Type
-                                        (B.Ty, VN, K)));
+                              + Pat_Field_Off (S.W_Let_Pat, B.Ty, VN, K),
+                            Ty     => Pat_Field_Ty
+                                        (S.W_Let_Pat, B.Ty, VN, K)));
                      end loop;
                      Lower_Scoped (S.W_Body);
                      while Natural (ST.Bindings.Length) > Saved loop
@@ -1260,9 +1260,9 @@ begin
                         ST.Bindings.Append
                           ((Name   => S.SI_Let_Pat.Bindings.Element (K),
                             Offset => B.Offset
-                              + Kurt.Layout.Variant_Field_Offset (B.Ty, VN, K),
-                            Ty     => Kurt.Layout.Variant_Field_Type
-                                        (B.Ty, VN, K)));
+                              + Pat_Field_Off (S.SI_Let_Pat, B.Ty, VN, K),
+                            Ty     => Pat_Field_Ty
+                                        (S.SI_Let_Pat, B.Ty, VN, K)));
                      end loop;
                      declare
                         --  §8.4 destroy the then-block's OWN destruct locals

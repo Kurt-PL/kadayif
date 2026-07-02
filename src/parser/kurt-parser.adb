@@ -867,6 +867,35 @@ package body Kurt.Parser is
    procedure Parse_Block_Stmts
      (C : in out Cursor; Stmts : out Stmt_Vectors.Vector);
 
+   --  §7.4 parse a variant pattern's payload destructuring `{ ... }` into
+   --  the pattern P: a bare `ident` is a positional binding; `field = ident`
+   --  binds the named field. Assumes the opening `{` is the current token.
+   procedure Parse_Payload_Binds (C : in out Cursor; P : in out Pattern) is
+   begin
+      Expect (C, Punct_LBrace, "'{'");
+      if C.Cur.Kind /= Punct_RBrace then
+         loop
+            declare
+               N1 : constant SU.Unbounded_String :=
+                 Take_Ident (C, "payload binding");
+            begin
+               if C.Cur.Kind = Punct_Eq then
+                  Advance (C);   --  '='
+                  P.Bind_Fields.Append (N1);
+                  P.Bindings.Append (Take_Ident (C, "renamed binding"));
+               else
+                  P.Bind_Fields.Append (SU.Null_Unbounded_String);
+                  P.Bindings.Append (N1);
+               end if;
+            end;
+            exit when C.Cur.Kind /= Punct_Comma;
+            Advance (C);
+            exit when C.Cur.Kind = Punct_RBrace;
+         end loop;
+      end if;
+      Expect (C, Punct_RBrace, "'}'");
+   end Parse_Payload_Binds;
+
    function Parse_Primary (C : in out Cursor) return Expr_Access is
       E : Expr_Access;
    begin
@@ -1433,19 +1462,10 @@ package body Kurt.Parser is
                               Advance (C);
                               P.Path.Append (Take_Ident (C, "variant name"));
                            end loop;
-                           --  Optional payload destructuring `{ a, b }`.
+                           --  Optional payload destructuring: bare positional
+                           --  `{ a, b }` or named `field = binding` rename.
                            if C.Cur.Kind = Punct_LBrace then
-                              Advance (C);
-                              if C.Cur.Kind /= Punct_RBrace then
-                                 loop
-                                    P.Bindings.Append
-                                      (Take_Ident (C, "payload binding"));
-                                    exit when C.Cur.Kind /= Punct_Comma;
-                                    Advance (C);
-                                    exit when C.Cur.Kind = Punct_RBrace;
-                                 end loop;
-                              end if;
-                              Expect (C, Punct_RBrace, "'}'");
+                              Parse_Payload_Binds (C, P);
                            end if;
                         when others =>
                            raise Syntax_Error with
@@ -2119,17 +2139,7 @@ package body Kurt.Parser is
                   S.L_Refut_Pat.Path.Append (Take_Ident (C, "variant name"));
                end loop;
                if C.Cur.Kind = Punct_LBrace then
-                  Advance (C);
-                  if C.Cur.Kind /= Punct_RBrace then
-                     loop
-                        S.L_Refut_Pat.Bindings.Append
-                          (Take_Ident (C, "payload binding"));
-                        exit when C.Cur.Kind /= Punct_Comma;
-                        Advance (C);
-                        exit when C.Cur.Kind = Punct_RBrace;
-                     end loop;
-                  end if;
-                  Expect (C, Punct_RBrace, "'}'");
+                  Parse_Payload_Binds (C, S.L_Refut_Pat);
                end if;
                Expect (C, Punct_Eq, "'=' in let-else");
                S.L_Init := Parse_Expr (C);
@@ -2238,17 +2248,7 @@ package body Kurt.Parser is
                   S.W_Let_Pat.Path.Append (Take_Ident (C, "variant name"));
                end loop;
                if C.Cur.Kind = Punct_LBrace then
-                  Advance (C);
-                  if C.Cur.Kind /= Punct_RBrace then
-                     loop
-                        S.W_Let_Pat.Bindings.Append
-                          (Take_Ident (C, "payload binding"));
-                        exit when C.Cur.Kind /= Punct_Comma;
-                        Advance (C);
-                        exit when C.Cur.Kind = Punct_RBrace;
-                     end loop;
-                  end if;
-                  Expect (C, Punct_RBrace, "'}'");
+                  Parse_Payload_Binds (C, S.W_Let_Pat);
                end if;
                Expect (C, Punct_Eq, "'=' in while-let");
             end if;
@@ -2342,17 +2342,7 @@ package body Kurt.Parser is
                   S.SI_Let_Pat.Path.Append (Take_Ident (C, "variant name"));
                end loop;
                if C.Cur.Kind = Punct_LBrace then
-                  Advance (C);
-                  if C.Cur.Kind /= Punct_RBrace then
-                     loop
-                        S.SI_Let_Pat.Bindings.Append
-                          (Take_Ident (C, "payload binding"));
-                        exit when C.Cur.Kind /= Punct_Comma;
-                        Advance (C);
-                        exit when C.Cur.Kind = Punct_RBrace;
-                     end loop;
-                  end if;
-                  Expect (C, Punct_RBrace, "'}'");
+                  Parse_Payload_Binds (C, S.SI_Let_Pat);
                end if;
                Expect (C, Punct_Eq, "'=' in if-let");
                --  Suppress trailing struct-literal parsing so the then-block

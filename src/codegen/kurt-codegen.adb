@@ -613,6 +613,35 @@ package body Kurt.Codegen is
    function Sizeof (T : Type_Access) return Natural is
      (Kurt.Layout.Size_Of (T));
 
+   --  §7.4 the payload-region offset / type of a variant pattern's K-th
+   --  binding: by the named field for a `field = binding` rename entry,
+   --  else by position K.
+   function Pat_Field_Off
+     (Pat : Kurt.Parser.Pattern; T : Type_Access; VN : String; K : Positive)
+      return Natural is
+   begin
+      if K <= Natural (Pat.Bind_Fields.Length)
+        and then SU.Length (Pat.Bind_Fields.Element (K)) > 0
+      then
+         return Natural (Integer'Max (0, Kurt.Layout.Variant_Field_Offset_By_Name
+           (T, VN, SU.To_String (Pat.Bind_Fields.Element (K)))));
+      end if;
+      return Kurt.Layout.Variant_Field_Offset (T, VN, K);
+   end Pat_Field_Off;
+
+   function Pat_Field_Ty
+     (Pat : Kurt.Parser.Pattern; T : Type_Access; VN : String; K : Positive)
+      return Type_Access is
+   begin
+      if K <= Natural (Pat.Bind_Fields.Length)
+        and then SU.Length (Pat.Bind_Fields.Element (K)) > 0
+      then
+         return Kurt.Layout.Variant_Field_Type_By_Name
+           (T, VN, SU.To_String (Pat.Bind_Fields.Element (K)));
+      end if;
+      return Kurt.Layout.Variant_Field_Type (T, VN, K);
+   end Pat_Field_Ty;
+
    function Is_Ref (T : Type_Access) return Boolean is
      (T /= null and then T.Kind = T_Ref);
 

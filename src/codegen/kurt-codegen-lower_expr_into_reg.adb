@@ -966,10 +966,9 @@ is
                               ST.Bindings.Append
                                 ((Name   => Arm.Pat.Bindings.Element (K),
                                   Offset => Base
-                                    + Kurt.Layout.Variant_Field_Offset
-                                        (Scrut_T, VN, K),
-                                  Ty     => Kurt.Layout.Variant_Field_Type
-                                              (Scrut_T, VN, K)));
+                                    + Pat_Field_Off (Arm.Pat, Scrut_T, VN, K),
+                                  Ty     => Pat_Field_Ty
+                                              (Arm.Pat, Scrut_T, VN, K)));
                            end loop;
                            --  §7.4: guard runs with payload bindings in scope;
                            --  on failure fall through to the next arm.

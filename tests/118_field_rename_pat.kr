@@ -1,0 +1,21 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §7.4 named `field = binding` payload patterns: the binding resolves to the
+// named field (not by position), so entries may appear in any order and use
+// a different binding name from the field name.
+enum shape { Rect { w: si4, h: si4 }, Sq { side: si4 } }
+
+fn area(s: shape) -> si4 {
+    return match s {
+        shape::Rect { h = height, w = width } = width * height,  // reordered
+        shape::Sq { side = s } = s * s,
+        #wild# = 0,
+    };
+}
+
+fn main() -> ui1 {
+    let r: shape = shape::Rect { w = 6, h = 7 };
+    let q: shape = shape::Sq { side = 5 };
+    airside { posix::printf("r=%d q=%d\n\0".ptr, area(r), area(q)); }  // 42 25
+    return area(r) as ui1;
+}

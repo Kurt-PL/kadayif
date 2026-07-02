@@ -945,6 +945,22 @@ package body Kurt.Sema is
          end if;
       end Maybe_Move;
 
+      --  §7.4 the type of the K-th payload binding of a variant pattern: by
+      --  the named field when the entry is a `field = binding` rename, else
+      --  by position K.
+      function Pat_Field_Ty
+        (Pat : Kurt.Parser.Pattern; Scrut : Type_Access;
+         VN : String; K : Positive) return Type_Access is
+      begin
+         if K <= Natural (Pat.Bind_Fields.Length)
+           and then SU.Length (Pat.Bind_Fields.Element (K)) > 0
+         then
+            return Kurt.Layout.Variant_Field_Type_By_Name
+              (Scrut, VN, SU.To_String (Pat.Bind_Fields.Element (K)));
+         end if;
+         return Kurt.Layout.Variant_Field_Type (Scrut, VN, K);
+      end Pat_Field_Ty;
+
       --  Body appears with the statement checks below; needed here for the
       --  §6.9 `airside { ... }` block expression (its body is statements).
       procedure Check_Block (Stmts : Stmt_Vectors.Vector);
@@ -2221,9 +2237,8 @@ package body Kurt.Sema is
                                           Scope.Append
                                             ((Name => Arm.Pat.Bindings.Element
                                                         (K),
-                                              Ty   => Kurt.Layout
-                                                .Variant_Field_Type
-                                                  (Scrut_Ty, VN, K),
+                                              Ty   => Pat_Field_Ty
+                                                (Arm.Pat, Scrut_Ty, VN, K),
                                               others => <>));
                                        end loop;
                                     end if;
@@ -3532,8 +3547,7 @@ package body Kurt.Sema is
                              (S.L_Refut_Pat.Bindings.Element (K));
                            Scope.Append
                              ((Name => S.L_Refut_Pat.Bindings.Element (K),
-                               Ty   => Kurt.Layout.Variant_Field_Type
-                                         (CT, VN, K), others => <>));
+                               Ty   => Pat_Field_Ty (S.L_Refut_Pat, CT, VN, K), others => <>));
                         end loop;
                      end if;
                   end;
@@ -3822,8 +3836,7 @@ package body Kurt.Sema is
                            loop
                               Scope.Append
                                 ((Name => S.W_Let_Pat.Bindings.Element (K),
-                                  Ty   => Kurt.Layout.Variant_Field_Type
-                                            (CT, VN, K), others => <>));
+                                  Ty   => Pat_Field_Ty (S.W_Let_Pat, CT, VN, K), others => <>));
                            end loop;
                         end if;
                      end;
@@ -3906,8 +3919,7 @@ package body Kurt.Sema is
                         loop
                            Scope.Append
                              ((Name => S.SI_Let_Pat.Bindings.Element (K),
-                               Ty   => Kurt.Layout.Variant_Field_Type
-                                         (CT, VN, K), others => <>));
+                               Ty   => Pat_Field_Ty (S.SI_Let_Pat, CT, VN, K), others => <>));
                         end loop;
                         Check_Block (S.SI_Then);
                         while Natural (Scope.Length) > Saved loop

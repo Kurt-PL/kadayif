@@ -187,6 +187,11 @@ package Kurt.Parser is
       Range_Incl : Boolean := False;  --  Pat_Range: `..=` (true) vs `..`
       --  Pat_Variant payload bindings, positional (e.g. `{ w, h }`).
       Bindings : Path_Segments.Vector;
+      --  §7.4 parallel to Bindings: for a `field = binding` rename entry,
+      --  the source field name; empty for a bare positional binding. When
+      --  set, the binding resolves to that named field instead of by
+      --  position.
+      Bind_Fields : Path_Segments.Vector;
       --  §5.10 binding pattern `name # sub`: the matched value is bound to
       --  Bind_Name while it is tested against this (sub-)pattern. Empty = none.
       Bind_Name : SU.Unbounded_String;
