@@ -3095,7 +3095,8 @@ package body Kurt.Parser is
    --  struct_declaration = "struct" IDENT "{" field { "," field } "}"
    --  field = IDENT ":" type            (§5.5, bootstrap subset)
    function Parse_Struct_Decl (C : in out Cursor) return Struct_Decl is
-      D : Struct_Decl;
+      D        : Struct_Decl;
+      Has_Body : Boolean := True;
    begin
       if C.Cur.Kind = Kw_Pub then
          D.Is_Pub := True;
@@ -3104,6 +3105,11 @@ package body Kurt.Parser is
       Expect (C, Kw_Struct, "'struct'");
       D.Name := Take_Ident (C, "struct name");
       Parse_Opt_Generic_Params (C, D.Generic_Params);
+      --  §5.5 a struct declaration is either a composite form `{ … }` or,
+      --  when the body is absent, a unit struct (`struct s;` / `struct s
+      --  with …;`) with zero fields. `Has_Body` gates the trailing `;`.
+      Has_Body := C.Cur.Kind = Punct_LBrace;
+      if Has_Body then
       Expect (C, Punct_LBrace, "'{'");
       if C.Cur.Kind /= Punct_RBrace then
          loop
@@ -3141,6 +3147,7 @@ package body Kurt.Parser is
          end loop;
       end if;
       Expect (C, Punct_RBrace, "'}'");
+      end if;   --  Has_Body
 
       --  Optional `with` clause (§5.11). Recognised items: `repr(packed)`
       --  (§4.11.4) and `align(N)` (§4.11.5) — bare or inside a with-block;
@@ -3245,6 +3252,9 @@ package body Kurt.Parser is
                  "';' after single-item `with` clause (spec 5.11)");
             end if;
          end;
+      elsif not Has_Body then
+         --  §5.5 a unit struct with no `with` clause: `struct s;`.
+         Expect (C, Punct_Semi, "';' after unit struct declaration (spec 5.5)");
       end if;
       return D;
    end Parse_Struct_Decl;

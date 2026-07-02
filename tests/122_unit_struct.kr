@@ -1,0 +1,16 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.5 a unit struct has no composite body: `struct s;`. It has zero fields
+// (size 0) and is constructed with an empty literal `s {}`. It can carry
+// inherent methods and trait impls like any other type.
+struct token;
+
+impl token {
+    fn value(&self) -> si4 { return 42; }
+}
+
+fn main() -> ui1 {
+    let t: token = token {};
+    airside { posix::printf("value=%d\n\0".ptr, t.value()); }
+    return t.value() as ui1;
+}
