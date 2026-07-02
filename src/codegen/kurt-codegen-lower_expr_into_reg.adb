@@ -1637,11 +1637,16 @@ begin
                   Loc : constant String :=
                     ", [x29, #" & Img (B.Offset) & "]";
                begin
-                  --  Load width matches the store width (see Store_Sized)
-                  --  so e.g. a 1-cell enum discriminant round-trips.
-                  if Is_Ref (B.Ty) or else Sz >= 8 then
+                  --  Load width matches the store width (see Store_Sized) so
+                  --  e.g. a 1-cell enum discriminant round-trips. Scalars are
+                  --  always a power-of-two size (1/2/4/8); an odd width (3, 5,
+                  --  6, 7) only occurs for a small aggregate passed by value
+                  --  in a single register (§8.8.1), where the covering wider
+                  --  load gathers all the payload bytes — the high junk bytes
+                  --  above the type width are ignored by the callee.
+                  if Is_Ref (B.Ty) or else Sz >= 5 then
                      IO.Put_Line (F, "    ldr     " & Xreg & Loc);
-                  elsif Sz = 4 then
+                  elsif Sz >= 3 then
                      IO.Put_Line (F, "    ldr     " & Wreg & Loc);
                   elsif Sz = 2 then
                      IO.Put_Line (F, "    ldrh    " & Wreg & Loc);

@@ -1381,6 +1381,24 @@ package body Kurt.Parser is
                         when Tok_Hash_Wild =>
                            P.Kind := Pat_Wild;
                            Advance (C);
+                        when Tok_String_Lit =>
+                           --  §7.4.2 a string literal pattern `"abc"` is
+                           --  shorthand for the fixed-length slice pattern
+                           --  `[0x61, 0x62, 0x63]` (one `ui1` cell per byte);
+                           --  expand it here, no execution-time comparison.
+                           P.Kind := Pat_Slice;
+                           declare
+                              B : constant String :=
+                                SU.To_String (C.Cur.Str_Bytes);
+                           begin
+                              for I in B'Range loop
+                                 P.Slice_Elems.Append
+                                   ((Kind  => SE_Int,
+                                     Int_V => Character'Pos (B (I)),
+                                     others => <>));
+                              end loop;
+                           end;
+                           Advance (C);
                         when Punct_LBracket =>
                            --  §7.4.2 slice pattern `[e0, e1, ...]`.
                            P.Kind := Pat_Slice;

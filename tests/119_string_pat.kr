@@ -1,0 +1,23 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §7.4.2 a string literal pattern `"GET"` is shorthand for the fixed-length
+// slice pattern `[0x47, 0x45, 0x54]` — expanded at translation time, no
+// execution-time string comparison. Exercised through a by-value `[ui1;3]`
+// parameter (a small aggregate passed in a single register).
+fn method(s: [ui1;3]) -> si4 {
+    return match s {
+        "GET" = 1,
+        "PUT" = 2,
+        #wild# = 0,
+    };
+}
+
+fn main() -> ui1 {
+    let g: [ui1;3] = [71, 69, 84];   // "GET"
+    let p: [ui1;3] = [80, 85, 84];   // "PUT"
+    let x: [ui1;3] = [88, 88, 88];   // "XXX"
+    airside {
+        posix::printf("%d %d %d\n\0".ptr, method(g), method(p), method(x));
+    }                                                          // 1 2 0
+    return method(g) as ui1;
+}
