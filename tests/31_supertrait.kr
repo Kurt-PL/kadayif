@@ -5,7 +5,7 @@ trait Coded {
     fn code(&self) -> si4;
 }
 
-trait Named with { self_t: Coded } {
+trait Named with { selftype: Coded } {
     fn tag(&self) -> si4;
     fn tag2(&self) -> si4;
 }

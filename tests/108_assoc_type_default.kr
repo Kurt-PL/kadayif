@@ -2,17 +2,17 @@
 
 // §9.3.1 associated-type DEFAULT: the trait declares `type Item = si4;` with a
 // default, and the impl OMITS `type Item = ...`. The method signature refers to
-// `self_t::Item`, which must fall back to the trait's declared default (si4).
+// `selftype::Item`, which must fall back to the trait's declared default (si4).
 trait T {
     type Item = si4;
-    fn get(&self) -> self_t::Item;
+    fn get(&self) -> selftype::Item;
 }
 
 struct x { v: si4 }
 
 impl x as T {
     // no `type Item = ...` here — inherits the trait default `si4`
-    fn get(&self) -> self_t::Item { return 7; }
+    fn get(&self) -> selftype::Item { return 7; }
 }
 
 fn main() -> ui1 {

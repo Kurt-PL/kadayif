@@ -154,7 +154,7 @@ package body Kurt.Lexer is
          elsif S = "numeric"    then T.Kind := Kw_Numeric;
          elsif S = "primitive"  then T.Kind := Kw_Primitive;
          elsif S = "self"       then T.Kind := Kw_Self;
-         elsif S = "self_t"     then T.Kind := Kw_Self_T;
+         elsif S = "selftype"     then T.Kind := Kw_Selftype;
          elsif S = "srcroot"    then T.Kind := Kw_Srcroot;
          elsif S = "static"     then T.Kind := Kw_Static;
          elsif S = "super"      then T.Kind := Kw_Super;
@@ -972,9 +972,12 @@ package body Kurt.Lexer is
 
    --  From inside a taken branch that just ended (an `@flag_else`/`else_if`
    --  was reached), skip everything to this chain's matching `@flag_endif`,
-   --  consuming that endif line.
-   procedure Skip_To_Endif (L : in out Lexer) is
+   --  consuming that endif line. `Else_Seen` carries whether the chain has
+   --  already passed its `@flag_else`, so §10.8's duplicate-else and
+   --  else-if-after-else constraints hold across the skipped remainder.
+   procedure Skip_To_Endif (L : in out Lexer; Else_Seen : Boolean) is
       Depth : Natural := 0;
+      Seen  : Boolean := Else_Seen;
    begin
       loop
          if At_End (L) then
@@ -992,6 +995,18 @@ package body Kurt.Lexer is
                      return;
                   end if;
                   Depth := Depth - 1; Skip_Line (L);
+               when FD_Else | FD_Else_If =>
+                  if Depth = 0 and then Seen then
+                     raise Translation_Failure with
+                       (if D = FD_Else
+                        then "duplicate `@flag_else` in one chain"
+                        else "`@flag_else_if` after `@flag_else`")
+                       & " (§10.8) at line" & Positive'Image (L.Line);
+                  end if;
+                  if Depth = 0 and then D = FD_Else then
+                     Seen := True;
+                  end if;
+                  Skip_Line (L);
                when others => Skip_Line (L);
             end case;
          end;
@@ -1072,11 +1087,13 @@ package body Kurt.Lexer is
    --  `(expr)`. On return either L.Line_Close marks the taken branch's closing
    --  `@` (and L.Pos is at the branch body), or the whole chain was skipped.
    procedure Enter_Line_Chain (L : in out Lexer; First_Cond : Boolean) is
-      Cond : Boolean := First_Cond;
+      Cond      : Boolean := First_Cond;
+      Else_Seen : Boolean := False;
    begin
       loop
          if Cond then
-            L.Line_Close := Find_Line_Close (L);
+            L.Line_Close     := Find_Line_Close (L);
+            L.Line_Else_Seen := Else_Seen;
             return;
          end if;
          Skip_Line (L);   --  skip this inactive line branch (body + `@` + LF)
@@ -1087,9 +1104,18 @@ package body Kurt.Lexer is
                when FD_None =>
                   return;                  --  chain ended
                when FD_Endif =>
-                  Skip_Line (L);           --  tolerate a stray endif
-                  return;
+                  --  §10.8: `@flag_endif` shall not appear in an
+                  --  all-line-branch chain.
+                  raise Translation_Failure with
+                    "`@flag_endif` shall not appear in an all-line-branch "
+                    & "chain (§10.8) at line" & Positive'Image (L.Line);
                when FD_Else =>
+                  if Else_Seen then
+                     raise Translation_Failure with
+                       "duplicate `@flag_else` in one chain (§10.8) at line"
+                       & Positive'Image (L.Line);
+                  end if;
+                  Else_Seen := True;
                   if not Cur_Line_Ends_With_At (L) then
                      raise Translation_Failure with
                        "mixed line/block `@flag` chain is not supported in "
@@ -1098,6 +1124,11 @@ package body Kurt.Lexer is
                   end if;
                   Cond := True;
                when FD_Else_If =>
+                  if Else_Seen then
+                     raise Translation_Failure with
+                       "`@flag_else_if` after `@flag_else` (§10.8) at line"
+                       & Positive'Image (L.Line);
+                  end if;
                   declare
                      C2 : constant Boolean := Read_Paren_Cond (L);
                   begin
@@ -1118,6 +1149,7 @@ package body Kurt.Lexer is
    --  After a taken line branch's body, consume its closing `@` and skip any
    --  remaining (inactive) line branches of the chain.
    procedure Skip_Line_Chain_Rest (L : in out Lexer) is
+      Else_Seen : Boolean := L.Line_Else_Seen;
    begin
       if Peek (L) = '@' then Advance (L); end if;
       Skip_Line (L);                       --  to and past the LF
@@ -1128,7 +1160,16 @@ package body Kurt.Lexer is
          begin
             case D is
                when FD_Else | FD_Else_If =>
-                  if D = FD_Else_If then
+                  if Else_Seen then
+                     raise Translation_Failure with
+                       (if D = FD_Else
+                        then "duplicate `@flag_else` in one chain"
+                        else "`@flag_else_if` after `@flag_else`")
+                       & " (§10.8) at line" & Positive'Image (L.Line);
+                  end if;
+                  if D = FD_Else then
+                     Else_Seen := True;
+                  else
                      declare
                         Ig : constant Boolean := Read_Paren_Cond (L);
                         pragma Unreferenced (Ig);
@@ -1141,8 +1182,11 @@ package body Kurt.Lexer is
                   end if;
                   Skip_Line (L);           --  skip this inactive else branch
                when FD_Endif =>
-                  Skip_Line (L);           --  tolerate a stray endif
-                  return;
+                  --  §10.8: `@flag_endif` shall not appear in an
+                  --  all-line-branch chain.
+                  raise Translation_Failure with
+                    "`@flag_endif` shall not appear in an all-line-branch "
+                    & "chain (§10.8) at line" & Positive'Image (L.Line);
                when others =>
                   L.Pos := Save;           --  chain ended; lex this line
                   return;
@@ -1155,7 +1199,9 @@ package body Kurt.Lexer is
    --  L.Pos sits at the start of the taken branch's body, or past the whole
    --  chain if no branch is taken.
    procedure Enter_Flag_If (L : in out Lexer) is
-      Cond : Boolean := Read_Paren_Cond (L);
+      Cond      : Boolean := Read_Paren_Cond (L);
+      Else_Seen : Boolean := False;
+      Was_Else  : Boolean := False;   --  the branch about to be entered
    begin
       if Cur_Line_Ends_With_At (L) then    --  §10.8 line-branch chain
          Enter_Line_Chain (L, Cond);
@@ -1164,6 +1210,9 @@ package body Kurt.Lexer is
       loop
          if Cond then
             Skip_Line (L);   --  step past the directive line into the body
+            --  Record the enclosing-chain context so the main token loop
+            --  can validate the chain directives that follow this body.
+            SU.Append (L.Chain_Stack, (if Was_Else then 'e' else 'i'));
             return;
          end if;
          declare
@@ -1174,8 +1223,21 @@ package body Kurt.Lexer is
                   Skip_Line (L);
                   return;
                when FD_Else =>
+                  if Else_Seen then
+                     raise Translation_Failure with
+                       "duplicate `@flag_else` in one chain (§10.8) at line"
+                       & Positive'Image (L.Line);
+                  end if;
+                  Else_Seen := True;
+                  Was_Else  := True;
                   Cond := True;
                when FD_Else_If =>
+                  if Else_Seen then
+                     raise Translation_Failure with
+                       "`@flag_else_if` after `@flag_else` (§10.8) at line"
+                       & Positive'Image (L.Line);
+                  end if;
+                  Was_Else := False;
                   Cond := Read_Paren_Cond (L);
                when others =>
                   return;   --  unreachable
@@ -1583,12 +1645,45 @@ package body Kurt.Lexer is
                      Enter_Flag_If (L);
                      return Next_Token (L);
                   elsif S = "flag_endif" then
-                     --  Active branch reached its chain end.
+                     --  Active branch reached its chain end. §10.8: the
+                     --  directive must close an enclosing block chain.
+                     if SU.Length (L.Chain_Stack) = 0 then
+                        raise Translation_Failure with
+                          "unmatched `@flag_endif` without a preceding "
+                          & "`@flag_if` (§10.8) at line"
+                          & Positive'Image (Tok.Line);
+                     end if;
+                     SU.Head (L.Chain_Stack, SU.Length (L.Chain_Stack) - 1);
                      Skip_Line (L);
                      return Next_Token (L);
                   elsif S = "flag_else" or else S = "flag_else_if" then
-                     --  Active branch ended; the rest of the chain is skipped.
-                     Skip_To_Endif (L);
+                     --  Active branch ended; the rest of the chain is
+                     --  skipped. §10.8: reject an unmatched directive, and a
+                     --  duplicate `@flag_else` (or `@flag_else_if` after
+                     --  `@flag_else`) when the taken branch WAS the else.
+                     if SU.Length (L.Chain_Stack) = 0 then
+                        raise Translation_Failure with
+                          "unmatched `@" & S & "` without a preceding "
+                          & "`@flag_if` (§10.8) at line"
+                          & Positive'Image (Tok.Line);
+                     end if;
+                     declare
+                        Top : constant Character :=
+                          SU.Element (L.Chain_Stack,
+                                      SU.Length (L.Chain_Stack));
+                     begin
+                        if Top = 'e' then
+                           raise Translation_Failure with
+                             (if S = "flag_else"
+                              then "duplicate `@flag_else` in one chain"
+                              else "`@flag_else_if` after `@flag_else`")
+                             & " (§10.8) at line"
+                             & Positive'Image (Tok.Line);
+                        end if;
+                        SU.Head (L.Chain_Stack,
+                                 SU.Length (L.Chain_Stack) - 1);
+                        Skip_To_Endif (L, Else_Seen => S = "flag_else");
+                     end;
                      return Next_Token (L);
                   else
                      raise Translation_Failure

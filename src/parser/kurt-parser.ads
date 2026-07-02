@@ -647,7 +647,7 @@ package Kurt.Parser is
       Align_N        : Natural := 0;       --  §4.11.5 `with align(N)`; 0=none
       --  §8.11 `with destruct [block]`: an uncopyable type with transfer
       --  semantics. Destruct_Block is the optional destructor body (its
-      --  `self` is `$self_t`); empty when omitted.
+      --  `self` is `$selftype`); empty when omitted.
       Has_Destruct   : Boolean := False;
       Destruct_Block : Stmt_Vectors.Vector;
       --  §8.10 `with concurrent [!]transfer / [!]reference` context-safety
@@ -754,7 +754,7 @@ package Kurt.Parser is
       Methods     : Trait_Method_Vectors.Vector;
       Consts      : Assoc_Const_Vectors.Vector;
       Assoc_Types : Assoc_Type_Vectors.Vector;   --  §9.3.1 `type Item [= D];`
-      --  §9.3.3 direct supertraits (`with { self_t: Bar + Baz }`), in
+      --  §9.3.3 direct supertraits (`with { selftype: Bar + Baz }`), in
       --  declaration order. Each occupies a Zone-B dispatch-table field.
       Supertraits : Path_Segments.Vector;
    end record;
@@ -777,10 +777,10 @@ package Kurt.Parser is
      (Index_Type => Positive, Element_Type => Trait_Impl);
 
    --  §9.1 / §9.4 generic implementation `impl(P...) Owner.<P...> [as Trait]`.
-   --  The method is a template: its body keeps the `self_t` placeholder and
+   --  The method is a template: its body keeps the `selftype` placeholder and
    --  references the impl parameters `Gen_Params`. Kurt.Mono specialises it
    --  per concrete owner instance (e.g. `Box$si4$get`) when that instance
-   --  is generated, substituting the impl parameters and rewriting `self_t`
+   --  is generated, substituting the impl parameters and rewriting `selftype`
    --  to the mangled owner instance name.
    type Gen_Method is record
       Owner      : SU.Unbounded_String;          --  generic base, e.g. "Box"

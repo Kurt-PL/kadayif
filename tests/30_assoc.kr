@@ -2,9 +2,9 @@
 
 // §9.3.2 associated constants in a trait
 trait Bounded {
-    const MIN: self_t;
-    const MAX: self_t;
-    fn cmp(&self, o: &self_t) -> si4;
+    const MIN: selftype;
+    const MAX: selftype;
+    fn cmp(&self, o: &selftype) -> si4;
 }
 
 struct lvl { v: si4 }

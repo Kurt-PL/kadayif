@@ -1187,7 +1187,7 @@ package body Kurt.Codegen is
       All_Fns  : Fn_Vectors.Vector := U.Fns;
 
       --  §8.11: synthesise a destructor `<Nm>$drop` for a `with destruct {
-      --  block }` type. Its `self` is `$self_t` — an exclusive reference to
+      --  block }` type. Its `self` is `$selftype` — an exclusive reference to
       --  the object — so the block's `self.field` accesses go through it.
       procedure Add_Drop (Nm : String; Block : Stmt_Vectors.Vector) is
          D : Fn_Decl;

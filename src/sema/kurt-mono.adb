@@ -484,9 +484,9 @@ package body Kurt.Mono is
       procedure Instantiate_Owner_Methods
         (Orig, Mangled : String; Args : Type_Vectors.Vector);
 
-      --  In-place rewrite of the `self_t` placeholder to a concrete type
+      --  In-place rewrite of the `selftype` placeholder to a concrete type
       --  name (the mangled owner instance). Distinct from Subst, which
-      --  substitutes generic *parameters*; `self_t` is neither.
+      --  substitutes generic *parameters*; `selftype` is neither.
       procedure Subst_Self_Name (T : Type_Access; Concrete : String) is
       begin
          if T = null then
@@ -494,7 +494,7 @@ package body Kurt.Mono is
          end if;
          case T.Kind is
             when T_Named =>
-               if SU.To_String (T.Name) = "self_t" then
+               if SU.To_String (T.Name) = "selftype" then
                   T.Name := SU.To_Unbounded_String (Concrete);
                end if;
                for I in T.Args.First_Index .. T.Args.Last_Index loop
@@ -1180,7 +1180,7 @@ package body Kurt.Mono is
       --  generic type `Orig` for the concrete instance `Mangled` (with type
       --  arguments `Args`). Produces `Mangled$method` concrete subroutines —
       --  exactly the names static method dispatch resolves to — substituting
-      --  the impl parameters and rewriting `self_t` to the owner instance.
+      --  the impl parameters and rewriting `selftype` to the owner instance.
       procedure Instantiate_Owner_Methods
         (Orig, Mangled : String; Args : Type_Vectors.Vector)
       is
@@ -1238,7 +1238,7 @@ package body Kurt.Mono is
                         New_Fn.Body_Stmts :=
                           Copy_Block (GM.Method.Body_Stmts, PNames, Args);
 
-                        --  self_t -> the concrete owner instance.
+                        --  selftype -> the concrete owner instance.
                         for K in New_Fn.Header.Params.First_Index ..
                                  New_Fn.Header.Params.Last_Index
                         loop
@@ -1267,7 +1267,7 @@ package body Kurt.Mono is
    begin
       --  §9.3.4 default methods: for every `impl Type as Trait` that omits
       --  a trait method carrying a default body, synthesise the concrete
-      --  `Type$method` from the default (self_t → Type). The synthesised
+      --  `Type$method` from the default (selftype → Type). The synthesised
       --  fns are plain concrete subroutines and follow the normal
       --  sema/codegen path. Done before the generic lift so they can use,
       --  and be used by, generic instantiation.
@@ -1275,11 +1275,11 @@ package body Kurt.Mono is
          declare
             TI    : Trait_Impl renames U.Trait_Impls.Element (I);
             Conc  : constant Type_Access := new AST_Type (Kind => T_Named);
-            SelfP : Path_Segments.Vector;   --  ["self_t"]
+            SelfP : Path_Segments.Vector;   --  ["selftype"]
             Args1 : Type_Vectors.Vector;    --  [Conc]
          begin
             Conc.Name := TI.Ty_Name;
-            SelfP.Append (SU.To_Unbounded_String ("self_t"));
+            SelfP.Append (SU.To_Unbounded_String ("selftype"));
             Args1.Append (Conc);
 
             for T in U.Traits.First_Index .. U.Traits.Last_Index loop

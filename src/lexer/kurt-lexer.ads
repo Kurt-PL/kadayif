@@ -71,7 +71,7 @@ package Kurt.Lexer is
       Kw_Numeric,        --  built-in bound (§9.8.1)
       Kw_Primitive,      --  built-in bound (§9.8.3)
       Kw_Self,           --  method receiver (§9.2)
-      Kw_Self_T,         --  implementing type placeholder (§9.2)
+      Kw_Selftype,         --  implementing type placeholder (§9.2)
       Kw_Srcroot,        --  source-unit-root path head (§10.6)
       Kw_Static,         --  static binding declaration (§5.4)
       Kw_Super,          --  enclosing-module path head (§10.6)
@@ -218,6 +218,17 @@ private
       --  main token loop consumes that `@` (and skips any remaining line
       --  branches of the chain) when lexing reaches it. Zero when inactive.
       Line_Close : Natural := 0;
+      --  §10.8 whether the taken line branch's chain has already passed its
+      --  `@flag_else` (including when the taken branch IS the else); lets
+      --  Skip_Line_Chain_Rest reject a duplicate else after the taken body.
+      Line_Else_Seen : Boolean := False;
+      --  §10.8 block-chain context stack: one character per enclosing block
+      --  chain whose taken branch is currently being lexed — 'e' when the
+      --  taken branch is the `@flag_else` branch, 'i' otherwise. Lets the
+      --  main token loop reject a duplicate `@flag_else` (or an
+      --  `@flag_else_if` after `@flag_else`) and an unmatched chain
+      --  directive with no enclosing `@flag_if`.
+      Chain_Stack : SU.Unbounded_String;
    end record;
 
 end Kurt.Lexer;

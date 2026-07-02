@@ -1,17 +1,17 @@
 @dyn as posix { variadic fn printf(&raw ui1) -> si4; }
 
 // §9.3.1 associated types: the trait declares `type Item;`, the impl provides
-// `type Item = Concrete;`, and the method signature refers to `self_t::Item`.
+// `type Item = Concrete;`, and the method signature refers to `selftype::Item`.
 trait Container {
     type Item;
-    fn first(&self) -> self_t::Item;
+    fn first(&self) -> selftype::Item;
 }
 
 struct ibox { v: si4 }
 
 impl ibox as Container {
     type Item = si4;                         // concrete associated type
-    fn first(&self) -> self_t::Item {        // resolves to si4
+    fn first(&self) -> selftype::Item {        // resolves to si4
         return self.v;
     }
 }

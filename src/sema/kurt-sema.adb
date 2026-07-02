@@ -646,7 +646,7 @@ package body Kurt.Sema is
       end Find_Impl_Const;
 
       --  §9.3.2: the declared type of associated const Name in any trait
-      --  named by generic parameter Gen's bounds (self_t → Gen). Found
+      --  named by generic parameter Gen's bounds (selftype → Gen). Found
       --  is set when located.
       procedure Find_Bound_Const
         (Gen, Name : String; Ty_Out : out Type_Access; Found : out Boolean)
@@ -690,7 +690,7 @@ package body Kurt.Sema is
          end loop;
       end Find_Bound_Const;
 
-      --  Substitute the `self_t` placeholder with concrete type Conc in
+      --  Substitute the `selftype` placeholder with concrete type Conc in
       --  a (freshly copied) type, e.g. a trait method's return type.
       function Subst_Self_T (T, Conc : Type_Access) return Type_Access is
       begin
@@ -699,7 +699,7 @@ package body Kurt.Sema is
          end if;
          case T.Kind is
             when T_Named =>
-               if SU.To_String (T.Name) = "self_t" then
+               if SU.To_String (T.Name) = "selftype" then
                   return Conc;
                end if;
                return T;
@@ -1109,7 +1109,7 @@ package body Kurt.Sema is
                      end;
                      --  Generic parameter: `T::NAME` in a template. The
                      --  value is resolved per instance; here only the type
-                     --  (self_t → T) is needed for checking.
+                     --  (selftype → T) is needed for checking.
                      declare
                         CT  : Type_Access;
                         OKc : Boolean;
@@ -4606,7 +4606,7 @@ package body Kurt.Sema is
          end Check_Fn;
          --  §8.11: type- and borrow-check each `with destruct { ... }` block
          --  as codegen will lower it — with `self` bound to an exclusive
-         --  reference to the object being destroyed (`$self_t`). Synthesised
+         --  reference to the object being destroyed (`$selftype`). Synthesised
          --  here so the block is held to the same rules as any subroutine.
          procedure Check_Destruct (Nm : String; Block : Stmt_Vectors.Vector) is
             D : Fn_Decl;

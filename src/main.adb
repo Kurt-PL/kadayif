@@ -200,6 +200,11 @@ procedure Main is
       Canon_Prefixes : Kurt.Parser.Path_Segments.Vector;
       Alias_Names    : Kurt.Parser.Path_Segments.Vector;
       Alias_Prefixes : Kurt.Parser.Path_Segments.Vector;
+      --  §10.5 `@path` prefixes seen across ALL source units: the same
+      --  prefix name re-declared in another unit shall carry an identical
+      --  base path; a mismatch is a translation failure.
+      Seen_Path_Names : Kurt.Parser.Path_Segments.Vector;
+      Seen_Path_Bases : Kurt.Parser.Path_Segments.Vector;
 
       --  Lex (seeding command-line flags) and parse one source file.
       function Parse_One (Path : String)
@@ -304,6 +309,35 @@ procedure Main is
             Canon_Paths.Append (To_Unbounded_String (Canon));
             Canon_Prefixes.Append (To_Unbounded_String (Prefix));
             U := Parse_One (Path);
+            --  §10.5 cross-unit `@path` consistency: the same prefix name
+            --  declared in more than one source unit shall have identical
+            --  base paths.
+            for I in U.Path_Names.First_Index .. U.Path_Names.Last_Index loop
+               declare
+                  Found : Boolean := False;
+               begin
+                  for S in Seen_Path_Names.First_Index ..
+                           Seen_Path_Names.Last_Index loop
+                     if Seen_Path_Names.Element (S) = U.Path_Names.Element (I)
+                     then
+                        Found := True;
+                        if Seen_Path_Bases.Element (S)
+                             /= U.Path_Bases.Element (I)
+                        then
+                           Put_E ("kadayif: `@path` prefix '"
+                                  & To_String (U.Path_Names.Element (I))
+                                  & "' re-declared with a different base "
+                                  & "path (spec 10.5) in " & Path);
+                           Errors := Errors + 1;
+                        end if;
+                     end if;
+                  end loop;
+                  if not Found then
+                     Seen_Path_Names.Append (U.Path_Names.Element (I));
+                     Seen_Path_Bases.Append (U.Path_Bases.Element (I));
+                  end if;
+               end;
+            end loop;
             declare
                Base : constant String := Dir.Containing_Directory (Canon);
             begin

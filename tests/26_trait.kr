@@ -2,8 +2,8 @@
 
 // §9.3 trait with an abstract method + a default method (§9.3.4)
 trait Ord {
-    fn cmp(&self, o: &self_t) -> si4;
-    fn min_with(&self, o: &self_t) -> si4 {
+    fn cmp(&self, o: &selftype) -> si4;
+    fn min_with(&self, o: &selftype) -> si4 {
         // default body invokes the abstract method on self
         return if self.cmp(o) < 0 then self.cmp(o) else 0;
     }

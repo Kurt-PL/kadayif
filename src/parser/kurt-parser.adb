@@ -544,8 +544,8 @@ package body Kurt.Parser is
          end if;
          Expect (C, Punct_RBrace, "'}' to close tuple type");
          return Node;
-      elsif C.Cur.Kind = Tok_Ident or else C.Cur.Kind = Kw_Self_T then
-         --  §9.2: `self_t` is the one keyword admissible as a type name —
+      elsif C.Cur.Kind = Tok_Ident or else C.Cur.Kind = Kw_Selftype then
+         --  §9.2: `selftype` is the one keyword admissible as a type name —
          --  the implementing-type placeholder, substituted in Subst_Self.
          Node := new AST_Type (Kind => T_Named);
          Node.Name := SU.To_Unbounded_String
@@ -568,7 +568,7 @@ package body Kurt.Parser is
             Expect (C, Op_Gt, "'>' to close generic arguments");
          end if;
          --  §9.3.1 qualified associated-type path `Head::Item` (commonly
-         --  `self_t::Item`). Stored as a compound name; resolved when the
+         --  `selftype::Item`). Stored as a compound name; resolved when the
          --  impl method is specialised (Subst_Self / mono).
          if C.Cur.Kind = Punct_ColonColon then
             Advance (C);
@@ -692,7 +692,7 @@ package body Kurt.Parser is
          P.Is_Mut := True;
       end if;
       --  §9.2 self parameter: `&self` / `$self`. The referent is the
-      --  placeholder `self_t`, substituted with the impl type by
+      --  placeholder `selftype`, substituted with the impl type by
       --  Parse_Impl_Decl.
       if (C.Cur.Kind = Op_Amp or else C.Cur.Kind = Op_Dollar)
         and then Peek_Tok (C).Kind = Kw_Self
@@ -714,7 +714,7 @@ package body Kurt.Parser is
             P.Ty   := new AST_Type (Kind => T_Ref);
             P.Ty.Sigil  := Sigil;
             P.Ty.Target := new AST_Type (Kind => T_Named);
-            P.Ty.Target.Name := SU.To_Unbounded_String ("self_t");
+            P.Ty.Target.Name := SU.To_Unbounded_String ("selftype");
             return P;
          end;
       end if;
@@ -2686,8 +2686,8 @@ package body Kurt.Parser is
       Is_Generic  : Boolean := False;
       TI : Trait_Impl;        --  populated only for `impl Type as Trait`
 
-      --  Replace the `self_t` placeholder with the impl type, in place; also
-      --  resolve `self_t::Item` (§9.3.1) to the impl's concrete associated
+      --  Replace the `selftype` placeholder with the impl type, in place; also
+      --  resolve `selftype::Item` (§9.3.1) to the impl's concrete associated
       --  type. Associated-type defs must precede methods that use them.
       procedure Subst_Self (T : Type_Access) is
       begin
@@ -2699,14 +2699,14 @@ package body Kurt.Parser is
                declare
                   NM : constant String := SU.To_String (T.Name);
                begin
-                  if NM = "self_t" then
+                  if NM = "selftype" then
                      T.Name := Ty_Name;
-                  elsif NM'Length > 8
-                    and then NM (NM'First .. NM'First + 7) = "self_t::"
+                  elsif NM'Length > 10
+                    and then NM (NM'First .. NM'First + 9) = "selftype::"
                   then
                      declare
                         Item : constant String :=
-                          NM (NM'First + 8 .. NM'Last);
+                          NM (NM'First + 10 .. NM'Last);
                         Res  : Type_Access := null;
                      begin
                         for I in TI.Assoc_Types.First_Index ..
@@ -2764,7 +2764,7 @@ package body Kurt.Parser is
                   Subst_Self (T.Elems.Element (I));
                end loop;
             when T_Dyn =>
-               null;   --  `dyn Trait` names a trait, never `self_t`
+               null;   --  `dyn Trait` names a trait, never `selftype`
             when T_Fn =>
                for I in T.Fn_Params.First_Index .. T.Fn_Params.Last_Index loop
                   Subst_Self (T.Fn_Params.Element (I));
@@ -2833,7 +2833,7 @@ package body Kurt.Parser is
             Expect (C, Punct_Eq, "'=' in associated type definition");
             ATy.Ty := Parse_Type (C);
             Expect (C, Punct_Semi, "';' after associated type definition");
-            --  Resolve `self_t::Item` style names in the concrete type and
+            --  Resolve `selftype::Item` style names in the concrete type and
             --  record it for the impl's method specialisation.
             Subst_Self (ATy.Ty);
             TI.Assoc_Types.Append (ATy);
@@ -2860,7 +2860,7 @@ package body Kurt.Parser is
          begin
             if Is_Generic then
                --  §9.1/§9.4 generic impl: keep the method as a template.
-               --  `self_t` stays a placeholder and the impl parameters are
+               --  `selftype` stays a placeholder and the impl parameters are
                --  free; Kurt.Mono specialises it per owner instance. The
                --  bare method name is preserved (mangled to
                --  `Owner$args$method` at instantiation time).
@@ -2918,7 +2918,7 @@ package body Kurt.Parser is
 
    ----------------------------------------------------------------------
    --  trait declaration (§9.3). Bootstrap subset: method signatures and
-   --  default methods. The `self_t` placeholder in signatures stays
+   --  default methods. The `selftype` placeholder in signatures stays
    --  abstract here; impl blocks substitute the concrete type.
    ----------------------------------------------------------------------
 
@@ -2933,13 +2933,13 @@ package body Kurt.Parser is
       end if;
       Expect (C, Kw_Trait, "'trait'");
       D.Name := Take_Ident (C, "trait name");
-      --  §9.3.3 supertrait bounds: `with { self_t: Bar + Baz }`.
+      --  §9.3.3 supertrait bounds: `with { selftype: Bar + Baz }`.
       if C.Cur.Kind = Kw_With then
          Advance (C);
          Expect (C, Punct_LBrace, "'{' after 'with' on a trait");
-         --  Expect `self_t : Trait { '+' Trait }`. (The bootstrap models
-         --  only the single `self_t: ...` form.)
-         Expect (C, Kw_Self_T, "'self_t' in supertrait bound");
+         --  Expect `selftype : Trait { '+' Trait }`. (The bootstrap models
+         --  only the single `selftype: ...` form.)
+         Expect (C, Kw_Selftype, "'selftype' in supertrait bound");
          begin
             Expect (C, Punct_Colon, "':' in supertrait bound");
             loop
@@ -3581,7 +3581,7 @@ package body Kurt.Parser is
          return Nm;
       end Mangle_Value;
 
-      --  "point" -> "NS$point"; "self_t::Item" untouched (self_t is never a
+      --  "point" -> "NS$point"; "selftype::Item" untouched (selftype is never a
       --  local declared name); "point::Assoc" -> "NS$point::Assoc".
       function Mangle_Type_Name (Nm : String) return String is
          Sep : constant Natural := Ada.Strings.Fixed.Index (Nm, "::");
@@ -4531,11 +4531,30 @@ package body Kurt.Parser is
                end if;
                declare
                   Base : constant SU.Unbounded_String := C.Cur.Str_Bytes;
+                  Line : constant Positive := C.Cur.Line;
                begin
                   Advance (C);
                   Expect (C, Kw_As, "'as' in @path");
-                  U.Path_Names.Append (Take_Ident (C, "@path prefix name"));
-                  U.Path_Bases.Append (Base);
+                  declare
+                     Nm : constant SU.Unbounded_String :=
+                       Take_Ident (C, "@path prefix name");
+                  begin
+                     --  §10.5: duplicate declarations of the same prefix
+                     --  name within one source unit are a translation
+                     --  failure (the cross-unit identical-base allowance is
+                     --  enforced by the driver).
+                     for P in U.Path_Names.First_Index ..
+                              U.Path_Names.Last_Index loop
+                        if SU."=" (U.Path_Names.Element (P), Nm) then
+                           raise Syntax_Error with
+                             "duplicate `@path` prefix '"
+                             & SU.To_String (Nm)
+                             & "' (§10.5) at line" & Positive'Image (Line);
+                        end if;
+                     end loop;
+                     U.Path_Names.Append (Nm);
+                     U.Path_Bases.Append (Base);
+                  end;
                end;
                if C.Cur.Kind = Punct_Semi then
                   Advance (C);
