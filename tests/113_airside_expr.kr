@@ -1,0 +1,25 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §6.9 `airside { ... }` as an expression: the block's value is yielded by
+// the trailing `express`. The scope's `with destruct` locals are destroyed
+// at the block's textual end, after the expressed value is computed.
+struct sentry { id: si4 } with destruct {
+    airside { posix::printf("drop %d\n\0".ptr, self.id); }
+};
+
+fn main() -> ui1 {
+    mut cell: ui4 = 41;
+    // spec §6.9 example shape: raw work inside, value out via express
+    let raw_val: ui4 = airside {
+        let ptr = &raw cell;
+        *(ptr as &raw mut ui4) = 40;
+        express *ptr;
+    };
+    // destructor runs at block exit, before the value is used
+    let v: si4 = airside {
+        let g: sentry = sentry { id = 7 };
+        express g.id * 6;                     // 42
+    };
+    airside { posix::printf("rv=%u v=%d\n\0".ptr, raw_val, v); }
+    return (raw_val as si4 + v - 40) as ui1;  // 42
+}

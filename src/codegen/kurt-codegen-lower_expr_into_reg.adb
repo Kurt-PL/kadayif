@@ -1248,6 +1248,44 @@ begin
                             & ", " & Lbl & "@PAGEOFF");
          end;
 
+      when E_Airside_Blk =>
+         --  §6.9 airside block expression: run the body as a lexical scope
+         --  (mirrors Lower_Scoped), then yield the trailing `express` value
+         --  in the target register. Destructor calls at scope exit clobber
+         --  registers, so the expressed value is parked in a fresh frame
+         --  temp across the drops.
+         declare
+            Entry_Len : constant Natural := Natural (ST.Bindings.Length);
+            Has_Val   : constant Boolean :=
+              not E.AB_Stmts.Is_Empty
+              and then E.AB_Stmts.Last_Element.Kind = S_Express;
+            Tmp : Natural := 0;
+         begin
+            for I in E.AB_Stmts.First_Index .. E.AB_Stmts.Last_Index loop
+               if Has_Val and then I = E.AB_Stmts.Last_Index then
+                  Lower_Expr_Into_Reg
+                    (F, E.AB_Stmts.Element (I).Xp_Val, Target_Reg, ST);
+               else
+                  Lower_Stmt (F, E.AB_Stmts.Element (I), ST);
+               end if;
+            end loop;
+            if Has_Val then
+               Tmp := ST.Next_Offset;
+               ST.Next_Offset := ST.Next_Offset + 8;
+               IO.Put_Line (F, "    str     " & Xreg
+                               & ", [x29, #" & Img (Tmp) & "]");
+            end if;
+            Emit_Binding_Drops
+              (F, ST, Keep => Entry_Len, Preserve_Ret => False);
+            while Natural (ST.Bindings.Length) > Entry_Len loop
+               ST.Bindings.Delete_Last;
+            end loop;
+            if Has_Val then
+               IO.Put_Line (F, "    ldr     " & Xreg
+                               & ", [x29, #" & Img (Tmp) & "]");
+            end if;
+         end;
+
       when E_Destruct =>
          --  §8.4/§8.11: `destruct(g)` runs g's destructor immediately;
          --  `undestruct(g)` reclaims g's storage without running it. Either

@@ -41,6 +41,9 @@ package body Kurt.Codegen is
      (Index_Type => Natural, Element_Type => String_Entry);
    subtype String_Pool is String_Pool_Pkg.Vector;
 
+   procedure Collect_Strings_In_Stmt
+     (S : Stmt_Access; Pool : in out String_Pool);
+
    procedure Collect_Strings_In_Expr
      (E : Expr_Access; Pool : in out String_Pool)
    is
@@ -53,6 +56,10 @@ package body Kurt.Codegen is
             null;
          when E_Destruct =>
             Collect_Strings_In_Expr (E.DT_Inner, Pool);
+         when E_Airside_Blk =>
+            for I in E.AB_Stmts.First_Index .. E.AB_Stmts.Last_Index loop
+               Collect_Strings_In_Stmt (E.AB_Stmts.Element (I), Pool);
+            end loop;
          when E_Closure =>
             null;  --  §9.9 the body's strings are collected when the
                    --  synthesised closure subroutine is itself processed

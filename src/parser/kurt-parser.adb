@@ -862,6 +862,11 @@ package body Kurt.Parser is
       end case;
    end Binding_Power;
 
+   --  Body appears with the statement parsers below; needed here for the
+   --  §6.9 `airside { ... }` block expression.
+   procedure Parse_Block_Stmts
+     (C : in out Cursor; Stmts : out Stmt_Vectors.Vector);
+
    function Parse_Primary (C : in out Cursor) return Expr_Access is
       E : Expr_Access;
    begin
@@ -1265,6 +1270,16 @@ package body Kurt.Parser is
                end if;
                return Result;
             end;
+
+         when Kw_Airside =>
+            --  §6.9 `airside { ... }` block expression. The value is yielded
+            --  by a trailing `express`; with none the block is `void`.
+            --  (Statement-position `airside { ... }` never reaches here —
+            --  Parse_Stmt claims it first.)
+            Advance (C);   --  airside
+            E := new Expr_Node (Kind => E_Airside_Blk);
+            Parse_Block_Stmts (C, E.AB_Stmts);
+            return E;
 
          when Kw_Match =>
             --  §7: match scrut { pattern = expr, ... }
@@ -3768,6 +3783,8 @@ package body Kurt.Parser is
                RBlk (E.Clo_Body);
             when E_Destruct =>
                RE (E.DT_Inner);
+            when E_Airside_Blk =>
+               RBlk (E.AB_Stmts);
          end case;
       end RE;
 
@@ -4279,6 +4296,8 @@ package body Kurt.Parser is
                RBlk (E.Clo_Body);
             when E_Destruct =>
                RE (E.DT_Inner);
+            when E_Airside_Blk =>
+               RBlk (E.AB_Stmts);
          end case;
       end RE;
 

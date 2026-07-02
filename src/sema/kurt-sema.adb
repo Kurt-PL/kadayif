@@ -497,6 +497,11 @@ package body Kurt.Sema is
       --  checked. Raised inside an `airside { ... }` block and for the whole
       --  body of an `airside fn`. `uninit` is valid only when this is > 0.
       In_Airside : Natural := 0;
+      --  §6.9/§7.8: the expected type flowing into the innermost enclosing
+      --  block expression's trailing `express` (steers integer-literal
+      --  typing exactly like a `let` annotation would). Null when the
+      --  statement being checked is not inside a block expression.
+      Express_Expected : Type_Access := null;
       --  §7.9: loop labels currently in scope, innermost last. A `break`/
       --  `continue` with a label shall name one of these.
       Label_Stack : Path_Segments.Vector;
@@ -939,6 +944,10 @@ package body Kurt.Sema is
             end;
          end if;
       end Maybe_Move;
+
+      --  Body appears with the statement checks below; needed here for the
+      --  §6.9 `airside { ... }` block expression (its body is statements).
+      procedure Check_Block (Stmts : Stmt_Vectors.Vector);
 
       --------------------------------------------------------------------
       --  Infer a type for E, attach it to E.Sem_Ty, and return it.
@@ -3084,6 +3093,31 @@ package body Kurt.Sema is
                   E.Sem_Ty := Mk_Named ("void");
                   return E.Sem_Ty;
                end;
+
+            when E_Airside_Blk =>
+               --  §6.9 `airside { ... }` block expression. The body is
+               --  checked as an airside lexical scope; the block's type is
+               --  the type of the trailing `express` value, or `void` when
+               --  no `express` targets the block. (Bootstrap: only a
+               --  trailing `express` yields the value.)
+               declare
+                  Saved : constant Type_Access := Express_Expected;
+               begin
+                  Express_Expected := Expected;
+                  In_Airside := In_Airside + 1;
+                  Check_Block (E.AB_Stmts);
+                  In_Airside := In_Airside - 1;
+                  Express_Expected := Saved;
+               end;
+               if not E.AB_Stmts.Is_Empty
+                 and then E.AB_Stmts.Last_Element.Kind = S_Express
+                 and then E.AB_Stmts.Last_Element.Xp_Val /= null
+               then
+                  E.Sem_Ty := E.AB_Stmts.Last_Element.Xp_Val.Sem_Ty;
+               else
+                  E.Sem_Ty := Mk_Named ("void");
+               end if;
+               return E.Sem_Ty;
          end case;
       end Infer;
 
@@ -4039,11 +4073,13 @@ package body Kurt.Sema is
                end if;
                Check_Loop_Label (S.Cont_Label);
             when S_Express =>
-               --  §7.8: type checked against the targeted block's express
-               --  type once block-expressions are tracked; for now just
-               --  infer the value.
+               --  §7.8: the expressed value is typed against the innermost
+               --  enclosing block expression's expected type (steering
+               --  literals like a `let` annotation); outside a block
+               --  expression it is inferred freely.
                declare
-                  T : constant Type_Access := Infer (S.Xp_Val, null);
+                  T : constant Type_Access :=
+                    Infer (S.Xp_Val, Express_Expected);
                   pragma Unreferenced (T);
                begin null; end;
 

@@ -149,7 +149,8 @@ package Kurt.Parser is
       E_Type_Intrinsic,  --  `T@size` / `T@align` / `T@offset(f)` (§6.12)
       E_Uninit,           --  `uninit` uninitialized value (§6.1.8)
       E_Closure,          --  `/.params/ <- e` / `/.params/ { ... }` (§9.9)
-      E_Destruct);        --  `destruct(e)` / `undestruct(e)` (§8.4, §8.11)
+      E_Destruct,         --  `destruct(e)` / `undestruct(e)` (§8.4, §8.11)
+      E_Airside_Blk);     --  `airside { ... }` block expression (§6.9)
       --  Note: Kurt has no `[]` indexing operator (§6.2). Element access
       --  is `*(arr.ptr + i)` (raw reference arithmetic, §8.6.4) or the
       --  library `.at()` method. `..`/`..=` are pattern-only tokens
@@ -400,6 +401,12 @@ package Kurt.Parser is
             --  Both consume (invalidate) the operand binding; type is void.
             DT_Inner : Expr_Access;
             DT_Undo  : Boolean := False;   --  True for `undestruct`
+         when E_Airside_Blk =>
+            --  §6.9 `airside { ... }` in an expression position. Its value
+            --  is yielded by a trailing `express`; with none, `void`.
+            --  (Bootstrap: only the trailing-`express` form yields a value —
+            --  an early `express` from a nested position is not supported.)
+            AB_Stmts : Stmt_Vectors.Vector;
       end case;
    end record;
 

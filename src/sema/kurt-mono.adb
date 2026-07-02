@@ -334,6 +334,8 @@ package body Kurt.Mono is
          when E_Destruct =>
             R.DT_Inner := C (E.DT_Inner);
             R.DT_Undo  := E.DT_Undo;
+         when E_Airside_Blk =>
+            R.AB_Stmts := Copy_Block (E.AB_Stmts, Params, Args);
       end case;
       return R;
    end Copy_Expr;
@@ -858,6 +860,8 @@ package body Kurt.Mono is
                   Add_Once (Bound, E.Clo_Params.Element (J).Name);
                end loop;
                Scan_Stmts (E.Clo_Body, Used, Bound);
+            when E_Airside_Blk =>
+               Scan_Stmts (E.AB_Stmts, Used, Bound);
          end case;
       end Scan_Expr;
 
@@ -1000,6 +1004,8 @@ package body Kurt.Mono is
                end loop;
             when E_Destruct =>
                Visit_Expr (E.DT_Inner);
+            when E_Airside_Blk =>
+               Visit_Block (E.AB_Stmts);
             when E_Closure =>
                --  §9.9 lift the closure to a fresh top-level subroutine so it
                --  follows the normal sema/codegen path. The expression keeps
