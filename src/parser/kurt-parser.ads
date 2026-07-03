@@ -243,9 +243,10 @@ package Kurt.Parser is
       --  Widening variants (§6.4.3): +@ *@  — result type .{T, T}
       B_Wide_Add, B_Wide_Mul,
       B_Eq, B_Ne, B_Lt, B_Gt, B_Le, B_Ge,
-      --  Contract logical operators (§7.2.2): && || — short-circuit,
-      --  result bool. (Contract `^` reuses B_Xor, disambiguated by type.)
-      B_LAnd, B_LOr);
+      --  Contract logical operators (§7.2.2): `&&` / `||` short-circuit and
+      --  `^^` (both operands evaluated). All yield bool. Distinct from the
+      --  bitwise `^` (B_Xor) — `^^` combines `contract`-typed operands.
+      B_LAnd, B_LOr, B_LXor);
 
    --  Unary prefix operators (§6.3). Bootstrap: negation, bitwise NOT.
    type Unary_Op is (U_Neg, U_Not);

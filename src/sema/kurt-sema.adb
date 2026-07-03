@@ -326,6 +326,27 @@ package body Kurt.Sema is
                 or else Kurt.Layout.Is_Contract_Enum
                           (SU.To_String (T.Name))));
 
+   --  §7.2.2 a contract type whose success and failure variants both carry
+   --  no payload (`bool` = verdict.<void, void>, or a unit-variant contract
+   --  enum). Required of both `^^` operands.
+   function Contract_Payloads_Void (T : Type_Access) return Boolean is
+   begin
+      if T = null or else T.Kind /= T_Named then
+         return False;
+      end if;
+      declare
+         EN : constant String := SU.To_String (T.Name);
+      begin
+         if EN = "bool" then
+            return True;
+         end if;
+         return Kurt.Layout.Variant_Field_Count
+                  (EN, Kurt.Layout.Contract_Success_Variant (EN)) = 0
+           and then Kurt.Layout.Variant_Field_Count
+                  (EN, Kurt.Layout.Contract_Fail_Variant (EN)) = 0;
+      end;
+   end Contract_Payloads_Void;
+
    --  Whether a value of type Source may initialise / be assigned to a
    --  place of type Target. Bootstrap rule: identical types only.
    --  null on either side means "unknown" (a prior error) — skip.
@@ -1769,19 +1790,8 @@ package body Kurt.Sema is
                           Infer (E.B_Lhs, Expected);
                         RT : Type_Access;
                      begin
-                        --  §7.2.2 contract `^`: when the lhs satisfies
-                        --  `contract`, `^` is the logical XOR (result
-                        --  bool), not the bitwise operator.
-                        if E.B_Op = B_Xor and then Is_Contract_Ty (LT) then
-                           RT := Infer (E.B_Rhs, null);
-                           if not Is_Contract_Ty (RT) then
-                              Error ("contract '^' requires both operands "
-                                     & "to satisfy `contract`; rhs is '"
-                                     & Image (RT) & "' (spec 7.2.2)");
-                           end if;
-                           E.Sem_Ty := Mk_Named ("bool");
-                           return E.Sem_Ty;
-                        end if;
+                        --  §6.5 `^` is the bitwise XOR (integer operands);
+                        --  contract XOR is the distinct `^^` (B_LXor) below.
                         --  §5.9.2 type erasure: arithmetic on a generic
                         --  parameter needs an arithmetic bound, checked
                         --  here on the template — instantiations that
@@ -1809,6 +1819,24 @@ package body Kurt.Sema is
                                   & " operator requires an integer operand, "
                                   & "got float '" & Image (LT)
                                   & "' (spec 6.4.2 / 6.5)");
+                        end if;
+                        --  §6.5 the bitwise `&`/`|`/`^` require operands
+                        --  satisfying `integer`. A concrete non-integer lead
+                        --  (e.g. a `contract` type) is a TF — contract XOR is
+                        --  the distinct `^^`. Generic parameters are checked
+                        --  against their bound above (§5.9.2).
+                        if LT /= null
+                          and then E.B_Op in B_And | B_Or | B_Xor
+                          and then not Is_Generic_Param_Ty (LT)
+                          and then not Is_Integer_Type (LT)
+                        then
+                           Error ("bitwise operator requires operands "
+                                  & "satisfying `integer`, got '" & Image (LT)
+                                  & "'"
+                                  & (if E.B_Op = B_Xor and then
+                                        Is_Contract_Ty (LT)
+                                     then "; contract XOR is `^^`" else "")
+                                  & " (spec 6.5)");
                         end if;
                         --  Steer a literal rhs toward the lhs type, but
                         --  not when lhs is a reference (§8.6.4 raw
@@ -1937,26 +1965,36 @@ package body Kurt.Sema is
                         return E.Sem_Ty;
                      end;
 
-                  when B_LAnd | B_LOr =>
-                     --  §7.2.2 short-circuit logical operators: each
-                     --  operand satisfies `contract`; the result is bool.
+                  when B_LAnd | B_LOr | B_LXor =>
+                     --  §7.2.2 logical operators: each operand satisfies
+                     --  `contract`; the result is bool. `&&`/`||` short-
+                     --  circuit; `^^` evaluates both. `^^` additionally
+                     --  requires `void` success/failure payloads.
                      declare
-                        LT : constant Type_Access := Infer (E.B_Lhs, null);
-                        RT : constant Type_Access := Infer (E.B_Rhs, null);
+                        LT  : constant Type_Access := Infer (E.B_Lhs, null);
+                        RT  : constant Type_Access := Infer (E.B_Rhs, null);
+                        Nm  : constant String :=
+                          (case E.B_Op is
+                              when B_LAnd => "&&",
+                              when B_LOr  => "||",
+                              when others => "^^");
                      begin
                         if not Is_Contract_Ty (LT) then
-                           Error ("'"
-                                  & (if E.B_Op = B_LAnd then "&&" else "||")
-                                  & "' requires operands satisfying "
+                           Error ("'" & Nm & "' requires operands satisfying "
                                   & "`contract`; lhs is '" & Image (LT)
                                   & "' (spec 7.2.2)");
                         end if;
                         if not Is_Contract_Ty (RT) then
-                           Error ("'"
-                                  & (if E.B_Op = B_LAnd then "&&" else "||")
-                                  & "' requires operands satisfying "
+                           Error ("'" & Nm & "' requires operands satisfying "
                                   & "`contract`; rhs is '" & Image (RT)
                                   & "' (spec 7.2.2)");
+                        end if;
+                        if E.B_Op = B_LXor
+                          and then not (Contract_Payloads_Void (LT)
+                                        and then Contract_Payloads_Void (RT))
+                        then
+                           Error ("'^^' requires both operands to have `void` "
+                                  & "success and failure payloads (spec 7.2.2)");
                         end if;
                         E.Sem_Ty := Mk_Named ("bool");
                         return E.Sem_Ty;

@@ -1,0 +1,28 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §7.2.2 `^^` is the contract XOR: both operands (satisfying `contract`) are
+// evaluated, and the result is true iff exactly one is the success variant.
+// It is distinct from the bitwise `^` (§6.5, integer operands).
+fn truthy(v: bool) -> si4 { return if v then 1 else 0; }
+
+enum toggle { On, Off = #wild# } with contract;
+
+fn main() -> ui1 {
+    let x: si4 = 1;
+    let one:  bool = (x == 1) ^^ (x == 2);       // T ^^ F -> true
+    let none: bool = (x == 1) ^^ (x == 1);       // T ^^ T -> false
+
+    // user contract enum operands
+    let a: toggle = toggle::On;
+    let b: toggle = toggle::Off;
+    let mx: bool = a ^^ b;                        // On ^^ Off -> true
+
+    // bitwise `^` remains integer-only and unaffected
+    let bits: ui4 = 0xFF00 ^ 0x0FF0;             // 0xF0F0
+
+    airside {
+        posix::printf("one=%d none=%d mx=%d bits=%x\n\0".ptr,
+                      truthy(one), truthy(none), truthy(mx), bits);
+    }                                            // 1 0 1 f0f0
+    return truthy(one) as ui1;
+}

@@ -602,9 +602,9 @@ is
          return;
       end if;
 
-      --  §7.2.2 contract `^`: both operands evaluated, truthified, then
+      --  §7.2.2 contract `^^`: both operands evaluated, truthified, then
       --  combined with an integer xor (operands are 0/1).
-      if E.B_Op = B_Xor and then Is_Contract_Ty (Lhs_Ty) then
+      if E.B_Op = B_LXor then
          Lower_Expr_Into_Reg (F, E.B_Lhs, Target_Reg, ST);
          Emit_Truthify (F, Target_Reg, Lhs_Ty);
          IO.Put_Line (F, "    sub     sp, sp, #16");
@@ -839,8 +839,8 @@ is
                IO.Put_Line (F, "    cset    " & Wt & ", " & C);
             end;
 
-         when B_LAnd | B_LOr =>
-            --  Handled by the short-circuit path above; unreachable.
+         when B_LAnd | B_LOr | B_LXor =>
+            --  Handled by the short-circuit / contract-XOR paths above.
             raise Program_Error with "codegen: unreachable logical op";
       end case;
    end Lower_Binary;

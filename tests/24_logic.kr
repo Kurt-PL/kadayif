@@ -17,11 +17,11 @@ fn main() -> ui1 {
     airside { posix::printf("sc=%d so=%d\n\0".ptr,
                             truthy(sc), truthy(so)); }       // 0 1
 
-    // chained comparisons through && / || / ^
+    // chained comparisons through && / || / ^^ (contract XOR, §7.2.2)
     let x: si4 = 3;
     let both: bool = x > 1 && x < 5;                         // true
     let either: bool = x < 1 || x == 3;                      // true
-    let one: bool = (x > 1) ^ (x > 2);                       // t^t = false
+    let one: bool = (x > 1) ^^ (x > 2);                      // t^^t = false
     airside { posix::printf("b=%d e=%d o=%d\n\0".ptr,
                             truthy(both), truthy(either), truthy(one)); }
 
@@ -30,7 +30,7 @@ fn main() -> ui1 {
     let tf: toggle = !tg;                                    // Off
     let m: bool = tg && t;                                   // On && true
     let m2: bool = tf || f;                                  // Off || false
-    let mx: bool = tg ^ tf;                                  // On ^ Off
+    let mx: bool = tg ^^ tf;                                 // On ^^ Off
     airside { posix::printf("m=%d m2=%d mx=%d\n\0".ptr,
                             truthy(m), truthy(m2), truthy(mx)); } // 1 0 1
     return 0;

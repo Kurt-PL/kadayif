@@ -124,12 +124,13 @@ package Kurt.Lexer is
       --  Contract logical operators (§7.2.2)
       Op_AmpAmp,         --  &&  (short-circuit AND)
       Op_BarBar,         --  ||  (short-circuit OR)
+      Op_CaretCaret,     --  ^^  (contract XOR)
       Op_Question,       --  ?  (discriminant cast target)
       --  Compare-and-swap (§8.7)
       Op_EqCas,          --  >.<  (swap if equal)
       Op_NeCas,          --  >!<  (swap if not equal)
       --  Bitwise / shift (§6.5). `&` is Op_Amp (shared with ref sigil).
-      Op_Caret,          --  ^  (bitwise / contract XOR)
+      Op_Caret,          --  ^  (bitwise XOR)
       Op_Shl,            --  <<
       Op_Shr,            --  >>
       Op_Bang,           --  !  (bitwise NOT / contract polarity)

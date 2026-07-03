@@ -836,6 +836,7 @@ package body Kurt.Parser is
          when Op_Ge      => Op := B_Ge;
          when Op_AmpAmp  => Op := B_LAnd;
          when Op_BarBar  => Op := B_LOr;
+         when Op_CaretCaret => Op := B_LXor;
          when others     => return False;
       end case;
       return True;
@@ -857,8 +858,9 @@ package body Kurt.Parser is
          when B_Xor         => return 40;   --  level 11
          when B_Or          => return 35;   --  level 12
          when B_Eq | B_Ne | B_Lt | B_Gt | B_Le | B_Ge => return 30;  --  13
-         when B_LAnd        => return 20;   --  §7.2.2, below comparison
-         when B_LOr         => return 15;
+         when B_LAnd        => return 20;   --  §7.2.2 level 14
+         when B_LXor        => return 18;   --  level 15 (between && and ||)
+         when B_LOr         => return 15;   --  level 16
       end case;
    end Binding_Power;
 

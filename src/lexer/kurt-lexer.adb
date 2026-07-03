@@ -1502,7 +1502,10 @@ package body Kurt.Lexer is
                   Tok.Kind := Op_Bar; Advance (L);
                end if;
             when '^' =>
-               if Peek (L, 1) = '=' then
+               if Peek (L, 1) = '^' then
+                  --  §7.2.2 `^^` contract XOR (distinct from bitwise `^`).
+                  Tok.Kind := Op_CaretCaret; Advance (L); Advance (L);
+               elsif Peek (L, 1) = '=' then
                   Tok.Kind := Op_CaretEq; Advance (L); Advance (L);
                else
                   Tok.Kind := Op_Caret; Advance (L);
