@@ -4015,6 +4015,15 @@ package body Kurt.Sema is
                         then
                            Error ("`while ->` requires a contract value; got '"
                                   & Image (CT) & "' (spec 7.5.1)");
+                        elsif S.W_Cond.Kind /= E_Path
+                          or else Natural (S.W_Cond.Segments.Length) /= 1
+                        then
+                           --  §7.5.1 bootstrap: the `->` scrutinee must be a
+                           --  binding re-read each iteration; a call/temporary
+                           --  is not yet materialised.
+                           Error ("the `while ... -> v` scrutinee must currently "
+                                  & "be a binding reassigned in the body "
+                                  & "(bootstrap)");
                         else
                            Saved := Natural (Scope.Length);
                            Bound_Let := True;
@@ -4104,6 +4113,16 @@ package body Kurt.Sema is
                      then
                         Error ("the `->` form requires a contract value; "
                                & "got '" & Image (CT) & "'");
+                        Check_Block (S.SI_Then);
+                        Check_Block (S.SI_Else);
+                     elsif S.SI_Cond.Kind /= E_Path
+                       or else Natural (S.SI_Cond.Segments.Length) /= 1
+                     then
+                        --  §7.3 bootstrap: the `->` scrutinee must be a
+                        --  binding (a place) so the payload can be aliased
+                        --  in place. A call/temporary is not yet materialised.
+                        Error ("the `if ... -> v` scrutinee must currently be a "
+                               & "binding; bind the value first (bootstrap)");
                         Check_Block (S.SI_Then);
                         Check_Block (S.SI_Else);
                      else
