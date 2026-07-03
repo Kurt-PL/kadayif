@@ -1030,7 +1030,12 @@ package body Kurt.Sema is
                return E.Sem_Ty;
 
             when E_String_Lit =>
-               --  Slice &[ui1] fat reference.
+               --  Slice &[ui1] fat reference. NB §3.5.5 specifies the type
+               --  as `&[ui1; N]` (a thin reference to a sized array), but the
+               --  bootstrap represents a string literal as a fat slice
+               --  (ptr+len, the `Len => 0` sentinel). Carrying the true N in
+               --  the type would require switching the whole string-literal
+               --  representation to a thin sized-array reference — deferred.
                E.Sem_Ty := Mk_Ref (R_Shared, False, RS_None,
                                    new AST_Type'(Kind => T_Array,
                                                  Elem => Mk_Named ("ui1"),
@@ -2092,6 +2097,16 @@ package body Kurt.Sema is
                                (SN, SU.To_String (FI.Name));
                            VT : Type_Access;
                         begin
+                           --  §6.1.4 a field shall not be initialised twice.
+                           for J in E.SL_Fields.First_Index .. I - 1 loop
+                              if SU.To_String (E.SL_Fields.Element (J).Name)
+                                   = SU.To_String (FI.Name)
+                              then
+                                 Error ("field '" & SU.To_String (FI.Name)
+                                        & "' of '" & SN & "' is initialised "
+                                        & "more than once (spec 6.1.4)");
+                              end if;
+                           end loop;
                            if FT = null then
                               Error ("struct '" & SN & "' has no field '"
                                      & SU.To_String (FI.Name) & "'");

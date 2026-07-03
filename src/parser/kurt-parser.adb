@@ -4866,6 +4866,51 @@ package body Kurt.Parser is
                Advance (C);
                declare
                   A : Alias_Entry;
+
+                  --  Whether the type tree T mentions a `T_Named` with the
+                  --  given name anywhere (in itself or a component).
+                  function Mentions (T : Type_Access; Nm : String)
+                    return Boolean is
+                  begin
+                     if T = null then
+                        return False;
+                     end if;
+                     case T.Kind is
+                        when T_Named =>
+                           if SU.To_String (T.Name) = Nm then
+                              return True;
+                           end if;
+                           for I in T.Args.First_Index .. T.Args.Last_Index
+                           loop
+                              if Mentions (T.Args.Element (I), Nm) then
+                                 return True;
+                              end if;
+                           end loop;
+                           return False;
+                        when T_Ref =>
+                           return Mentions (T.Target, Nm);
+                        when T_Array =>
+                           return Mentions (T.Elem, Nm);
+                        when T_Tuple =>
+                           for I in T.Elems.First_Index .. T.Elems.Last_Index
+                           loop
+                              if Mentions (T.Elems.Element (I), Nm) then
+                                 return True;
+                              end if;
+                           end loop;
+                           return False;
+                        when T_Fn =>
+                           for I in T.Fn_Params.First_Index
+                                    .. T.Fn_Params.Last_Index loop
+                              if Mentions (T.Fn_Params.Element (I), Nm) then
+                                 return True;
+                              end if;
+                           end loop;
+                           return Mentions (T.Fn_Ret, Nm);
+                        when T_Dyn =>
+                           return False;
+                     end case;
+                  end Mentions;
                begin
                   A.Name := Take_Ident (C, "alias name after 'type'");
                   --  §5.8 generic alias `type Name.<T, U> = ...`.
@@ -4885,6 +4930,28 @@ package body Kurt.Parser is
                   Expect (C, Punct_Eq, "'=' in type alias");
                   A.Target := Parse_Type (C);
                   Expect (C, Punct_Semi, "';' after type alias");
+                  --  §5.8 a directly or mutually recursive alias shall not
+                  --  appear. Because Parse_Type already substituted any
+                  --  earlier alias into A.Target, a mutual cycle surfaces here
+                  --  as the alias name mentioning itself.
+                  if Mentions (A.Target, SU.To_String (A.Name)) then
+                     raise Syntax_Error with
+                       "type alias '" & SU.To_String (A.Name)
+                       & "' is directly or mutually recursive (spec 5.8)";
+                  end if;
+                  --  §5.8 every declared type parameter shall appear in the
+                  --  aliased type.
+                  for I in A.Params.First_Index .. A.Params.Last_Index loop
+                     if not Mentions
+                              (A.Target, SU.To_String (A.Params.Element (I)))
+                     then
+                        raise Syntax_Error with
+                          "type parameter '"
+                          & SU.To_String (A.Params.Element (I))
+                          & "' does not appear in the aliased type of '"
+                          & SU.To_String (A.Name) & "' (spec 5.8)";
+                     end if;
+                  end loop;
                   C.Aliases.Append (A);
                end;
             when others =>
