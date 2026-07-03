@@ -2304,7 +2304,25 @@ package body Kurt.Sema is
                                         & "upper bound (empty range)");
                               end if;
                            when Pat_Variant =>
-                              if Is_Enum_Scrut
+                              if Natural (Arm.Pat.Path.Length) = 1 then
+                                 --  §5.10.1 a bare identifier is an irrefutable
+                                 --  binding (catch-all): bind the scrutinee
+                                 --  value to the name. Per §7.4.1 it makes the
+                                 --  match exhaustive EXCEPT over an enum with
+                                 --  no declared `#wild#` (which requires an
+                                 --  explicit `#wild#` arm).
+                                 Scope.Append
+                                   ((Name => Arm.Pat.Path.First_Element,
+                                     Ty   => Scrut_Ty, others => <>));
+                                 if Arm.Guard = null
+                                   and then
+                                     (not Is_Enum_Scrut
+                                      or else Kurt.Layout.Has_Wild_Variant
+                                                (SU.To_String (Scrut_Ty.Name)))
+                                 then
+                                    Has_Wild := True;
+                                 end if;
+                              elsif Is_Enum_Scrut
                                 and then Natural (Arm.Pat.Path.Length) = 2
                               then
                                  declare

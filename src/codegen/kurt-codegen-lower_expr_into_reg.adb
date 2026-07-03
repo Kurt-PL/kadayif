@@ -944,6 +944,33 @@ is
                            IO.Put_Line (F, L_Next & ":");
                         end if;
                      when Pat_Variant =>
+                        if Natural (Arm.Pat.Path.Length) = 1 then
+                           --  §5.10.1 bare-identifier catch-all over an enum:
+                           --  matches unconditionally, binding the whole value.
+                           declare
+                              Saved : constant Natural :=
+                                Natural (ST.Bindings.Length);
+                           begin
+                              ST.Bindings.Append
+                                ((Name   => Arm.Pat.Path.First_Element,
+                                  Offset => Base,
+                                  Ty     => Scrut_T));
+                              if Arm.Guard /= null then
+                                 Lower_Expr_Into_Reg
+                                   (F, Arm.Guard, Target_Reg, ST);
+                                 IO.Put_Line
+                                   (F, "    cbz     w" & Img (Target_Reg)
+                                       & ", " & L_Next);
+                              end if;
+                              Lower_Expr_Into_Reg
+                                (F, Arm.Arm_Body, Target_Reg, ST);
+                              while Natural (ST.Bindings.Length) > Saved loop
+                                 ST.Bindings.Delete_Last;
+                              end loop;
+                              IO.Put_Line (F, "    b       " & L_End);
+                              IO.Put_Line (F, L_Next & ":");
+                           end;
+                        else
                         declare
                            VN  : constant String := SU.To_String
                              (Arm.Pat.Path.Last_Element);
@@ -985,6 +1012,7 @@ is
                            IO.Put_Line (F, "    b       " & L_End);
                            IO.Put_Line (F, L_Next & ":");
                         end;
+                        end if;
                      when Pat_Int | Pat_Range | Pat_Slice =>
                         raise Program_Error with
                           "codegen: numeric/slice pattern on enum scrutinee";
@@ -1141,9 +1169,14 @@ is
                           "codegen: slice pattern on scalar scrutinee";
                      when Pat_Int     => Val := Arm.Pat.Int_V;
                      when Pat_Variant =>
-                        Val := Kurt.Layout.Variant_Value
-                          (SU.To_String (Arm.Pat.Path.First_Element),
-                           SU.To_String (Arm.Pat.Path.Last_Element));
+                        if Natural (Arm.Pat.Path.Length) = 1 then
+                           --  §5.10.1 bare-identifier catch-all binding.
+                           Is_Cmp := False;
+                        else
+                           Val := Kurt.Layout.Variant_Value
+                             (SU.To_String (Arm.Pat.Path.First_Element),
+                              SU.To_String (Arm.Pat.Path.Last_Element));
+                        end if;
                   end case;
                   --  §7.4: a guard or a range test, like an equality test,
                   --  needs a fall-through label to the next arm even on an
@@ -1183,6 +1216,16 @@ is
                         if SU.Length (Arm.Pat.Bind_Name) > 0 then
                            ST.Bindings.Append
                              ((Name   => Arm.Pat.Bind_Name,
+                               Offset => Slot,
+                               Ty     => Scrut_T));
+                        end if;
+                        --  §5.10.1 bare-identifier catch-all: alias the name
+                        --  to the scrutinee's slot for the guard and body.
+                        if Arm.Pat.Kind = Pat_Variant
+                          and then Natural (Arm.Pat.Path.Length) = 1
+                        then
+                           ST.Bindings.Append
+                             ((Name   => Arm.Pat.Path.First_Element,
                                Offset => Slot,
                                Ty     => Scrut_T));
                         end if;

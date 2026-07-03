@@ -1,0 +1,22 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.10.1 a bare identifier match arm is an irrefutable binding (catch-all):
+// it binds the scrutinee to the name at its original type. Works over any
+// scrutinee type — here a scalar and an enum with a declared `#wild#`.
+enum col { Red, Green, Blue, Rest = #wild# }
+
+fn bump(x: si4) -> si4 {
+    return match x { 0 = 100, n = n + 1 };   // n binds the value
+}
+
+fn tag(c: col) -> si4 {
+    return match c { col::Red = 1, other = 99 };   // other is a catch-all
+}
+
+fn main() -> ui1 {
+    airside {
+        posix::printf("%d %d %d %d\n\0".ptr,
+                      bump(0), bump(5), tag(col::Red), tag(col::Blue));
+    }                                              // 100 6 1 99
+    return bump(5) as ui1;
+}
