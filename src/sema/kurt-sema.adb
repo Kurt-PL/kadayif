@@ -518,6 +518,9 @@ package body Kurt.Sema is
       --  checked. Raised inside an `airside { ... }` block and for the whole
       --  body of an `airside fn`. `uninit` is valid only when this is > 0.
       In_Airside : Natural := 0;
+      --  §10.4: mangled names of every subroutine declared in a `@dyn`
+      --  block. Invoking one is permitted only within an `airside` region.
+      Dyn_Fn_Names : Path_Segments.Vector;
       --  §6.9/§7.8: the expected type flowing into the innermost enclosing
       --  block expression's trailing `express` (steers integer-literal
       --  typing exactly like a `let` annotation would). Null when the
@@ -1251,6 +1254,39 @@ package body Kurt.Sema is
                end;
 
             when E_Call =>
+               --  §10.4 a subroutine declared in a `@dyn` block may be
+               --  invoked only within an `airside` region. The callee is a
+               --  single-segment path holding the mangled `alias$item` name.
+               if In_Airside = 0
+                 and then E.C_Callee.Kind = E_Path
+                 and then Natural (E.C_Callee.Segments.Length) = 1
+               then
+                  declare
+                     CN : constant String :=
+                       SU.To_String (E.C_Callee.Segments.Last_Element);
+                  begin
+                     for I in Dyn_Fn_Names.First_Index
+                              .. Dyn_Fn_Names.Last_Index loop
+                        if SU.To_String (Dyn_Fn_Names.Element (I)) = CN then
+                           declare
+                              Disp : SU.Unbounded_String;   --  `alias::item`
+                           begin
+                              for K in CN'Range loop
+                                 if CN (K) = '$' then
+                                    SU.Append (Disp, "::");
+                                 else
+                                    SU.Append (Disp, CN (K));
+                                 end if;
+                              end loop;
+                              Error ("`@dyn` subroutine '" & SU.To_String (Disp)
+                                     & "' may be invoked only within an "
+                                     & "`airside` region (spec 10.4)");
+                           end;
+                           exit;
+                        end if;
+                     end loop;
+                  end;
+               end if;
                --  §6.2.3 method invocation: `e.m(args)` resolves to the
                --  inherent method `T$m` and desugars to a plain call with
                --  the receiver as first argument (§6.2.6 auto-referencing:
@@ -4498,6 +4534,7 @@ package body Kurt.Sema is
                       Ret         => P.Return_Type,
                       Is_Variadic => P.Is_Variadic,
                       Is_Never    => P.Is_Never));
+                  Dyn_Fn_Names.Append (P.Name);   --  §10.4 airside-only
                end;
             end loop;
          end;
