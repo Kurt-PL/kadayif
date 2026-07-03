@@ -3767,6 +3767,15 @@ package body Kurt.Sema is
                end;
 
             when S_Assign =>
+               --  §6.7.1/§6.7.2 the left side of an assignment (plain or
+               --  compound) shall be a place expression: a binding, a field
+               --  access, or a dereference. A value expression here would
+               --  otherwise reach an unsupported lvalue path in codegen.
+               if S.Asn_Lhs.Kind not in E_Path | E_Field | E_Deref then
+                  Error ("the left side of an assignment shall be a place "
+                         & "expression (a binding, field access, or "
+                         & "dereference) (spec 6.7.1)");
+               end if;
                if S.Asn_Rhs.Kind = E_Uninit then
                   --  §6.1.8: `place = uninit;` — establishes the contained
                   --  state without storing a value.

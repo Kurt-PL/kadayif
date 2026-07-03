@@ -714,6 +714,12 @@ exception
       Put_E ("kadayif: translation failure: "
              & Ada.Exceptions.Exception_Message (E));
       CLI.Set_Exit_Status (Exit_TransErr);
+   when E : Kurt.Mono.Mono_Error =>
+      --  §5.9 generic-instantiation errors (e.g. wrong type-argument count)
+      --  are user translation failures, not compiler bugs.
+      Put_E ("kadayif: translation failure: "
+             & Ada.Exceptions.Exception_Message (E));
+      CLI.Set_Exit_Status (Exit_TransErr);
    when E : others =>
       Put_E ("kadayif: internal error: "
              & Ada.Exceptions.Exception_Information (E));
