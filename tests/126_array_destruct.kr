@@ -1,0 +1,21 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.11.1 the destructor of every `with destruct` value runs exactly once.
+// An array literal transfers its element bindings (their scope-exit drops are
+// suppressed); the array's own elements are destroyed once — here through the
+// enclosing struct's destructor, in index order.
+struct sentry { id: si4 } with destruct {
+    airside { posix::printf("drop %d\n\0".ptr, self.id); }
+};
+
+struct holder { arr: [sentry; 3] }
+
+fn main() -> ui1 {
+    let e0: sentry = sentry { id = 0 };
+    let e1: sentry = sentry { id = 1 };
+    let e2: sentry = sentry { id = 2 };
+    let arr: [sentry; 3] = [e0, e1, e2];   // e0/e1/e2 transferred into arr
+    let h: holder = holder { arr = arr };  // arr transferred into h
+    airside { posix::printf("body\n\0".ptr); }
+    return 0;                              // exactly: drop 0, drop 1, drop 2
+}

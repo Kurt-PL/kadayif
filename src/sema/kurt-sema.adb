@@ -2922,6 +2922,14 @@ package body Kurt.Sema is
                                   & "types: '" & Image (ET) & "' vs '"
                                   & Image (T) & "'");
                         end if;
+                        --  §8.8.2 an element supplied by a `destruct`-typed
+                        --  binding is transferred into the array (its
+                        --  scope-exit drop is suppressed). Only the element-
+                        --  list form transfers; the repeat form `[e; N]`
+                        --  would copy `e` N times.
+                        if E.AL_Repeat = 0 then
+                           Maybe_Move (E.AL_Elems.Element (I));
+                        end if;
                      end;
                   end loop;
                   Arr.Elem := ET;

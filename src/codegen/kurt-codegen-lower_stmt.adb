@@ -418,14 +418,32 @@ begin
                                  S.L_Init.SL_Fields.Last_Index
                         loop
                            declare
-                              FI : constant Field_Init :=
+                              FI  : constant Field_Init :=
                                 S.L_Init.SL_Fields.Element (I);
-                              FN : constant String := SU.To_String (FI.Name);
+                              FN  : constant String := SU.To_String (FI.Name);
+                              FT  : constant Type_Access :=
+                                Kurt.Layout.Field_Type (SN, FN);
+                              FOf : constant Natural :=
+                                Off + Kurt.Layout.Field_Offset (SN, FN);
+                              BI  : constant Natural :=
+                                (if FI.Val.Kind = E_Path
+                                   and then Natural (FI.Val.Segments.Length) = 1
+                                 then Find_Binding
+                                        (ST, SU.To_String
+                                           (FI.Val.Segments.Last_Element))
+                                 else 0);
                            begin
-                              Lower_Expr_Into_Reg (F, FI.Val, 9, ST);
-                              Store_Sized
-                                (Off + Kurt.Layout.Field_Offset (SN, FN),
-                                 Sizeof (Kurt.Layout.Field_Type (SN, FN)));
+                              if Is_Aggregate_Type (FT) and then BI /= 0 then
+                                 --  §8.8.1 an aggregate field (struct / array /
+                                 --  tuple) copied from a binding cannot travel
+                                 --  in a register: copy its full width.
+                                 Emit_Mem_Copy
+                                   (F, "x29", ST.Bindings.Element (BI).Offset,
+                                    "x29", FOf, Sizeof (FT));
+                              else
+                                 Lower_Expr_Into_Reg (F, FI.Val, 9, ST);
+                                 Store_Sized (FOf, Sizeof (FT));
+                              end if;
                               --  §8.8.2 a transferred field source is not
                               --  dropped at its own scope exit.
                               Note_Move (F, ST, FI.Val);
@@ -711,6 +729,10 @@ begin
                                 (Off
                                  + (I - S.L_Init.AL_Elems.First_Index)
                                    * ESz);
+                              --  §8.8.2 a destruct-typed element supplied by a
+                              --  binding is transferred: clear the source's
+                              --  drop flag so it is not also destroyed.
+                              Note_Move (F, ST, S.L_Init.AL_Elems.Element (I));
                            end loop;
                         end if;
                         <<Fat_Done>>
@@ -817,8 +839,18 @@ begin
                   --  §8.11 arm the runtime drop flag of an owned destruct
                   --  binding: 1 = live (destroy at scope exit). A later
                   --  transfer / destruct / undestruct clears it at runtime.
-                  if Ty /= null and then Ty.Kind = T_Named
-                    and then Type_Has_Drop (SU.To_String (Ty.Name))
+                  --  Covers a named destruct type and an array whose element
+                  --  type has a destructor.
+                  if Ty /= null
+                    and then ((Ty.Kind = T_Named
+                                 and then Type_Has_Drop
+                                            (SU.To_String (Ty.Name)))
+                              or else (Ty.Kind = T_Array
+                                       and then Ty.Elem /= null
+                                       and then Ty.Elem.Kind = T_Named
+                                       and then Type_Has_Drop
+                                                  (SU.To_String
+                                                     (Ty.Elem.Name))))
                   then
                      declare
                         Flag : constant Natural := ST.Next_Offset;
