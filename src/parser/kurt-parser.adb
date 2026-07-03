@@ -152,35 +152,7 @@ package body Kurt.Parser is
      (C        : in out Cursor;
       Volatile : in out Boolean;
       Store    : in out Ref_Store)
-   is
-      procedure Set_Store (S : Ref_Store) is
-      begin
-         if Store /= RS_None then
-            raise Syntax_Error with
-              "'mut', 'atomic' and 'guard' are mutually exclusive "
-              & "(spec 8.1) at line" & Positive'Image (C.Cur.Line);
-         end if;
-         Store := S;
-      end Set_Store;
-   begin
-      loop
-         if C.Cur.Kind = Kw_Mut then
-            Advance (C);
-            Set_Store (RS_Mut);
-         elsif C.Cur.Kind = Kw_Volatile then
-            Advance (C);
-            Volatile := True;
-         elsif C.Cur.Kind = Kw_Atomic then
-            Advance (C);
-            Set_Store (RS_Atomic);
-         elsif C.Cur.Kind = Kw_Guard then
-            Advance (C);
-            Set_Store (RS_Guard);
-         else
-            exit;
-         end if;
-      end loop;
-   end Parse_Ref_Modifiers;
+   is separate;
 
    --  §8.4.3 `with lifetime` ordering constraints, on a subroutine or a
    --  composite-type declaration:
@@ -189,34 +161,7 @@ package body Kurt.Parser is
    --  Lifetimes are a compile-time discipline with no representation, so the
    --  bootstrap validates the shape and erases it. Pre: the current token is
    --  `with` and the following identifier is `lifetime`.
-   procedure Parse_Lifetime_Clause (C : in out Cursor) is
-      procedure Parse_Chain is
-      begin
-         if C.Cur.Kind /= Tok_Label then
-            raise Syntax_Error with
-              "expected a lifetime ('name) in a 'with lifetime' chain at "
-              & "line" & Positive'Image (C.Cur.Line);
-         end if;
-         while C.Cur.Kind = Tok_Label loop
-            Advance (C);
-         end loop;
-      end Parse_Chain;
-   begin
-      Advance (C);   --  'with'
-      Advance (C);   --  'lifetime'
-      if C.Cur.Kind = Punct_LBrace then
-         Advance (C);
-         loop
-            Parse_Chain;
-            exit when C.Cur.Kind /= Punct_Comma;
-            Advance (C);                            --  ','
-            exit when C.Cur.Kind = Punct_RBrace;    --  trailing comma
-         end loop;
-         Expect (C, Punct_RBrace, "'}' to close 'with lifetime'");
-      else
-         Parse_Chain;
-      end if;
-   end Parse_Lifetime_Clause;
+   procedure Parse_Lifetime_Clause (C : in out Cursor) is separate;
 
    --  Whether the cursor sits at a `with lifetime` clause (`lifetime` is an
    --  ordinary identifier, so this distinguishes it from `with destruct`
@@ -253,72 +198,12 @@ package body Kurt.Parser is
    --  names (§9.8) recorded for the type-erasure check in Kurt.Sema.
    procedure Parse_Opt_Generic_Params_Bounded
      (C : in out Cursor; Params : out Generic_Param_Vectors.Vector)
-   is
-   begin
-      if C.Cur.Kind /= Punct_Dot then
-         return;
-      end if;
-      Advance (C);
-      Expect (C, Op_Lt, "'<' after '.' in generic clause");
-      Split_Shr_If_Present (C);
-      if C.Cur.Kind /= Op_Gt then
-         loop
-            --  §5.9 lifetime parameter `'name`: a compile-time discipline
-            --  with no representation, so it is parsed and ignored (the
-            --  bootstrap's borrow analysis does not consume it).
-            if C.Cur.Kind = Tok_Label then
-               Advance (C);
-            else
-               declare
-                  P : Generic_Param;
-               begin
-                  P.Name := Take_Ident (C, "generic parameter");
-                  if C.Cur.Kind = Punct_Colon then
-                     Advance (C);
-                     loop
-                        --  §9.8: built-in bound names are keywords
-                        --  (`numeric`, `integer`, `primitive`, `contract`,
-                        --  `destruct`, `variadic`); trait bounds are
-                        --  ordinary identifiers.
-                        P.Bounds.Append (Take_Word (C, "bound name"));
-                        exit when C.Cur.Kind /= Op_Plus;
-                        Advance (C);
-                     end loop;
-                  end if;
-                  Params.Append (P);
-               end;
-            end if;
-            exit when C.Cur.Kind /= Punct_Comma;
-            Advance (C);
-            Split_Shr_If_Present (C);
-            exit when C.Cur.Kind = Op_Gt;
-         end loop;
-      end if;
-      Expect (C, Op_Gt, "'>' to close generic clause");
-   end Parse_Opt_Generic_Params_Bounded;
+   is separate;
 
    --  Optional generic parameter clause on a declaration: `.<T, U>`.
    procedure Parse_Opt_Generic_Params
      (C : in out Cursor; Params : out Path_Segments.Vector)
-   is
-   begin
-      if C.Cur.Kind /= Punct_Dot then
-         return;
-      end if;
-      Advance (C);
-      Expect (C, Op_Lt, "'<' after '.' in generic clause");
-      Split_Shr_If_Present (C);
-      if C.Cur.Kind /= Op_Gt then
-         loop
-            Params.Append (Take_Ident (C, "generic parameter"));
-            exit when C.Cur.Kind /= Punct_Comma;
-            Advance (C);
-            Split_Shr_If_Present (C);
-            exit when C.Cur.Kind = Op_Gt;
-         end loop;
-      end if;
-      Expect (C, Op_Gt, "'>' to close generic clause");
-   end Parse_Opt_Generic_Params;
+   is separate;
 
    ----------------------------------------------------------------------
    --  Parameters
@@ -354,38 +239,7 @@ package body Kurt.Parser is
    function Parse_Closure
      (C : in out Cursor; Xfer : Boolean) return Expr_Access;
 
-   function Token_To_Binop (K : Token_Kind; Op : out Binary_Op) return Boolean is
-   begin
-      case K is
-         when Op_Plus     => Op := B_Add;
-         when Op_Minus    => Op := B_Sub;
-         when Op_Star     => Op := B_Mul;
-         when Op_Slash    => Op := B_Div;
-         when Op_Percent  => Op := B_Mod;
-         when Op_PlusBar  => Op := B_Sat_Add;
-         when Op_MinusBar => Op := B_Sat_Sub;
-         when Op_StarBar  => Op := B_Sat_Mul;
-         when Op_SlashBar => Op := B_Sat_Div;
-         when Op_Amp      => Op := B_And;
-         when Op_Bar      => Op := B_Or;
-         when Op_Caret    => Op := B_Xor;
-         when Op_Shl      => Op := B_Shl;
-         when Op_Shr      => Op := B_Shr;
-         when Op_PlusAt   => Op := B_Wide_Add;
-         when Op_StarAt   => Op := B_Wide_Mul;
-         when Op_EqEq    => Op := B_Eq;
-         when Op_BangEq  => Op := B_Ne;
-         when Op_Lt      => Op := B_Lt;
-         when Op_Gt      => Op := B_Gt;
-         when Op_Le      => Op := B_Le;
-         when Op_Ge      => Op := B_Ge;
-         when Op_AmpAmp  => Op := B_LAnd;
-         when Op_BarBar  => Op := B_LOr;
-         when Op_CaretCaret => Op := B_LXor;
-         when others     => return False;
-      end case;
-      return True;
-   end Token_To_Binop;
+   function Token_To_Binop (K : Token_Kind; Op : out Binary_Op) return Boolean is separate;
 
    --  Higher = tighter binding. Mirrors §6 precedence table:
    --    spec prec 7  (* / %)              => bp 70
@@ -417,31 +271,7 @@ package body Kurt.Parser is
    --  §7.4 parse a variant pattern's payload destructuring `{ ... }` into
    --  the pattern P: a bare `ident` is a positional binding; `field = ident`
    --  binds the named field. Assumes the opening `{` is the current token.
-   procedure Parse_Payload_Binds (C : in out Cursor; P : in out Pattern) is
-   begin
-      Expect (C, Punct_LBrace, "'{'");
-      if C.Cur.Kind /= Punct_RBrace then
-         loop
-            declare
-               N1 : constant SU.Unbounded_String :=
-                 Take_Ident (C, "payload binding");
-            begin
-               if C.Cur.Kind = Punct_Eq then
-                  Advance (C);   --  '='
-                  P.Bind_Fields.Append (N1);
-                  P.Bindings.Append (Take_Ident (C, "renamed binding"));
-               else
-                  P.Bind_Fields.Append (SU.Null_Unbounded_String);
-                  P.Bindings.Append (N1);
-               end if;
-            end;
-            exit when C.Cur.Kind /= Punct_Comma;
-            Advance (C);
-            exit when C.Cur.Kind = Punct_RBrace;
-         end loop;
-      end if;
-      Expect (C, Punct_RBrace, "'}'");
-   end Parse_Payload_Binds;
+   procedure Parse_Payload_Binds (C : in out Cursor; P : in out Pattern) is separate;
 
    function Parse_Primary (C : in out Cursor) return Expr_Access is separate;
 
@@ -455,29 +285,7 @@ package body Kurt.Parser is
 
    --  Cast operators `as` / `as ?` (§6.8, prec 6 — between unary and
    --  multiplicative). `as!` (airside reinterpret) is deferred.
-   function Parse_Cast (C : in out Cursor) return Expr_Access is
-      E : Expr_Access := Parse_Unary (C);
-   begin
-      while C.Cur.Kind = Kw_As or else C.Cur.Kind = Kw_As_Bang loop
-         declare
-            Next : constant Expr_Access := new Expr_Node (Kind => E_Cast);
-            Bang : constant Boolean := C.Cur.Kind = Kw_As_Bang;  --  §6.8.11
-         begin
-            Advance (C);   --  consume `as` / `as!`
-            Next.Cast_Inner := E;
-            Next.Cast_Bang  := Bang;
-            if C.Cur.Kind = Op_Question and then not Bang then
-               Advance (C);
-               Next.Cast_Disc := True;
-               Next.Cast_Ty   := null;
-            else
-               Next.Cast_Ty := Parse_Type (C);
-            end if;
-            E := Next;
-         end;
-      end loop;
-      return E;
-   end Parse_Cast;
+   function Parse_Cast (C : in out Cursor) return Expr_Access is separate;
 
    function Is_Cmp (Op : Binary_Op) return Boolean is
      (Op in B_Eq | B_Ne | B_Lt | B_Gt | B_Le | B_Ge);
@@ -509,31 +317,7 @@ package body Kurt.Parser is
    --  §8.7 compare-and-swap: `target >.< expected <- new` (eq-CAS) and
    --  `target >!< expected <- new` (ne-CAS), at the lowest binding power
    --  (the operands are full binary expressions). Non-associative.
-   function Parse_Expr (C : in out Cursor) return Expr_Access is
-      E : Expr_Access := Parse_Binary (C, 0);
-   begin
-      --  §3.7: `..`/`..=` are pattern-only tokens — no value-level range
-      --  type exists, so a range in expression position is ill-formed.
-      if C.Cur.Kind = Op_DotDot or else C.Cur.Kind = Op_DotDotEq then
-         raise Syntax_Error with
-           "`..`/`..=` form patterns only; no range value exists (§3.7) "
-           & "at line" & Positive'Image (C.Cur.Line);
-      end if;
-      if C.Cur.Kind = Op_EqCas or else C.Cur.Kind = Op_NeCas then
-         declare
-            Next : constant Expr_Access := new Expr_Node (Kind => E_CAS);
-         begin
-            Next.CAS_Ne := C.Cur.Kind = Op_NeCas;
-            Advance (C);
-            Next.CAS_Tgt := E;
-            Next.CAS_Exp := Parse_Binary (C, 0);
-            Expect (C, Punct_LArrow, "'<-' in compare-and-swap (spec 8.7)");
-            Next.CAS_New := Parse_Binary (C, 0);
-            E := Next;
-         end;
-      end if;
-      return E;
-   end Parse_Expr;
+   function Parse_Expr (C : in out Cursor) return Expr_Access is separate;
 
    ----------------------------------------------------------------------
    --  Statements / blocks
@@ -543,15 +327,7 @@ package body Kurt.Parser is
 
    --  Parse a condition expression with struct-literal suppression so
    --  the following '{' is read as a block, not a struct literal.
-   function Parse_Cond (C : in out Cursor) return Expr_Access is
-      Saved : constant Boolean := C.No_Struct_Lit;
-      R     : Expr_Access;
-   begin
-      C.No_Struct_Lit := True;
-      R := Parse_Expr (C);
-      C.No_Struct_Lit := Saved;
-      return R;
-   end Parse_Cond;
+   function Parse_Cond (C : in out Cursor) return Expr_Access is separate;
 
    procedure Parse_Block_Stmts
      (C : in out Cursor; Stmts : out Stmt_Vectors.Vector)
@@ -596,37 +372,9 @@ package body Kurt.Parser is
       H             : out Fn_Header)
    is separate;
 
-   function Parse_Fn_Decl (C : in out Cursor) return Fn_Decl is
-      F : Fn_Decl;
-   begin
-      Parse_Fn_Header (C, Allow_Unnamed => False, H => F.Header);
-      --  §5.15: `@symbol` on a definition requires the `extern` prefix
-      --  (a non-extern subroutine has no external name to override).
-      if SU.Length (F.Header.Symbol_Name) > 0
-        and then not F.Header.Is_Extern
-      then
-         raise Syntax_Error with
-           "`@symbol` requires `extern` (or a `@dyn` block) (spec 5.15) at "
-           & "line" & Positive'Image (C.Cur.Line);
-      end if;
-      Parse_Block_Stmts (C, F.Body_Stmts);
-      return F;
-   end Parse_Fn_Decl;
+   function Parse_Fn_Decl (C : in out Cursor) return Fn_Decl is separate;
 
-   function Parse_Fn_Proto (C : in out Cursor) return Fn_Proto is
-      H : Fn_Header;
-   begin
-      Parse_Fn_Header (C, Allow_Unnamed => True, H => H);
-      --  §5.14: inlining directives shall not apply to a prototype (a
-      --  declaration without a body).
-      if H.Is_Inline or else H.Is_No_Inline then
-         raise Syntax_Error with
-           "`@inline`/`@no_inline` shall not be applied to a subroutine "
-           & "prototype (spec 5.14) at line" & Positive'Image (C.Cur.Line);
-      end if;
-      Expect (C, Punct_Semi, "';' to terminate fn prototype");
-      return H;
-   end Parse_Fn_Proto;
+   function Parse_Fn_Proto (C : in out Cursor) return Fn_Proto is separate;
 
    ----------------------------------------------------------------------
    --  @dyn declaration
@@ -673,81 +421,19 @@ package body Kurt.Parser is
    function Parse_Enum_Decl (C : in out Cursor) return Enum_Decl is separate;
 
    --  §5.3 `const NAME: T = expr ;` — the type annotation is mandatory.
-   function Parse_Const_Decl (C : in out Cursor) return Const_Decl is
-      D : Const_Decl;
-   begin
-      Expect (C, Kw_Const, "'const'");
-      D.Name := Take_Ident (C, "const name");
-      Expect (C, Punct_Colon, "':' (const type annotation is mandatory, "
-              & "spec 5.3)");
-      D.Ty := Parse_Type (C);
-      Expect (C, Punct_Eq, "'='");
-      D.Init := Parse_Expr (C);
-      Expect (C, Punct_Semi, "';' after const declaration");
-      return D;
-   end Parse_Const_Decl;
+   function Parse_Const_Decl (C : in out Cursor) return Const_Decl is separate;
 
    --  §5.4 `static [mut] NAME: T = expr ;`.
-   function Parse_Static_Decl (C : in out Cursor) return Static_Decl is
-      D : Static_Decl;
-   begin
-      Advance (C);   --  consume the `static` identifier-word
-      if C.Cur.Kind = Kw_Mut then
-         D.Is_Mut := True;
-         Advance (C);
-      end if;
-      D.Name := Take_Ident (C, "static name");
-      Expect (C, Punct_Colon, "':' (static type annotation)");
-      D.Ty := Parse_Type (C);
-      Expect (C, Punct_Eq, "'='");
-      D.Init := Parse_Expr (C);
-      Expect (C, Punct_Semi, "';' after static declaration");
-      return D;
-   end Parse_Static_Decl;
+   function Parse_Static_Decl (C : in out Cursor) return Static_Decl is separate;
 
    procedure Merge_Unit
-     (Into : in out Translation_Unit; From : Translation_Unit) is
-   begin
-      Into.Fns.Append (From.Fns);
-      Into.Dyns.Append (From.Dyns);
-      Into.Structs.Append (From.Structs);
-      Into.Enums.Append (From.Enums);
-      Into.Traits.Append (From.Traits);
-      Into.Trait_Impls.Append (From.Trait_Impls);
-      Into.Consts.Append (From.Consts);
-      Into.Statics.Append (From.Statics);
-      Into.Gen_Methods.Append (From.Gen_Methods);
-      Into.Gen_Fns.Append (From.Gen_Fns);
-      Into.Top_Asm.Append (From.Top_Asm);
-      --  §7.10.1 at most one trap handler across the translation unit.
-      if From.Has_Trap_Handler then
-         if Into.Has_Trap_Handler then
-            raise Syntax_Error with
-              "multiple @trap handlers across the translation unit (§7.10.1)";
-         end if;
-         Into.Has_Trap_Handler := True;
-         Into.Trap_Handler := From.Trap_Handler;
-      end if;
-   end Merge_Unit;
+     (Into : in out Translation_Unit; From : Translation_Unit) is separate;
 
    ----------------------------------------------------------------------
    --  §10.3 namespace mangling (see kurt-parser.ads for the design note).
    ----------------------------------------------------------------------
 
-   function Snapshot (U : Translation_Unit) return Rename_From is
-      function P1 (N : Natural) return Positive is (Positive (N + 1));
-   begin
-      return
-        (Fns         => P1 (Natural (U.Fns.Length)),
-         Gen_Fns     => P1 (Natural (U.Gen_Fns.Length)),
-         Structs     => P1 (Natural (U.Structs.Length)),
-         Enums       => P1 (Natural (U.Enums.Length)),
-         Traits      => P1 (Natural (U.Traits.Length)),
-         Trait_Impls => P1 (Natural (U.Trait_Impls.Length)),
-         Consts      => P1 (Natural (U.Consts.Length)),
-         Statics     => P1 (Natural (U.Statics.Length)),
-         Gen_Methods => P1 (Natural (U.Gen_Methods.Length)));
-   end Snapshot;
+   function Snapshot (U : Translation_Unit) return Rename_From is separate;
 
    procedure Apply_Namespace
      (U           : in out Translation_Unit;
