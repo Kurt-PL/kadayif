@@ -12,22 +12,7 @@ is
    --  label denotes the innermost loop; a non-empty label selects the
    --  nearest enclosing loop with that source name.
    function Target_Loop
-     (ST : Lower_State; Label : SU.Unbounded_String) return Loop_Labels is
-   begin
-      if SU.Length (Label) = 0 then
-         return ST.Loops.Last_Element;
-      end if;
-      for I in reverse ST.Loops.First_Index .. ST.Loops.Last_Index loop
-         if SU.To_String (ST.Loops.Element (I).Name)
-              = SU.To_String (Label)
-         then
-            return ST.Loops.Element (I);
-         end if;
-      end loop;
-      raise Program_Error with
-        "codegen: break/continue to unknown loop label '"
-        & SU.To_String (Label) & "'";
-   end Target_Loop;
+     (ST : Lower_State; Label : SU.Unbounded_String) return Loop_Labels is separate;
 
 
    --  Store the value currently in x9/w9 to [x29, Off] using the width
@@ -46,126 +31,18 @@ is
       end if;  --  Sz = 0 (void): nothing to store
    end Store_Sized;
 
-   procedure Zero_Fill (Off : Natural; Sz : Natural) is
-      Curr : Natural := Off;
-      Rem_Sz : Natural := Sz;
-   begin
-      while Rem_Sz >= 8 loop
-         IO.Put_Line (F, "    str     xzr, [x29, #" & Img (Curr) & "]");
-         Curr := Curr + 8;
-         Rem_Sz := Rem_Sz - 8;
-      end loop;
-      if Rem_Sz >= 4 then
-         IO.Put_Line (F, "    str     wzr, [x29, #" & Img (Curr) & "]");
-         Curr := Curr + 4;
-         Rem_Sz := Rem_Sz - 4;
-      end if;
-      if Rem_Sz >= 2 then
-         IO.Put_Line (F, "    strh    wzr, [x29, #" & Img (Curr) & "]");
-         Curr := Curr + 2;
-         Rem_Sz := Rem_Sz - 2;
-      end if;
-      if Rem_Sz >= 1 then
-         IO.Put_Line (F, "    strb    wzr, [x29, #" & Img (Curr) & "]");
-      end if;
-   end Zero_Fill;
+   procedure Zero_Fill (Off : Natural; Sz : Natural) is separate;
 
    --  §6.4.3 widening `a +@ b` / `a *@ b`: materialise the .{low, high}
    --  tuple at Off+0 (low) and Off+W (high). Operand type T is W bytes.
    procedure Lower_Widening
      (Off : Natural; E : Expr_Access; W_Off : Natural)
-   is
-      T_Ty   : constant Type_Access := Type_Of_Expr (E.B_Lhs, ST);
-      W      : constant Natural := Sizeof (T_Ty);
-      Signed : constant Boolean := Is_Signed_Int (T_Ty);
-      Add    : constant Boolean := E.B_Op = B_Wide_Add;
-   begin
-      --  Evaluate operands: lhs -> x9 (spilled), rhs -> x10, reload x9.
-      Lower_Expr_Into_Reg (F, E.B_Lhs, 9, ST);
-      IO.Put_Line (F, "    sub     sp, sp, #16");
-      IO.Put_Line (F, "    str     x9, [sp]");
-      Lower_Expr_Into_Reg (F, E.B_Rhs, 10, ST);
-      IO.Put_Line (F, "    ldr     x9, [sp]");
-      IO.Put_Line (F, "    add     sp, sp, #16");
-
-      if W < 8 then
-         --  Exact in 64-bit; low and high are W-byte slices.
-         if Signed then
-            IO.Put_Line (F, "    sxt" & (if W = 1 then "b" elsif W = 2
-                            then "h" else "w") & "    x9, w9");
-            IO.Put_Line (F, "    sxt" & (if W = 1 then "b" elsif W = 2
-                            then "h" else "w") & "    x10, w10");
-         else
-            if W = 1 then
-               IO.Put_Line (F, "    uxtb    w9, w9");
-               IO.Put_Line (F, "    uxtb    w10, w10");
-            elsif W = 2 then
-               IO.Put_Line (F, "    uxth    w9, w9");
-               IO.Put_Line (F, "    uxth    w10, w10");
-            else
-               IO.Put_Line (F, "    mov     w9, w9");
-               IO.Put_Line (F, "    mov     w10, w10");
-            end if;
-         end if;
-         IO.Put_Line (F, "    " & (if Add then "add " else "mul ")
-                         & "    x11, x9, x10");
-         IO.Put_Line (F, "    mov     x9, x11");
-         Store_Sized (Off, W);                       --  low
-         IO.Put_Line (F, "    " & (if Signed then "asr " else "lsr ")
-                         & "    x9, x11, #" & Img (8 * W));
-         Store_Sized (Off + W_Off, W);               --  high
-      else
-         --  64-bit: flag/high-multiply based.
-         if Add then
-            if Signed then
-               IO.Put_Line (F, "    asr     x11, x9, #63");
-               IO.Put_Line (F, "    asr     x12, x10, #63");
-               IO.Put_Line (F, "    adds    x9, x9, x10");
-               Store_Sized (Off, 8);
-               IO.Put_Line (F, "    adc     x9, x11, x12");
-               Store_Sized (Off + W_Off, 8);
-            else
-               IO.Put_Line (F, "    adds    x9, x9, x10");
-               Store_Sized (Off, 8);
-               IO.Put_Line (F, "    adc     x9, xzr, xzr");
-               Store_Sized (Off + W_Off, 8);
-            end if;
-         else  --  multiply
-            IO.Put_Line (F, "    " & (if Signed then "smulh" else "umulh")
-                            & "   x11, x9, x10");
-            IO.Put_Line (F, "    mul     x9, x9, x10");
-            Store_Sized (Off, 8);
-            IO.Put_Line (F, "    mov     x9, x11");
-            Store_Sized (Off + W_Off, 8);
-         end if;
-      end if;
-   end Lower_Widening;
+   is separate;
 
    --  Materialise a tuple-typed initialiser into the frame slot at Off.
    procedure Store_Tuple_Init
      (Off : Natural; Tup : Type_Access; Init : Expr_Access)
-   is
-   begin
-      if Init.Kind = E_Tuple_Lit then
-         for I in Init.TL_Elems.First_Index .. Init.TL_Elems.Last_Index loop
-            declare
-               Idx : constant Natural := I - Init.TL_Elems.First_Index;
-            begin
-               Lower_Expr_Into_Reg (F, Init.TL_Elems.Element (I), 9, ST);
-               Store_Sized
-                 (Off + Kurt.Layout.Tuple_Field_Offset (Tup, Idx),
-                  Sizeof (Kurt.Layout.Tuple_Field_Type (Tup, Idx)));
-            end;
-         end loop;
-      elsif Init.Kind = E_Binary
-        and then (Init.B_Op = B_Wide_Add or else Init.B_Op = B_Wide_Mul)
-      then
-         Lower_Widening (Off, Init, Kurt.Layout.Tuple_Field_Offset (Tup, 1));
-      else
-         raise Program_Error with
-           "codegen: unsupported tuple initialiser";
-      end if;
-   end Store_Tuple_Init;
+   is separate;
 
    --  §8.4 lower a brace-delimited statement list as a lexical scope: the
    --  block's `with destruct` locals are destroyed (LIFO) at its textual
