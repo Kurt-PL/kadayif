@@ -9,9 +9,11 @@ separate (Kurt.Parser)
                  Take_Ident (C, "payload binding");
             begin
                if C.Cur.Kind = Punct_Eq then
+                  --  §5.10.2 long form `binding = field`: the leading side is
+                  --  the binding name, the following side the field name.
                   Advance (C);   --  '='
-                  P.Bind_Fields.Append (N1);
-                  P.Bindings.Append (Take_Ident (C, "renamed binding"));
+                  P.Bindings.Append (N1);
+                  P.Bind_Fields.Append (Take_Ident (C, "field name"));
                else
                   P.Bind_Fields.Append (SU.Null_Unbounded_String);
                   P.Bindings.Append (N1);
