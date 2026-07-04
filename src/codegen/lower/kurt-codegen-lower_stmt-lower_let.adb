@@ -562,6 +562,34 @@ separate (Kurt.Codegen.Lower_Stmt)
                      --  a scratch register and copy T's bytes into the slot.
                      Lower_Expr_Into_Reg (F, S.L_Init.D_Inner, 10, ST);
                      Emit_Mem_Copy (F, "x10", 0, "x29", Off, Sizeof (Ty));
+                  elsif S.L_Init.Kind = E_Field
+                    and then S.L_Init.F_Recv.Kind = E_Path
+                    and then Natural (S.L_Init.F_Recv.Segments.Length) = 1
+                    and then Find_Binding
+                      (ST, SU.To_String
+                             (S.L_Init.F_Recv.Segments.Last_Element)) /= 0
+                  then
+                     --  §8.8.1 aggregate copy from an aggregate field of a
+                     --  frame binding (`let a: T = s.fld;`): copy from the
+                     --  field's fixed frame offset into the slot.
+                     declare
+                        B : constant Binding := ST.Bindings.Element
+                          (Find_Binding
+                             (ST, SU.To_String
+                                    (S.L_Init.F_Recv.Segments.Last_Element)));
+                        FN : constant String := SU.To_String (S.L_Init.F_Name);
+                        FOff : Natural;
+                     begin
+                        if B.Ty /= null and then B.Ty.Kind = T_Tuple then
+                           FOff := Kurt.Layout.Tuple_Field_Offset
+                             (B.Ty, Natural'Value (FN));
+                        else
+                           FOff := Kurt.Layout.Field_Offset
+                             (SU.To_String (B.Ty.Name), FN);
+                        end if;
+                        Emit_Mem_Copy
+                          (F, "x29", B.Offset + FOff, "x29", Off, Sizeof (Ty));
+                     end;
                   else
                      raise Program_Error with
                        "codegen: aggregate copy initialiser not yet supported";

@@ -1,14 +1,18 @@
 @dyn as posix { variadic fn printf(&raw ui1) -> si4; }
 
-// §8.8.1 an aggregate `let` initialised from a dereferenced pointer copies
-// the referent's bytes into the binding's slot (`let b: T = *p;`).
+// §8.8.1 an aggregate `let` may be initialised from a dereferenced pointer
+// (`let b: T = *p;`) or from an aggregate field of a binding (`let c: T =
+// s.fld;`); both copy the source bytes into the binding's slot.
 struct pt { x: si4, y: si4 }
+struct box { tag: si4, p: pt }
 
 fn main() -> ui1 {
-    let a: pt = pt { x = 1, y = 2 };
+    let a: pt  = pt { x = 1, y = 2 };
+    let s: box = box { tag = 9, p = a };
+    let c: pt  = s.p;                   // aggregate field copy
     airside {
         let b: pt = *(&a as &raw pt);   // aggregate deref-copy
-        posix::printf("b=(%d,%d)\n\0".ptr, b.x, b.y);   // b=(1,2)
-    }
+        posix::printf("b=(%d,%d) c=(%d,%d)\n\0".ptr, b.x, b.y, c.x, c.y);
+    }                                   // b=(1,2) c=(1,2)
     return 0;
 }
