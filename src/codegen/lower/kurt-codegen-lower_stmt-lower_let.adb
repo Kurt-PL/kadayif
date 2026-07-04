@@ -556,6 +556,12 @@ separate (Kurt.Codegen.Lower_Stmt)
                      --  §7.2.1 polarity-inverted contract values.
                      Lower_Expr_Into_Reg (F, S.L_Init, 9, ST);
                      Store_Sized (Off, Sizeof (Ty));
+                  elsif S.L_Init.Kind = E_Deref then
+                     --  §8.8.1 aggregate copy from a dereferenced pointer
+                     --  (`let a: T = *p;`): materialise the source address in
+                     --  a scratch register and copy T's bytes into the slot.
+                     Lower_Expr_Into_Reg (F, S.L_Init.D_Inner, 10, ST);
+                     Emit_Mem_Copy (F, "x10", 0, "x29", Off, Sizeof (Ty));
                   else
                      raise Program_Error with
                        "codegen: aggregate copy initialiser not yet supported";

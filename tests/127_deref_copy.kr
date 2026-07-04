@@ -1,0 +1,14 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §8.8.1 an aggregate `let` initialised from a dereferenced pointer copies
+// the referent's bytes into the binding's slot (`let b: T = *p;`).
+struct pt { x: si4, y: si4 }
+
+fn main() -> ui1 {
+    let a: pt = pt { x = 1, y = 2 };
+    airside {
+        let b: pt = *(&a as &raw pt);   // aggregate deref-copy
+        posix::printf("b=(%d,%d)\n\0".ptr, b.x, b.y);   // b=(1,2)
+    }
+    return 0;
+}
