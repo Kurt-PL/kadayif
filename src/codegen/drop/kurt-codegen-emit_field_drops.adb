@@ -4,7 +4,8 @@ separate (Kurt.Codegen)
    is
    begin
       if Kurt.Layout.Is_Struct (Tn) then
-         for I in 1 .. Kurt.Layout.Struct_Field_Count (Tn) loop
+         --  §8.11 fields are destroyed in reverse declaration order.
+         for I in reverse 1 .. Kurt.Layout.Struct_Field_Count (Tn) loop
             declare
                FN : constant String := Kurt.Layout.Struct_Field_Name (Tn, I);
                FT : constant Kurt.Parser.Type_Access :=
@@ -53,7 +54,8 @@ separate (Kurt.Codegen)
                         IO.Put_Line (F, "    mov     w11, #" & Img (VVal));
                         IO.Put_Line (F, "    cmp     w10, w11");
                         IO.Put_Line (F, "    b.ne    " & Skip);
-                        for FNo in 1 ..
+                        --  §8.11 reverse declaration order.
+                        for FNo in reverse 1 ..
                           Kurt.Layout.Variant_Field_Count (Tn, VNm)
                         loop
                            declare

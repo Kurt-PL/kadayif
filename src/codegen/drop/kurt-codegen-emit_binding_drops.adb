@@ -48,7 +48,8 @@ separate (Kurt.Codegen)
                        Kurt.Layout.Size_Of (B.Ty.Elem);
                      DN : constant String := SU.To_String (B.Ty.Elem.Name);
                   begin
-                     for K in 0 .. B.Ty.Len - 1 loop
+                     --  §8.11.1 reverse index order (last element first).
+                     for K in reverse 0 .. B.Ty.Len - 1 loop
                         IO.Put_Line (F, "    add     x0, x29, #"
                                         & Img (B.Offset + K * ES));
                         IO.Put_Line (F, "    bl      _" & DN & "$drop");

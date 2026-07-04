@@ -3,7 +3,7 @@
 // §8.11.1 the destructor of every `with destruct` value runs exactly once.
 // An array literal transfers its element bindings (their scope-exit drops are
 // suppressed); the array's own elements are destroyed once — here through the
-// enclosing struct's destructor, in index order.
+// enclosing struct's destructor, in reverse index order (last element first).
 struct sentry { id: si4 } with destruct {
     airside { posix::printf("drop %d\n\0".ptr, self.id); }
 };
@@ -17,5 +17,5 @@ fn main() -> ui1 {
     let arr: [sentry; 3] = [e0, e1, e2];   // e0/e1/e2 transferred into arr
     let h: holder = holder { arr = arr };  // arr transferred into h
     airside { posix::printf("body\n\0".ptr); }
-    return 0;                              // exactly: drop 0, drop 1, drop 2
+    return 0;                              // exactly: drop 2, drop 1, drop 0
 }

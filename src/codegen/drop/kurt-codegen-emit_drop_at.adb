@@ -14,7 +14,8 @@ separate (Kurt.Codegen)
             IO.Put_Line (F, "    bl      _"
                             & SU.To_String (T.Name) & "$drop");
          when Kurt.Parser.T_Array =>
-            for K in 0 .. T.Len - 1 loop
+            --  §8.11.1 array elements destroyed in reverse index order.
+            for K in reverse 0 .. T.Len - 1 loop
                Emit_Drop_At (F, Self_Off,
                              Off + K * Kurt.Layout.Size_Of (T.Elem), T.Elem);
             end loop;

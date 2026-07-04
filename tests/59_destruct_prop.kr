@@ -2,8 +2,8 @@
 
 // §8.11 destruct propagation: a type with no `with destruct` of its own
 // still satisfies `destruct` when a field/payload does, and the implicit
-// destructor destroys those parts. Struct fields go in DECLARATION order;
-// bindings within a scope go in reverse declaration order (LIFO).
+// destructor destroys those parts. Struct fields go in reverse declaration
+// order; bindings within a scope also go in reverse declaration order (LIFO).
 struct sentry { id: si4 } with destruct {
     airside { posix::printf("drop %d\n\0".ptr, self.id); }
 };
@@ -32,5 +32,5 @@ fn main() -> ui1 {
     // g1..g4 are moved, so not dropped. LIFO over live bindings: b, w, p.
     //   b -> payload sentry(4):            drop 4
     //   w -> block, then field sentry(3):  wrap, drop 3
-    //   p -> fields x(1), y(2) in order:  drop 1, drop 2
+    //   p -> fields y(2), x(1) reversed:  drop 2, drop 1
 }
