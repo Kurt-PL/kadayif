@@ -37,6 +37,10 @@ separate (Kurt.Layout)
             return 16;
          when T_Fn =>
             --  §4.10: a subroutine pointer equals `(&raw void)@size`.
+            --  NB §9.9.2 specifies an invocable type as the two-word
+            --  `.{ &raw void, &raw void }` (16 B). The bootstrap still
+            --  represents it one word (a bare callable pointer); switching
+            --  to the two-word form is a coordinated change (see HANDOFF).
             return Kurt.Address_Cells;
          when T_Tuple =>
             --  §4.7 / §4.11: positional fields, KSA-packed.
