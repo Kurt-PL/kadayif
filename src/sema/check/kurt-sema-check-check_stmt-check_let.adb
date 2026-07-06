@@ -66,6 +66,8 @@ separate (Kurt.Sema.Check.Check_Stmt)
                   if EN /= "" and then Is_Enum
                     and then Kurt.Layout.Has_Variant (EN, VN)
                   then
+                     Reject_Sub_Patterns
+                       (S.L_Refut_Pat, "a refutable `let`");
                      --  §5.10.2 field coverage.
                      Check_Payload_Coverage (S.L_Refut_Pat, EN, VN);
                      for K in 1 .. Natural (S.L_Refut_Pat.Bindings.Length)

@@ -185,11 +185,12 @@ package Kurt.Parser is
    type Type_Intrinsic_Op is (TI_Size, TI_Align, TI_Offset);
 
    --  Match patterns (bootstrap subset: enum variant path, integer
-   --  literal, numeric range, or the `#wild#` catch-all). Or-patterns
-   --  (`p | q`) are desugared at parse time into one arm per alternative,
-   --  so they need no dedicated kind here.
+   --  literal, numeric range, the anonymous-struct (tuple) pattern
+   --  `.{ ... }`, or the `#wild#` catch-all). Or-patterns (`p | q`) are
+   --  desugared at parse time into one arm per alternative, so they need
+   --  no dedicated kind here.
    type Pattern_Kind is
-     (Pat_Variant, Pat_Int, Pat_Wild, Pat_Range, Pat_Slice);
+     (Pat_Variant, Pat_Int, Pat_Wild, Pat_Range, Pat_Slice, Pat_Tuple);
 
    --  §7.4.2 a slice-pattern element: bind a name, compare an integer
    --  literal, ignore (`#wild#`), or the rest marker `...`.
@@ -225,6 +226,11 @@ package Kurt.Parser is
       Bind_Fields : Path_Segments.Vector;
       --  §5.10 `name # sub`: matched value bound to Bind_Name (empty = none).
       Bind_Name : SU.Unbounded_String;
+      --  §5.10.1 `#wild#(name)` (Pat_Wild only): the raw representation of
+      --  the matched value is bound to Wild_Bind as a `&[ui1]` cell slice.
+      --  Empty = the bare, discarding `#wild#` form. Distinct from
+      --  Bind_Name (`name # #wild#`), which binds at the original type.
+      Wild_Bind : SU.Unbounded_String;
       --  §7.4.2 Pat_Slice elements (in order); at most one SE_Rest.
       Slice_Elems : Slice_Elem_Vectors.Vector;
       --  §7.4.2 this Pat_Slice was written as a string-literal pattern

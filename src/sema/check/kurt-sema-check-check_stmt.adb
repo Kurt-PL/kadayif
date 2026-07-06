@@ -1,5 +1,24 @@
 separate (Kurt.Sema.Check)
    procedure Check_Stmt (S : Stmt_Access) is
+      --  Bootstrap restriction shared by the binding-form statements
+      --  (`let`-else / `if let` / `while let`): their payload clauses
+      --  accept plain binds and `binding = field` renames only. Nested
+      --  sub-patterns (`{ res::Yes { v } }`, `{ .{ a, b } }`,
+      --  `{ f # 0..=9 }`) are supported in `match`; here they would bind
+      --  silently wrong, so reject them cleanly.
+      procedure Reject_Sub_Patterns
+        (P : Kurt.Parser.Pattern; Ctx : String)
+      is
+      begin
+         for K in P.Sub_Pats.First_Index .. P.Sub_Pats.Last_Index loop
+            if P.Sub_Pats.Element (K) /= null then
+               Error ("nested / `#` sub-patterns are not yet supported in "
+                      & Ctx & " (bootstrap; use `match`)");
+               return;
+            end if;
+         end loop;
+      end Reject_Sub_Patterns;
+
       procedure Check_If is separate;
       procedure Check_While is separate;
       procedure Check_Assign is separate;

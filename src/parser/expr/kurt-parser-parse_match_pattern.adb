@@ -10,6 +10,62 @@ separate (Kurt.Parser)
          when Tok_Hash_Wild =>
             P.Kind := Pat_Wild;
             Advance (C);
+            --  §5.10.1 `#wild#(name)`: bind the raw representation of the
+            --  matched value to `name` as a `&[ui1]` cell slice (the bare
+            --  form discards it).
+            if C.Cur.Kind = Punct_LParen then
+               Advance (C);
+               P.Wild_Bind := Take_Ident (C, "#wild#(name) binding");
+               Expect (C, Punct_RParen, "')' to close #wild#(name)");
+            end if;
+         when Punct_Dot =>
+            --  §5.10.1 anonymous-struct (tuple) pattern `.{ p0, p1, ... }`:
+            --  positional decomposition; `...` is not permitted. Each
+            --  position is a plain binding, a `name # sub` binding, or a
+            --  full nested sub-pattern.
+            P.Kind := Pat_Tuple;
+            Advance (C);   --  '.'
+            Expect (C, Punct_LBrace, "'{' of tuple pattern");
+            if C.Cur.Kind /= Punct_RBrace then
+               loop
+                  if C.Cur.Kind = Op_Ellipsis then
+                     raise Syntax_Error with
+                       "`...` is not permitted in a tuple pattern "
+                       & "(spec 5.10.1) at line"
+                       & Positive'Image (C.Cur.Line);
+                  end if;
+                  if C.Cur.Kind = Tok_Ident
+                    and then Peek_Tok (C).Kind = Tok_Hash
+                  then
+                     --  `name # sub`: bind and test.
+                     P.Bindings.Append (C.Cur.Lexeme);
+                     P.Bind_Fields.Append (SU.Null_Unbounded_String);
+                     Advance (C);   --  name
+                     Advance (C);   --  '#'
+                     P.Sub_Pats.Append
+                       (new Pattern'(Parse_Match_Pattern (C)));
+                  elsif C.Cur.Kind = Tok_Ident
+                    and then Peek_Tok (C).Kind /= Punct_ColonColon
+                    and then Peek_Tok (C).Kind /= Punct_LBrace
+                  then
+                     --  Plain positional binding.
+                     P.Bindings.Append (C.Cur.Lexeme);
+                     P.Bind_Fields.Append (SU.Null_Unbounded_String);
+                     P.Sub_Pats.Append (null);
+                     Advance (C);
+                  else
+                     --  Full nested sub-pattern in this position.
+                     P.Bindings.Append (SU.Null_Unbounded_String);
+                     P.Bind_Fields.Append (SU.Null_Unbounded_String);
+                     P.Sub_Pats.Append
+                       (new Pattern'(Parse_Match_Pattern (C)));
+                  end if;
+                  exit when C.Cur.Kind /= Punct_Comma;
+                  Advance (C);
+                  exit when C.Cur.Kind = Punct_RBrace;
+               end loop;
+            end if;
+            Expect (C, Punct_RBrace, "'}' to close tuple pattern");
          when Tok_String_Lit =>
             --  §7.4.2 a string literal pattern `"abc"` is shorthand for the
             --  fixed-length slice pattern `[0x61, 0x62, 0x63]` (one `ui1`

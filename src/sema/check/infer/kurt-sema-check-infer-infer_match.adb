@@ -34,6 +34,60 @@ separate (Kurt.Sema.Check.Infer)
                Union_Moved   : Moved_Vec.Vector := Moved_Pre;
                Any_Live_Arm  : Boolean := False;
 
+               --  §5.10.1 `#wild#(name)`: the raw representation of the
+               --  matched value, a `&[ui1]` cell slice.
+               function Mk_Repr_Slice return Type_Access is
+                 (Mk_Ref (R_Shared, False, RS_None,
+                          new AST_Type'(Kind => T_Array,
+                                        Elem => Mk_Named ("ui1"),
+                                        Len  => 0,
+                                        Len_Expr => null)));
+
+               --  §5.10.4 conservative refutability of a pattern: True only
+               --  when P provably matches every value of its type. A
+               --  variant pattern over a real enum is treated as refutable
+               --  (the single-variant case is not special-cased here).
+               function Pat_Irrefutable
+                 (P : Kurt.Parser.Pattern) return Boolean;
+
+               --  Whether every sub-pattern slot of P is a plain binding or
+               --  an irrefutable sub-pattern.
+               function Subs_Irrefutable
+                 (P : Kurt.Parser.Pattern) return Boolean
+               is
+               begin
+                  for K in P.Sub_Pats.First_Index .. P.Sub_Pats.Last_Index
+                  loop
+                     if P.Sub_Pats.Element (K) /= null
+                       and then not Pat_Irrefutable
+                                      (P.Sub_Pats.Element (K).all)
+                     then
+                        return False;
+                     end if;
+                  end loop;
+                  return True;
+               end Subs_Irrefutable;
+
+               function Pat_Irrefutable
+                 (P : Kurt.Parser.Pattern) return Boolean
+               is
+               begin
+                  case P.Kind is
+                     when Pat_Wild =>
+                        return True;
+                     when Pat_Tuple =>
+                        return Subs_Irrefutable (P);
+                     when Pat_Variant =>
+                        --  A struct pattern / bare identifier is
+                        --  irrefutable when its sub-patterns are; an actual
+                        --  Enum::Variant path is refutable.
+                        return Natural (P.Path.Length) = 1
+                          and then Subs_Irrefutable (P);
+                     when Pat_Int | Pat_Range | Pat_Slice =>
+                        return False;
+                  end case;
+               end Pat_Irrefutable;
+
                --  §7.4 item(a): recursively type-check and bind a nested
                --  payload sub-pattern P against a value of type Ty (the raw
                --  field's own type -- an enum, a struct, or, at the leaf, a
@@ -51,6 +105,75 @@ separate (Kurt.Sema.Check.Infer)
                         if SU.Length (P.Bind_Name) > 0 then
                            Scope.Append
                              ((Name => P.Bind_Name, Ty => Ty, others => <>));
+                        end if;
+                        if SU.Length (P.Wild_Bind) > 0 then
+                           Scope.Append
+                             ((Name => P.Wild_Bind, Ty => Mk_Repr_Slice,
+                               others => <>));
+                        end if;
+                     when Pat_Int =>
+                        if not Is_Integer_Type (Ty) then
+                           Error ("integer sub-pattern matched against "
+                                  & "non-integer field '" & Image (Ty)
+                                  & "' (spec 5.10)");
+                        end if;
+                        if SU.Length (P.Bind_Name) > 0 then
+                           Scope.Append
+                             ((Name => P.Bind_Name, Ty => Ty, others => <>));
+                        end if;
+                     when Pat_Range =>
+                        if not Is_Integer_Type (Ty) then
+                           Error ("range sub-pattern matched against "
+                                  & "non-integer field '" & Image (Ty)
+                                  & "' (spec 5.10)");
+                        elsif P.Int_V > P.Range_Hi
+                          or else (not P.Range_Incl
+                                   and then P.Int_V = P.Range_Hi)
+                        then
+                           Error ("range pattern lower bound exceeds "
+                                  & "upper bound (empty range)");
+                        end if;
+                        if SU.Length (P.Bind_Name) > 0 then
+                           Scope.Append
+                             ((Name => P.Bind_Name, Ty => Ty, others => <>));
+                        end if;
+                     when Pat_Tuple =>
+                        --  §5.10.1/§5.10.2 anonymous-struct pattern:
+                        --  positional, every field accounted for.
+                        if Ty = null or else Ty.Kind /= T_Tuple then
+                           Error ("tuple pattern matched against "
+                                  & "non-tuple value '" & Image (Ty)
+                                  & "' (spec 5.10.1)");
+                        elsif Natural (P.Bindings.Length)
+                                /= Natural (Ty.Elems.Length)
+                        then
+                           Error ("tuple pattern has"
+                                  & P.Bindings.Length'Image
+                                  & " positions but the value type '"
+                                  & Image (Ty) & "' has"
+                                  & Ty.Elems.Length'Image
+                                  & " fields (spec 5.10.2)");
+                        else
+                           for K in 1 .. Natural (P.Bindings.Length) loop
+                              declare
+                                 FT : constant Type_Access :=
+                                   Ty.Elems.Element
+                                     (Ty.Elems.First_Index + (K - 1));
+                              begin
+                                 if SU.Length (P.Bindings.Element (K)) > 0
+                                 then
+                                    Scope.Append
+                                      ((Name => P.Bindings.Element (K),
+                                        Ty => FT, others => <>));
+                                 end if;
+                                 if K <= Natural (P.Sub_Pats.Length)
+                                   and then P.Sub_Pats.Element (K) /= null
+                                 then
+                                    Bind_Nested
+                                      (P.Sub_Pats.Element (K).all, FT);
+                                 end if;
+                              end;
+                           end loop;
                         end if;
                      when Pat_Variant =>
                         if Natural (P.Path.Length) = 1
@@ -103,16 +226,19 @@ separate (Kurt.Sema.Check.Infer)
                                              & "' has no field '" & FName
                                              & "' (spec 5.10.2)");
                                        end if;
+                                       if SU.Length
+                                            (P.Bindings.Element (K)) > 0
+                                       then
+                                          Scope.Append
+                                            ((Name => P.Bindings.Element (K),
+                                              Ty => FT, others => <>));
+                                       end if;
                                        if K <= Natural (P.Sub_Pats.Length)
                                          and then P.Sub_Pats.Element (K)
                                                     /= null
                                        then
                                           Bind_Nested
                                             (P.Sub_Pats.Element (K).all, FT);
-                                       else
-                                          Scope.Append
-                                            ((Name => P.Bindings.Element (K),
-                                              Ty => FT, others => <>));
                                        end if;
                                     end;
                                  end loop;
@@ -155,16 +281,19 @@ separate (Kurt.Sema.Check.Infer)
                                             & "requires an `airside` region "
                                             & "(spec 5.5.1/6.2.2)");
                                        end if;
+                                       if SU.Length
+                                            (P.Bindings.Element (K)) > 0
+                                       then
+                                          Scope.Append
+                                            ((Name => P.Bindings.Element (K),
+                                              Ty => FT, others => <>));
+                                       end if;
                                        if K <= Natural (P.Sub_Pats.Length)
                                          and then P.Sub_Pats.Element (K)
                                                     /= null
                                        then
                                           Bind_Nested
                                             (P.Sub_Pats.Element (K).all, FT);
-                                       else
-                                          Scope.Append
-                                            ((Name => P.Bindings.Element (K),
-                                              Ty => FT, others => <>));
                                        end if;
                                     end;
                                  end loop;
@@ -193,6 +322,13 @@ separate (Kurt.Sema.Check.Infer)
                            --  exhaustive — only an unguarded one does.
                            if Arm.Guard = null then
                               Has_Wild := True;
+                           end if;
+                           --  §5.10.1 `#wild#(name)`: bind the raw
+                           --  representation as a `&[ui1]` cell slice.
+                           if SU.Length (Arm.Pat.Wild_Bind) > 0 then
+                              Scope.Append
+                                ((Name => Arm.Pat.Wild_Bind,
+                                  Ty   => Mk_Repr_Slice, others => <>));
                            end if;
                         when Pat_Int =>
                            if not Is_Integer_Type (Scrut_Ty) then
@@ -305,6 +441,15 @@ separate (Kurt.Sema.Check.Infer)
                                                 & "`airside` region "
                                                 & "(spec 5.5.1/6.2.2)");
                                           end if;
+                                          if SU.Length
+                                               (Arm.Pat.Bindings.Element (K))
+                                               > 0
+                                          then
+                                             Scope.Append
+                                               ((Name => Arm.Pat.Bindings
+                                                           .Element (K),
+                                                 Ty   => FT, others => <>));
+                                          end if;
                                           if K <= Natural
                                                (Arm.Pat.Sub_Pats.Length)
                                             and then Arm.Pat.Sub_Pats.Element
@@ -313,23 +458,20 @@ separate (Kurt.Sema.Check.Infer)
                                              Bind_Nested
                                                (Arm.Pat.Sub_Pats.Element
                                                   (K).all, FT);
-                                          else
-                                             Scope.Append
-                                               ((Name => Arm.Pat.Bindings
-                                                           .Element (K),
-                                                 Ty   => FT, others => <>));
                                           end if;
                                        end;
                                     end loop;
                                  end if;
                               end;
-                              --  §5.10.4: a struct pattern mentioning every
-                              --  field, with the only sub-pattern kind this
-                              --  bootstrap subset parses in this position
-                              --  (plain bind/rename, always irrefutable),
-                              --  is itself irrefutable -- it covers the
-                              --  match like a bare identifier.
-                              if Arm.Guard = null then
+                              --  §5.10.4: a struct pattern mentioning
+                              --  every field is irrefutable -- covering the
+                              --  match like a bare identifier -- when every
+                              --  field sub-pattern is itself irrefutable (a
+                              --  `#`-attached literal/range/variant test
+                              --  makes the arm refutable).
+                              if Arm.Guard = null
+                                and then Subs_Irrefutable (Arm.Pat)
+                              then
                                  Has_Wild := True;
                               end if;
                            elsif Natural (Arm.Pat.Path.Length) = 1 then
@@ -392,6 +534,16 @@ separate (Kurt.Sema.Check.Infer)
                                        --  §7.4 item(a): a slot written as a
                                        --  nested pattern recurses instead of
                                        --  binding a plain name at this level.
+                                       if SU.Length
+                                            (Arm.Pat.Bindings.Element (K)) > 0
+                                       then
+                                          Scope.Append
+                                            ((Name => Arm.Pat.Bindings.Element
+                                                        (K),
+                                              Ty   => Pat_Field_Ty
+                                                (Arm.Pat, Scrut_Ty, VN, K),
+                                              others => <>));
+                                       end if;
                                        if K <= Natural
                                             (Arm.Pat.Sub_Pats.Length)
                                          and then Arm.Pat.Sub_Pats.Element (K)
@@ -401,13 +553,6 @@ separate (Kurt.Sema.Check.Infer)
                                             (Arm.Pat.Sub_Pats.Element (K).all,
                                              Pat_Field_Ty
                                                (Arm.Pat, Scrut_Ty, VN, K));
-                                       else
-                                          Scope.Append
-                                            ((Name => Arm.Pat.Bindings.Element
-                                                        (K),
-                                              Ty   => Pat_Field_Ty
-                                                (Arm.Pat, Scrut_Ty, VN, K),
-                                              others => <>));
                                        end if;
                                     end loop;
                                  end if;
@@ -415,6 +560,17 @@ separate (Kurt.Sema.Check.Infer)
                            else
                               Error ("variant pattern requires an enum "
                                      & "scrutinee");
+                           end if;
+                        when Pat_Tuple =>
+                           --  §5.10.1 anonymous-struct (tuple) pattern:
+                           --  positional decomposition of a tuple
+                           --  scrutinee; irrefutable (covers the match)
+                           --  when every sub-pattern is.
+                           Bind_Nested (Arm.Pat, Scrut_Ty);
+                           if Arm.Guard = null
+                             and then Subs_Irrefutable (Arm.Pat)
+                           then
+                              Has_Wild := True;
                            end if;
                         when Pat_Slice =>
                            --  §7.4.2 slice pattern: the scrutinee shall be
@@ -700,6 +856,11 @@ separate (Kurt.Sema.Check.Infer)
                                       and then SU.To_String
                                         (E.M_Arms.Element (I).Pat.Path
                                            .Last_Element) = VN
+                                      --  §5.10.4 a refutable payload
+                                      --  sub-pattern (`{ f # 0..=9 }`) does
+                                      --  not cover the variant.
+                                      and then Subs_Irrefutable
+                                        (E.M_Arms.Element (I).Pat)
                                     then
                                        Found := True;
                                     end if;

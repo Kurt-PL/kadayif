@@ -23,6 +23,7 @@ separate (Kurt.Sema.Check.Check_Stmt)
                      Check_Block (S.SI_Then);
                      Check_Block (S.SI_Else);
                   else
+                     Reject_Sub_Patterns (S.SI_Let_Pat, "`if let`");
                      --  §5.10.2 field coverage.
                      Check_Payload_Coverage (S.SI_Let_Pat, EN, VN);
                      --  then-block sees the positional payload bindings.

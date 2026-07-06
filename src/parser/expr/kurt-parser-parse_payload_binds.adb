@@ -12,13 +12,16 @@ separate (Kurt.Parser)
                exit;
             end if;
             --  §7.4 item(a): a slot written as a full nested pattern
-            --  (`res::Yes { v }` or a nested struct pattern `pt { x, y }`)
-            --  rather than a plain `name` / `name = field`. Distinguished
-            --  by what follows the leading identifier -- a plain binding
-            --  or rename is never itself followed by `::` or `{`.
-            if C.Cur.Kind = Tok_Ident
-              and then (Peek_Tok (C).Kind = Punct_ColonColon
-                        or else Peek_Tok (C).Kind = Punct_LBrace)
+            --  (`res::Yes { v }`, a nested struct pattern `pt { x, y }`,
+            --  or a tuple pattern `.{ a, b }`) rather than a plain
+            --  `name` / `name = field`. Distinguished by what follows the
+            --  leading identifier -- a plain binding or rename is never
+            --  itself followed by `::` or `{`.
+            if (C.Cur.Kind = Tok_Ident
+                and then (Peek_Tok (C).Kind = Punct_ColonColon
+                          or else Peek_Tok (C).Kind = Punct_LBrace))
+              or else (C.Cur.Kind = Punct_Dot
+                       and then Peek_Tok (C).Kind = Punct_LBrace)
             then
                P.Bindings.Append (SU.Null_Unbounded_String);
                P.Bind_Fields.Append (SU.Null_Unbounded_String);
@@ -45,10 +48,20 @@ separate (Kurt.Parser)
                      P.Bindings.Append (N1);
                   end if;
                   while Natural (P.Sub_Pats.Length)
-                          < Natural (P.Bindings.Length)
+                          < Natural (P.Bindings.Length) - 1
                   loop
                      P.Sub_Pats.Append (null);
                   end loop;
+                  --  §5.10 field sub-pattern `[binding =] field # sub`:
+                  --  the field is bound to the name AND tested against
+                  --  the sub-pattern (spec 7.4, `point { x # 0..=100 }`).
+                  if C.Cur.Kind = Tok_Hash then
+                     Advance (C);   --  '#'
+                     P.Sub_Pats.Append
+                       (new Pattern'(Parse_Match_Pattern (C)));
+                  else
+                     P.Sub_Pats.Append (null);
+                  end if;
                end;
             end if;
             exit when C.Cur.Kind /= Punct_Comma;

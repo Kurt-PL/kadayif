@@ -22,10 +22,96 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
       Struct_Binding : Boolean := False;
       SBase          : Cell_Count := 0;
       SN             : SU.Unbounded_String;
+      --  §5.10.1 a tuple binding matched by `.{ ... }` patterns in place:
+      --  positional bindings alias the scrutinee's slot + field offset.
+      Tuple_Binding : Boolean := False;
+      TBase         : Cell_Count := 0;
 
       function Is_Struct_Pat (P : Pattern) return Boolean is
         (P.Kind = Pat_Variant and then Natural (P.Path.Length) = 1
          and then (not P.Bindings.Is_Empty or else P.Has_Rest));
+
+      --  §5.10.1 `#wild#(name)` raw-representation binding: the matched
+      --  value's cells viewed as a `&[ui1]` slice. Materialise the fat
+      --  reference (ptr = the value's frame address, len = its size) in a
+      --  fresh 16-byte temp and register the binding there.
+      function Mk_Repr_Slice_Ty return Type_Access is
+         Arr : constant Type_Access :=
+           new AST_Type'(Kind => T_Array,
+                         Elem => new AST_Type'
+                           (Kind => T_Named,
+                            Name => SU.To_Unbounded_String ("ui1"),
+                            Args => <>),
+                         Len => 0, Len_Expr => null);
+      begin
+         return new AST_Type'(Kind => T_Ref, Sigil => R_Shared,
+                              R_Volatile => False, R_Store => RS_None,
+                              R_Life => SU.Null_Unbounded_String,
+                              Target => Arr);
+      end Mk_Repr_Slice_Ty;
+
+      procedure Bind_Wild_Repr
+        (Name : SU.Unbounded_String; Base : Cell_Count; Sz : Cell_Count)
+      is
+         Tmp : constant Cell_Count :=
+           ((ST.Next_Offset + 7) / 8) * 8;
+      begin
+         ST.Next_Offset := Tmp + 16;
+         IO.Put_Line (F, "    add     x9, x29, #" & Img (Base));
+         IO.Put_Line (F, "    str     x9, [x29, #" & Img (Tmp) & "]");
+         Lower_Imm (F, 9, Long_Long_Integer (Sz), True);
+         IO.Put_Line (F, "    str     x9, [x29, #" & Img (Tmp + 8) & "]");
+         ST.Bindings.Append
+           ((Name => Name, Offset => Tmp, Ty => Mk_Repr_Slice_Ty));
+      end Bind_Wild_Repr;
+
+      --  §5.10 integer / range sub-pattern test against the Sz-cell value
+      --  at [x29, #Base]: load it (sign- or zero-extended to 64 bits per
+      --  the value type's signedness), compare, and fall through to
+      --  L_Next on a mismatch.
+      procedure Test_Scalar_At
+        (P : Pattern; Ty : Type_Access; Base : Cell_Count; L_Next : String)
+      is
+         Sz     : constant Cell_Count := Sizeof (Ty);
+         Signed : constant Boolean := Is_Signed_Int (Ty);
+         Loc    : constant String := ", [x29, #" & Img (Base) & "]";
+         C_Lt   : constant String := (if Signed then "lt" else "lo");
+         C_Gt   : constant String := (if Signed then "gt" else "hi");
+         C_Ge   : constant String := (if Signed then "ge" else "hs");
+      begin
+         if Sz = 1 then
+            IO.Put_Line (F, "    ldrb    w9" & Loc);
+            if Signed then
+               IO.Put_Line (F, "    sxtb    x9, w9");
+            end if;
+         elsif Sz = 2 then
+            IO.Put_Line (F, "    ldrh    w9" & Loc);
+            if Signed then
+               IO.Put_Line (F, "    sxth    x9, w9");
+            end if;
+         elsif Sz = 4 then
+            IO.Put_Line (F, "    ldr     w9" & Loc);
+            if Signed then
+               IO.Put_Line (F, "    sxtw    x9, w9");
+            end if;
+         else
+            IO.Put_Line (F, "    ldr     x9" & Loc);
+         end if;
+         if P.Kind = Pat_Int then
+            Lower_Imm (F, 10, P.Int_V, True);
+            IO.Put_Line (F, "    cmp     x9, x10");
+            IO.Put_Line (F, "    b.ne    " & L_Next);
+         else   --  Pat_Range
+            Lower_Imm (F, 10, P.Int_V, True);
+            IO.Put_Line (F, "    cmp     x9, x10");
+            IO.Put_Line (F, "    b." & C_Lt & "    " & L_Next);
+            Lower_Imm (F, 10, P.Range_Hi, True);
+            IO.Put_Line (F, "    cmp     x9, x10");
+            IO.Put_Line (F, "    b."
+              & (if P.Range_Incl then C_Gt else C_Ge)
+              & "    " & L_Next);
+         end if;
+      end Test_Scalar_At;
 
       --  §7.4 item(a): recursively lower a nested payload sub-pattern P
       --  against the value at frame offset Base (type Ty), within the
@@ -43,6 +129,40 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                   ST.Bindings.Append
                     ((Name => P.Bind_Name, Offset => Base, Ty => Ty));
                end if;
+               if SU.Length (P.Wild_Bind) > 0 then
+                  Bind_Wild_Repr (P.Wild_Bind, Base, Sizeof (Ty));
+               end if;
+            when Pat_Int | Pat_Range =>
+               --  §5.10 `#`-attached scalar test on a payload/tuple field
+               --  (`name # sub` arrives as the sub-pattern carrying
+               --  Bind_Name).
+               Test_Scalar_At (P, Ty, Base, L_Next);
+               if SU.Length (P.Bind_Name) > 0 then
+                  ST.Bindings.Append
+                    ((Name => P.Bind_Name, Offset => Base, Ty => Ty));
+               end if;
+            when Pat_Tuple =>
+               --  §5.10.1 positional decomposition of the tuple at Base.
+               for K in 1 .. Natural (P.Bindings.Length) loop
+                  declare
+                     FOff : constant Cell_Count :=
+                       Base + Kurt.Layout.Tuple_Field_Offset (Ty, K - 1);
+                     FT   : constant Type_Access :=
+                       Kurt.Layout.Tuple_Field_Type (Ty, K - 1);
+                  begin
+                     if SU.Length (P.Bindings.Element (K)) > 0 then
+                        ST.Bindings.Append
+                          ((Name   => P.Bindings.Element (K),
+                            Offset => FOff, Ty => FT));
+                     end if;
+                     if K <= Natural (P.Sub_Pats.Length)
+                       and then P.Sub_Pats.Element (K) /= null
+                     then
+                        Bind_Nested_CG
+                          (P.Sub_Pats.Element (K).all, FT, FOff, L_Next);
+                     end if;
+                  end;
+               end loop;
             when Pat_Variant =>
                if Natural (P.Path.Length) = 1
                  and then (not P.Bindings.Is_Empty or else P.Has_Rest)
@@ -68,16 +188,17 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                            FT   : constant Type_Access :=
                              Kurt.Layout.Field_Type (Snm, FName);
                         begin
+                           if SU.Length (P.Bindings.Element (K)) > 0 then
+                              ST.Bindings.Append
+                                ((Name   => P.Bindings.Element (K),
+                                  Offset => FOff, Ty => FT));
+                           end if;
                            if K <= Natural (P.Sub_Pats.Length)
                              and then P.Sub_Pats.Element (K) /= null
                            then
                               Bind_Nested_CG
                                 (P.Sub_Pats.Element (K).all, FT, FOff,
                                  L_Next);
-                           else
-                              ST.Bindings.Append
-                                ((Name   => P.Bindings.Element (K),
-                                  Offset => FOff, Ty => FT));
                            end if;
                         end;
                      end loop;
@@ -109,16 +230,17 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                            FT   : constant Type_Access :=
                              Pat_Field_Ty (P, Ty, VN2, K);
                         begin
+                           if SU.Length (P.Bindings.Element (K)) > 0 then
+                              ST.Bindings.Append
+                                ((Name   => P.Bindings.Element (K),
+                                  Offset => FOff, Ty => FT));
+                           end if;
                            if K <= Natural (P.Sub_Pats.Length)
                              and then P.Sub_Pats.Element (K) /= null
                            then
                               Bind_Nested_CG
                                 (P.Sub_Pats.Element (K).all, FT, FOff,
                                  L_Next);
-                           else
-                              ST.Bindings.Append
-                                ((Name   => P.Bindings.Element (K),
-                                  Offset => FOff, Ty => FT));
                            end if;
                         end;
                      end loop;
@@ -156,6 +278,22 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                      SN    := Scrut_T.Name;
                   end if;
                end;
+            end if;
+         end;
+      end if;
+
+      if Scrut_T /= null and then Scrut_T.Kind = T_Tuple
+        and then E.M_Scrut.Kind = E_Path
+        and then Natural (E.M_Scrut.Segments.Length) = 1
+      then
+         declare
+            Bi : constant Natural :=
+              Find_Binding (ST, SU.To_String
+                              (E.M_Scrut.Segments.Last_Element));
+         begin
+            if Bi /= 0 then
+               Tuple_Binding := True;
+               TBase := ST.Bindings.Element (Bi).Offset;
             end if;
          end;
       end if;
@@ -209,16 +347,31 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                      when Pat_Wild =>
                         --  §7.4: a guard on a catch-all may fail, so it needs
                         --  a fall-through label to the following arm.
-                        if Arm.Guard /= null then
-                           Lower_Expr_Into_Reg (F, Arm.Guard, Target_Reg, ST);
-                           IO.Put_Line (F, "    cbz     w" & Img (Target_Reg)
-                                           & ", " & L_Next);
-                        end if;
-                        Lower_Expr_Into_Reg (F, Arm.Arm_Body, Target_Reg, ST);
-                        IO.Put_Line (F, "    b       " & L_End);
-                        if Arm.Guard /= null then
-                           IO.Put_Line (F, L_Next & ":");
-                        end if;
+                        declare
+                           Saved : constant Natural :=
+                             Natural (ST.Bindings.Length);
+                        begin
+                           if SU.Length (Arm.Pat.Wild_Bind) > 0 then
+                              Bind_Wild_Repr
+                                (Arm.Pat.Wild_Bind, Base, Sizeof (Scrut_T));
+                           end if;
+                           if Arm.Guard /= null then
+                              Lower_Expr_Into_Reg
+                                (F, Arm.Guard, Target_Reg, ST);
+                              IO.Put_Line (F, "    cbz     w"
+                                              & Img (Target_Reg)
+                                              & ", " & L_Next);
+                           end if;
+                           Lower_Expr_Into_Reg
+                             (F, Arm.Arm_Body, Target_Reg, ST);
+                           while Natural (ST.Bindings.Length) > Saved loop
+                              ST.Bindings.Delete_Last;
+                           end loop;
+                           IO.Put_Line (F, "    b       " & L_End);
+                           if Arm.Guard /= null then
+                              IO.Put_Line (F, L_Next & ":");
+                           end if;
+                        end;
                      when Pat_Variant =>
                         if Natural (Arm.Pat.Path.Length) = 1 then
                            --  §5.10.1 bare-identifier catch-all over an enum:
@@ -276,6 +429,14 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                                  FT   : constant Type_Access :=
                                    Pat_Field_Ty (Arm.Pat, Scrut_T, VN, K);
                               begin
+                                 if SU.Length
+                                      (Arm.Pat.Bindings.Element (K)) > 0
+                                 then
+                                    ST.Bindings.Append
+                                      ((Name   => Arm.Pat.Bindings.Element
+                                                    (K),
+                                        Offset => FOff, Ty => FT));
+                                 end if;
                                  if K <= Natural (Arm.Pat.Sub_Pats.Length)
                                    and then Arm.Pat.Sub_Pats.Element (K)
                                               /= null
@@ -283,11 +444,6 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                                     Bind_Nested_CG
                                       (Arm.Pat.Sub_Pats.Element (K).all, FT,
                                        FOff, L_Next);
-                                 else
-                                    ST.Bindings.Append
-                                      ((Name   => Arm.Pat.Bindings.Element
-                                                    (K),
-                                        Offset => FOff, Ty => FT));
                                  end if;
                               end;
                            end loop;
@@ -307,9 +463,10 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                            IO.Put_Line (F, L_Next & ":");
                         end;
                         end if;
-                     when Pat_Int | Pat_Range | Pat_Slice =>
+                     when Pat_Int | Pat_Range | Pat_Slice | Pat_Tuple =>
                         raise Program_Error with
-                          "codegen: numeric/slice pattern on enum scrutinee";
+                          "codegen: numeric/slice/tuple pattern on enum "
+                          & "scrutinee";
                   end case;
                end;
             end loop;
@@ -332,8 +489,22 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                     "Lmarm_" & FN & "_" & Img (Idx) & "_" & Img (I);
                begin
                   if Arm.Pat.Kind = Pat_Wild then
-                     Lower_Expr_Into_Reg (F, Arm.Arm_Body, Target_Reg, ST);
-                     IO.Put_Line (F, "    b       " & L_End);
+                     declare
+                        Saved : constant Natural :=
+                          Natural (ST.Bindings.Length);
+                     begin
+                        if SU.Length (Arm.Pat.Wild_Bind) > 0 then
+                           Bind_Wild_Repr
+                             (Arm.Pat.Wild_Bind, Arr_Base,
+                              Sizeof (Scrut_T));
+                        end if;
+                        Lower_Expr_Into_Reg
+                          (F, Arm.Arm_Body, Target_Reg, ST);
+                        while Natural (ST.Bindings.Length) > Saved loop
+                           ST.Bindings.Delete_Last;
+                        end loop;
+                        IO.Put_Line (F, "    b       " & L_End);
+                     end;
                   elsif Arm.Pat.Kind = Pat_Slice then
                      declare
                         SE       : Slice_Elem_Vectors.Vector renames
@@ -449,20 +620,36 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                     "Lmarm_" & FN & "_" & Img (Idx) & "_" & Img (I);
                begin
                   if Arm.Pat.Kind = Pat_Wild then
-                     if Arm.Guard /= null then
-                        Lower_Expr_Into_Reg (F, Arm.Guard, Target_Reg, ST);
-                        IO.Put_Line (F, "    cbz     w" & Img (Target_Reg)
-                                        & ", " & L_Next);
-                     end if;
-                     Lower_Expr_Into_Reg (F, Arm.Arm_Body, Target_Reg, ST);
-                     IO.Put_Line (F, "    b       " & L_End);
-                     if Arm.Guard /= null then
-                        IO.Put_Line (F, L_Next & ":");
-                     end if;
+                     declare
+                        Saved : constant Natural :=
+                          Natural (ST.Bindings.Length);
+                     begin
+                        if SU.Length (Arm.Pat.Wild_Bind) > 0 then
+                           Bind_Wild_Repr
+                             (Arm.Pat.Wild_Bind, SBase, Sizeof (Scrut_T));
+                        end if;
+                        if Arm.Guard /= null then
+                           Lower_Expr_Into_Reg
+                             (F, Arm.Guard, Target_Reg, ST);
+                           IO.Put_Line (F, "    cbz     w"
+                                           & Img (Target_Reg)
+                                           & ", " & L_Next);
+                        end if;
+                        Lower_Expr_Into_Reg
+                          (F, Arm.Arm_Body, Target_Reg, ST);
+                        while Natural (ST.Bindings.Length) > Saved loop
+                           ST.Bindings.Delete_Last;
+                        end loop;
+                        IO.Put_Line (F, "    b       " & L_End);
+                        if Arm.Guard /= null then
+                           IO.Put_Line (F, L_Next & ":");
+                        end if;
+                     end;
                   elsif Is_Struct_Pat (Arm.Pat) then
                      declare
                         Saved : constant Natural :=
                           Natural (ST.Bindings.Length);
+                        Need_Next : Boolean := Arm.Guard /= null;
                      begin
                         for K in 1 .. Natural (Arm.Pat.Bindings.Length) loop
                            declare
@@ -483,17 +670,21 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                               FT   : constant Type_Access :=
                                 Kurt.Layout.Field_Type (Snm, FName);
                            begin
+                              if SU.Length
+                                   (Arm.Pat.Bindings.Element (K)) > 0
+                              then
+                                 ST.Bindings.Append
+                                   ((Name   => Arm.Pat.Bindings.Element (K),
+                                     Offset => FOff, Ty => FT));
+                              end if;
                               if K <= Natural (Arm.Pat.Sub_Pats.Length)
                                 and then Arm.Pat.Sub_Pats.Element (K)
                                            /= null
                               then
+                                 Need_Next := True;
                                  Bind_Nested_CG
                                    (Arm.Pat.Sub_Pats.Element (K).all, FT,
                                     FOff, L_Next);
-                              else
-                                 ST.Bindings.Append
-                                   ((Name   => Arm.Pat.Bindings.Element (K),
-                                     Offset => FOff, Ty => FT));
                               end if;
                            end;
                         end loop;
@@ -508,7 +699,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                            ST.Bindings.Delete_Last;
                         end loop;
                         IO.Put_Line (F, "    b       " & L_End);
-                        if Arm.Guard /= null then
+                        if Need_Next then
                            IO.Put_Line (F, L_Next & ":");
                         end if;
                      end;
@@ -546,6 +737,79 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                end;
             end loop;
          end;
+      elsif Tuple_Binding then
+         --  §5.10.1 `.{ ... }` patterns over a tuple binding: positional
+         --  bindings alias the scrutinee's slot + field offsets; a
+         --  `#`-attached sub-pattern tests in place and falls through to
+         --  the next arm on a mismatch.
+         for I in E.M_Arms.First_Index .. E.M_Arms.Last_Index loop
+            declare
+               Arm    : constant Match_Arm := E.M_Arms.Element (I);
+               L_Next : constant String :=
+                 "Lmarm_" & FN & "_" & Img (Idx) & "_" & Img (I);
+               Saved  : constant Natural := Natural (ST.Bindings.Length);
+               Need_Next : Boolean := Arm.Guard /= null;
+            begin
+               if Arm.Pat.Kind = Pat_Wild then
+                  if SU.Length (Arm.Pat.Wild_Bind) > 0 then
+                     Bind_Wild_Repr
+                       (Arm.Pat.Wild_Bind, TBase, Sizeof (Scrut_T));
+                  end if;
+               elsif Arm.Pat.Kind = Pat_Tuple then
+                  for K in 1 .. Natural (Arm.Pat.Bindings.Length) loop
+                     declare
+                        FOff : constant Cell_Count :=
+                          TBase
+                            + Kurt.Layout.Tuple_Field_Offset
+                                (Scrut_T, K - 1);
+                        FT   : constant Type_Access :=
+                          Kurt.Layout.Tuple_Field_Type (Scrut_T, K - 1);
+                     begin
+                        if SU.Length (Arm.Pat.Bindings.Element (K)) > 0
+                        then
+                           ST.Bindings.Append
+                             ((Name   => Arm.Pat.Bindings.Element (K),
+                               Offset => FOff, Ty => FT));
+                        end if;
+                        if K <= Natural (Arm.Pat.Sub_Pats.Length)
+                          and then Arm.Pat.Sub_Pats.Element (K) /= null
+                        then
+                           Need_Next := True;
+                           Bind_Nested_CG
+                             (Arm.Pat.Sub_Pats.Element (K).all, FT, FOff,
+                              L_Next);
+                        end if;
+                     end;
+                  end loop;
+               elsif Arm.Pat.Kind = Pat_Variant
+                 and then Natural (Arm.Pat.Path.Length) = 1
+                 and then Arm.Pat.Bindings.Is_Empty
+                 and then not Arm.Pat.Has_Rest
+               then
+                  --  §5.10.1 bare-identifier catch-all: alias the whole
+                  --  tuple value to the name.
+                  ST.Bindings.Append
+                    ((Name   => Arm.Pat.Path.First_Element,
+                      Offset => TBase, Ty => Scrut_T));
+               else
+                  raise Program_Error with
+                    "codegen: unsupported pattern kind on tuple scrutinee";
+               end if;
+               if Arm.Guard /= null then
+                  Lower_Expr_Into_Reg (F, Arm.Guard, Target_Reg, ST);
+                  IO.Put_Line (F, "    cbz     w" & Img (Target_Reg)
+                                  & ", " & L_Next);
+               end if;
+               Lower_Expr_Into_Reg (F, Arm.Arm_Body, Target_Reg, ST);
+               while Natural (ST.Bindings.Length) > Saved loop
+                  ST.Bindings.Delete_Last;
+               end loop;
+               IO.Put_Line (F, "    b       " & L_End);
+               if Need_Next then
+                  IO.Put_Line (F, L_Next & ":");
+               end if;
+            end;
+         end loop;
       else
          --  Scalar scrutinee (integer, or unit enum value): stash it in a
          --  frame slot (not the stack pointer, so an arm's `b` to the end
@@ -578,9 +842,9 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                   case Arm.Pat.Kind is
                      when Pat_Wild    => Is_Cmp := False;
                      when Pat_Range   => Is_Cmp := False;
-                     when Pat_Slice   =>
+                     when Pat_Slice | Pat_Tuple =>
                         raise Program_Error with
-                          "codegen: slice pattern on scalar scrutinee";
+                          "codegen: slice/tuple pattern on scalar scrutinee";
                      when Pat_Int     => Val := Arm.Pat.Int_V;
                      when Pat_Variant =>
                         if Natural (Arm.Pat.Path.Length) = 1 then
@@ -632,6 +896,14 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                              ((Name   => Arm.Pat.Bind_Name,
                                Offset => Slot,
                                Ty     => Scrut_T));
+                        end if;
+                        --  §5.10.1 `#wild#(name)`: the stashed scalar's
+                        --  cells viewed as `&[ui1]`.
+                        if Arm.Pat.Kind = Pat_Wild
+                          and then SU.Length (Arm.Pat.Wild_Bind) > 0
+                        then
+                           Bind_Wild_Repr
+                             (Arm.Pat.Wild_Bind, Slot, Sizeof (Scrut_T));
                         end if;
                         --  §5.10.1 bare-identifier catch-all: alias the name
                         --  to the scrutinee's slot for the guard and body.

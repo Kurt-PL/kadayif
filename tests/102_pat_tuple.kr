@@ -1,0 +1,44 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.10.1 anonymous-struct (tuple) patterns `.{ ... }` in match: top-level
+// over a tuple binding, nested inside a variant payload, and with `#`
+// sub-patterns on positions.
+
+enum wrap {
+    P { v: .{si4, si4} },
+    N
+}
+
+fn main() -> ui1 {
+    let t: .{si4, si4} = .{ 3, 4 };
+    let u: .{si4, si4} = .{ 40, 4 };
+
+    // top-level tuple pattern; first arm's `#` test steers arm choice.
+    let r1: si4 = match t {
+        .{ a # 0..=9, b } = a * 10 + b,   // 34
+        .{ a, b }         = a - b,
+    };
+    let r2: si4 = match u {
+        .{ a # 0..=9, b } = a * 10 + b,
+        .{ a, b }         = a - b,        // 36
+    };
+
+    // whole-value catch-all still works on a tuple scrutinee.
+    let r3: si4 = match t {
+        whole = whole.0 + whole.1,        // 7
+    };
+
+    // nested `.{}` inside a variant payload slot.
+    let w: wrap = wrap::P { v = .{ 6, 7 } };
+    let r4: si4 = match w {
+        wrap::P { .{ a, b } } = a * b,    // 42
+        wrap::N               = 0,
+        #wild#                = 111,
+    };
+
+    airside {
+        posix::printf("%d %d %d %d\n\0".ptr, r1, r2, r3, r4);
+        // 34 36 7 42
+    }
+    return 0;
+}

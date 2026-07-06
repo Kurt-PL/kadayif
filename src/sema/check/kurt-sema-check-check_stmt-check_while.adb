@@ -25,6 +25,7 @@ separate (Kurt.Sema.Check.Check_Stmt)
                                & "' (spec 7.5.1)");
                      else
                         --  §5.10.2 field coverage.
+                        Reject_Sub_Patterns (S.W_Let_Pat, "`while let`");
                         Check_Payload_Coverage (S.W_Let_Pat, EN, VN);
                         Saved := Natural (Scope.Length);
                         Bound_Let := True;

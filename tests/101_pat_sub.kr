@@ -1,0 +1,44 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.10/§7.4 field sub-patterns: `[binding =] field # sub` binds the field
+// AND tests it; a mismatch falls through to the next arm.
+
+struct point { x: si4, y: si4 }
+
+enum msg {
+    Move { dx: si4, dy: si4 },
+    Quit
+}
+
+fn classify(p: point) -> si4 {
+    return match p {
+        point { x # 0..=100, y }       = x + y,
+        point { a = x # 200..=300, y } = a * 2 + y,
+        #wild#                         = 999,
+    };
+}
+
+fn msg_code(m: msg) -> si4 {
+    return match m {
+        msg::Move { dx # 0..=9, dy } = dx * 10 + dy,
+        msg::Move { dx, dy }         = dx - dy,
+        msg::Quit                    = 0,
+        #wild#                       = 111,
+    };
+}
+
+fn main() -> ui1 {
+    let p1 = point { x = 3, y = 4 };
+    let p2 = point { x = 250, y = 4 };
+    let p3 = point { x = 150, y = 0 };
+    let m1: msg = msg::Move { dx = 5, dy = 7 };
+    let m2: msg = msg::Move { dx = 50, dy = 7 };
+    let m3: msg = msg::Quit;
+    airside {
+        posix::printf("%d %d %d %d %d %d\n\0".ptr,
+                      classify(p1), classify(p2), classify(p3),
+                      msg_code(m1), msg_code(m2), msg_code(m3));
+        // 7 504 999 57 43 0
+    }
+    return 0;
+}
