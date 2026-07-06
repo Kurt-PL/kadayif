@@ -1,16 +1,16 @@
 @dyn as posix { variadic fn printf(&raw ui1) -> si4; }
-// §7.2.3 extract-assignment: `place <- e else { }` copies the success payload
-// into an existing mut place. The else block shall diverge or yield a
-// fallback via `express` (stored into the place).
+// §7.2.3 extraction into an existing place: `place = contract e else fb;`
+// copies the success payload into an existing mut place. The fallback shall
+// diverge or yield a value assignable to the success payload type.
 fn main() -> ui1 {
     mut total: si4 = 0;
     let ok:  verdict.<si4, si4> = verdict::Pass { 42 };
-    total <- ok else err { express -1; };       // total becomes 42
+    total = contract ok else -1;                  // total becomes 42
     airside { posix::printf("total=%d\n\0".ptr, total); }   // 42
 
     mut other: si4 = 100;
     let bad: verdict.<si4, si4> = verdict::Fail { 7 };
-    other <- bad else err {                       // failure path
+    other = contract bad else.err {               // failure path
         airside { posix::printf("failed err=%d\n\0".ptr, err); }   // 7
         express 999;
     };

@@ -182,6 +182,9 @@ separate (Kurt.Mono.Monomorphize)
             Visit_Expr (E.Q_Inner);
          when E_Ref =>
             Visit_Expr (E.Rf_Place);
+         when E_Extract =>
+            Visit_Expr (E.Ex_Inner);
+            Visit_Expr (E.Ex_Fallback);
          when E_CAS =>
             Visit_Expr (E.CAS_Tgt);
             Visit_Expr (E.CAS_Exp);
@@ -190,6 +193,7 @@ separate (Kurt.Mono.Monomorphize)
             for I in E.AL_Elems.First_Index .. E.AL_Elems.Last_Index loop
                Visit_Expr (E.AL_Elems.Element (I));
             end loop;
+            Visit_Expr (E.AL_Repeat_Expr);
          when E_Dyn_Cast =>
             Visit_Expr (E.DC_Inner);
          when E_Slice_Cast =>

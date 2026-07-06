@@ -12,14 +12,26 @@ separate (Kurt.Sema)
       --  declaration, which the inner one legally shadows.
       Block_Base : Natural := 0;
       Cur_Ret : Type_Access;
+      --  §7.6: whether the subroutine currently being checked is declared
+      --  `-> never`; such a body shall not contain a `return` statement.
+      Cur_Is_Never : Boolean := False;
       --  §8.2/§8.3 reference derivation tree for the body being analysed.
       Borrows : Kurt.Borrow.Tree;
       --  §8.8.2 bindings invalidated by a transfer (move).
       Moved   : Moved_Vec.Vector;
+      --  §5.2 deferred-init (`let`/`mut` sans initializer) tracking.
+      Init_States : Init_Vec.Vector;
+      --  §5.2: True while inferring an assignment's own LHS place, so the
+      --  place isn't flagged as a read of itself (Infer_Path).
+      Suppress_Init_Read : Boolean := False;
       --  §6.1.8/§2.6: airside nesting depth for the statement being
       --  checked. Raised inside an `airside { ... }` block and for the whole
       --  body of an `airside fn`. `uninit` is valid only when this is > 0.
       In_Airside : Natural := 0;
+      --  §5.5.1/§6.2.2: mangled name of the fn currently being checked, so
+      --  a field-access check can tell its declaring source unit apart
+      --  from the accessed struct's (Kurt.Layout.Same_Source_Unit).
+      Cur_Fn_Name : SU.Unbounded_String;
       --  §10.4: mangled names of every subroutine declared in a `@dyn`
       --  block. Invoking one is permitted only within an `airside` region.
       Dyn_Fn_Names : Path_Segments.Vector;
@@ -28,9 +40,24 @@ separate (Kurt.Sema)
       --  typing exactly like a `let` annotation would). Null when the
       --  statement being checked is not inside a block expression.
       Express_Expected : Type_Access := null;
-      --  §7.9: loop labels currently in scope, innermost last. A `break`/
-      --  `continue` with a label shall name one of these.
-      Label_Stack : Path_Segments.Vector;
+      --  §7.8: depth of enclosing contexts a bare `express` may target — a
+      --  block expression (`{ ... }` / `airside { ... }`, in value or
+      --  statement position) or an extract `else` block (§7.2.3, where
+      --  `express` yields the fallback value). Zero means the statement
+      --  being checked sits directly in the subroutine body, where an
+      --  unlabelled `express` shall not appear.
+      In_Expr_Block : Natural := 0;
+      --  §7.9: labels currently in scope, innermost last. A loop label
+      --  is the target of `break`/`continue`; a block label is the
+      --  target of `express`. Inner labels shadow outer ones of the
+      --  same name, so every lookup searches innermost-first.
+      type Lbl_Entry is record
+         Name     : SU.Unbounded_String;
+         Is_Block : Boolean := False;
+      end record;
+      package Lbl_Vec is new Ada.Containers.Vectors
+        (Index_Type => Positive, Element_Type => Lbl_Entry);
+      Label_Stack : Lbl_Vec.Vector;
       In_Loop     : Natural := 0;   --  §7.7 plain break/continue need a loop
       --  §5.9.2 type-erasure context: the generic parameters of the
       --  template currently being checked (empty for concrete fns). A
@@ -88,9 +115,14 @@ separate (Kurt.Sema)
       is separate;
 
       --  §9.3.2: the value expression of associated const Name in the
-      --  `impl Ty_Name as <trait>` block (null if none).
+      --  `impl Ty_Name as <trait>` block (null if none). Want_Trait, when
+      --  non-empty (from a qualified `(Ty as Trait)::Name` access), forces
+      --  resolution to that one trait impl. §9.2.1: an unqualified access
+      --  ambiguous between two distinct trait impls is a translation
+      --  failure (raised here); an inherent impl's const always takes
+      --  priority and is never ambiguous.
       function Find_Impl_Const
-        (Ty_Name, Name : String) return Expr_Access
+        (Ty_Name, Name, Want_Trait : String) return Expr_Access
       is separate;
 
       --  §9.3.2: the declared type of associated const Name in any trait
@@ -156,6 +188,10 @@ separate (Kurt.Sema)
 
       procedure Mark_Moved (Name : String) is separate;
 
+      --  §5.2: locate Name's deferred-init tracking entry, if any.
+      function Init_Lookup
+        (Name : String; Idx : out Natural) return Boolean is separate;
+
       --  §9.9.3: an aggregate capture (struct / tuple / array / payload enum)
       --  must be bound into the closure body by reference to its env field —
       --  it cannot be loaded as a register value, and a `with destruct`
@@ -166,6 +202,14 @@ separate (Kurt.Sema)
       --  transfer source, invalidate it (use-after-move becomes a failure).
       procedure Maybe_Move (E : Expr_Access) is separate;
 
+      --  §8.9: a type satisfying `destruct` shall not be LOADED (copied)
+      --  through a tracked reference (&T, &mut T, $T) -- only a `&raw`
+      --  load is exempt. Conservative check for a direct load position
+      --  (initializer, return value, call argument): E must already be
+      --  Infer'd, so E.Sem_Ty and E.D_Inner.Sem_Ty (for an E_Deref) are
+      --  populated.
+      procedure Check_No_Destruct_Load (E : Expr_Access) is separate;
+
       --  §7.4 the type of the K-th payload binding of a variant pattern: by
       --  the named field when the entry is a `field = binding` rename, else
       --  by position K.
@@ -173,15 +217,53 @@ separate (Kurt.Sema)
         (Pat : Kurt.Parser.Pattern; Scrut : Type_Access;
          VN : String; K : Positive) return Type_Access is separate;
 
+      --  §5.10.2: without `...`, a destructuring payload-binds clause
+      --  shall mention every field of the variant. A bare `Enum::Variant`
+      --  pattern with no binds clause matches on the discriminant only
+      --  and is exempt. Shared by match / if-let / while-let / let-else.
+      procedure Check_Payload_Coverage
+        (Pat : Kurt.Parser.Pattern; EN, VN : String) is
+      begin
+         if not Pat.Has_Rest
+           and then not Pat.Bindings.Is_Empty
+           and then Natural (Pat.Bindings.Length)
+                      /= Kurt.Layout.Variant_Field_Count (EN, VN)
+         then
+            Error ("pattern for '" & EN & "::" & VN & "' shall mention "
+                   & "every payload field or end with `...` "
+                   & "(spec 5.10.2)");
+         end if;
+         --  §5.10.2: `...` is permitted only for named-field payloads,
+         --  not positional-field ones (whose parse-synthesised field
+         --  names "0", "1", ... cannot be written as identifiers).
+         if Pat.Has_Rest
+           and then Kurt.Layout.Variant_Field_Count (EN, VN) > 0
+           and then Kurt.Layout.Variant_Field_Name (EN, VN, 1) = "0"
+         then
+            Error ("`...` shall not appear in a positional-field pattern; "
+                   & "'" & EN & "::" & VN & "' has positional fields "
+                   & "(spec 5.10.2)");
+         end if;
+      end Check_Payload_Coverage;
+
       --  Body appears with the statement checks below; needed here for the
       --  §6.9 `airside { ... }` block expression (its body is statements).
       procedure Check_Block (Stmts : Stmt_Vectors.Vector);
 
+      --  Declared ahead of Infer's stub (body below, with the other §7.11
+      --  divergence analysis): Infer types a diverging block expression
+      --  as `never` (§7.11), so it needs the predicate in scope.
+      function Stmts_Diverge (V : Stmt_Vectors.Vector) return Boolean;
+
       --------------------------------------------------------------------
       --  Infer a type for E, attach it to E.Sem_Ty, and return it.
       --  Expected flows downward (mainly to steer integer-literal type).
+      --  Neg_Ctx is set only when E is the direct operand of a unary `-`;
+      --  it widens an integer literal's §3.5.1 fits-target check to admit
+      --  the extra negative magnitude (e.g. `-128` into `si1`).
       --------------------------------------------------------------------
-      function Infer (E : Expr_Access; Expected : Type_Access)
+      function Infer (E : Expr_Access; Expected : Type_Access;
+                       Neg_Ctx : Boolean := False)
          return Type_Access
       is separate;
 
@@ -201,8 +283,16 @@ separate (Kurt.Sema)
       --  `express`, a `-> never` call, a `loop {}` with no `break`, an
       --  `if`/`else` whose both arms diverge, and an `airside` block
       --  whose body diverges.
-      function Cond_Is_True (E : Expr_Access) return Boolean is
-        (E /= null and then E.Kind = E_Bool_Lit and then E.Bool_V);
+      --  Translation-time-true: a literal `true`, or a bare identifier
+      --  naming a top-level `const ... : bool = true;` (literal init).
+      --  Conservative on purpose -- only these two syntactic forms.
+      function Cond_Is_True (E : Expr_Access) return Boolean is separate;
+
+      --  Translation-time-false: the mirror of Cond_Is_True, for `false`.
+      --  Used to recognise an unreachable `if false { ... }` branch during
+      --  §7.11 divergence/escape analysis (spec's own canonical example:
+      --  `while true { if false { break; } ... }` still diverges).
+      function Cond_Is_False (E : Expr_Access) return Boolean is separate;
 
       --  §7.11: a `loop {}` diverges only when no `break` (targeting it or
       --  an enclosing loop) and no `express` (targeting an enclosing
@@ -210,8 +300,6 @@ separate (Kurt.Sema)
       --  anywhere in V disqualifies it, even one bound to a nested
       --  construct — a false negative is safe; a false positive is not.
       function Has_Escape (V : Stmt_Vectors.Vector) return Boolean is separate;
-
-      function Stmts_Diverge (V : Stmt_Vectors.Vector) return Boolean;
 
       function Stmt_Diverges (S : Stmt_Access) return Boolean is separate;
 
@@ -259,6 +347,18 @@ separate (Kurt.Sema)
       --  collision with a binding already declared in the current block;
       --  bindings below Block_Base belong to outer scopes and are shadowed.
       procedure Check_Dup_In_Scope (Name : SU.Unbounded_String) is separate;
+
+      --  §6.10.2 conservative xlatime-foldability: literals, layout
+      --  intrinsics, other consts, aggregate literals over recursively
+      --  foldable parts, and pure operators over those. Shared by
+      --  Validate_Consts_Statics (top-level/impl consts, spec 5.3), the
+      --  struct-field default-value check below (spec 5.5.3), and (moved
+      --  ahead of Check_Stmt so Check_Stmt.Check_Let can see it, spec 5.3
+      --  Fix 4) the statement-position local-`const` check -- a field
+      --  default / local const is a translation-time initializer exactly
+      --  like a top-level const's, so the same rule governs all three.
+      function Is_Xlatime_Foldable (E : Expr_Access) return Boolean
+        is separate;
 
       procedure Check_Stmt (S : Stmt_Access) is separate;
       procedure Check_Fn_Bodies is separate;
@@ -321,6 +421,16 @@ separate (Kurt.Sema)
          for I in U.Gen_Fns.First_Index .. U.Gen_Fns.Last_Index loop
             Note (SU.To_String (U.Gen_Fns.Element (I).Header.Name), "fn");
          end loop;
+         --  §10.6: a `module` shall not share a name with another
+         --  declaration in the same scope. A top-level module keeps its
+         --  bare declared name in U.Module_Names; a nested module's name
+         --  is '$'-prefixed by its enclosing module at Close_Module and
+         --  is therefore already excluded by Is_Generated, same as any
+         --  other mangled name.
+         for I in U.Module_Names.First_Index .. U.Module_Names.Last_Index
+         loop
+            Note (SU.To_String (U.Module_Names.Element (I)), "module");
+         end loop;
       end;
 
       --  §5.5 field-name uniqueness within a named composite (the anonymous
@@ -346,9 +456,11 @@ separate (Kurt.Sema)
             end loop;
          end Check_Unique_Fields;
 
-         --  §5.9 generic type-parameter names shall be distinct.
-         procedure Check_Unique_Generics (H : Fn_Header) is
-            G : Generic_Param_Vectors.Vector renames H.Generic_Params;
+         --  §5.9 generic type-parameter names shall be distinct. Shared by
+         --  fn/struct/enum generic clauses — `Owner` names the declaration
+         --  for the diagnostic.
+         procedure Check_Unique_Generics
+           (Owner : String; G : Generic_Param_Vectors.Vector) is
          begin
             for I in G.First_Index .. G.Last_Index loop
                for J in G.First_Index .. I - 1 loop
@@ -357,7 +469,7 @@ separate (Kurt.Sema)
                   then
                      Error ("duplicate generic parameter '"
                             & SU.To_String (G.Element (I).Name)
-                            & "' in '" & SU.To_String (H.Name)
+                            & "' in '" & Owner
                             & "' (spec 5.9)");
                   end if;
                end loop;
@@ -366,7 +478,7 @@ separate (Kurt.Sema)
 
          procedure Check_Unique_Params (H : Fn_Header) is
          begin
-            Check_Unique_Generics (H);
+            Check_Unique_Generics (SU.To_String (H.Name), H.Generic_Params);
             for I in H.Params.First_Index .. H.Params.Last_Index loop
                declare
                   N : constant String :=
@@ -385,6 +497,13 @@ separate (Kurt.Sema)
             end loop;
          end Check_Unique_Params;
       begin
+         --  NOTE: struct/enum generic-parameter duplicate-name rejection
+         --  (spec 5.9) is checked at parse time (Parse_Struct_Decl /
+         --  Parse_Enum_Decl), not here: by the time Kurt.Sema.Check runs,
+         --  Kurt.Mono.Monomorphize has already lifted generic struct/enum
+         --  templates out of U.Structs/U.Enums into its own local
+         --  worklists, so this pass never sees them (unlike U.Gen_Fns,
+         --  which the Unit type does expose).
          for I in U.Structs.First_Index .. U.Structs.Last_Index loop
             Check_Unique_Fields
               ("struct '" & SU.To_String (U.Structs.Element (I).Name) & "'",
@@ -450,11 +569,13 @@ separate (Kurt.Sema)
             Fn : constant Fn_Decl := U.Fns.Element (I);
          begin
             Sigs.Append
-              ((Name        => Fn.Header.Name,
-                Params      => Fn.Header.Params,
-                Ret         => Fn.Header.Return_Type,
-                Is_Variadic => Fn.Header.Is_Variadic,
-                Is_Never    => Fn.Header.Is_Never));
+              ((Name         => Fn.Header.Name,
+                Params       => Fn.Header.Params,
+                Ret          => Fn.Header.Return_Type,
+                Is_Variadic  => Fn.Header.Is_Variadic,
+                Is_Never     => Fn.Header.Is_Never,
+                Extern_Iface => Fn.Header.Extern_Iface,
+                Is_Pub       => Fn.Header.Is_Pub));
          end;
       end loop;
 
@@ -467,11 +588,13 @@ separate (Kurt.Sema)
                   P : constant Fn_Proto := D.Items.Element (J);
                begin
                   Sigs.Append
-                    ((Name        => P.Name,
-                      Params      => P.Params,
-                      Ret         => P.Return_Type,
-                      Is_Variadic => P.Is_Variadic,
-                      Is_Never    => P.Is_Never));
+                    ((Name         => P.Name,
+                      Params       => P.Params,
+                      Ret          => P.Return_Type,
+                      Is_Variadic  => P.Is_Variadic,
+                      Is_Never     => P.Is_Never,
+                      Extern_Iface => P.Extern_Iface,
+                      Is_Pub       => P.Is_Pub));
                   Dyn_Fn_Names.Append (P.Name);   --  §10.4 airside-only
                end;
             end loop;
@@ -514,6 +637,21 @@ separate (Kurt.Sema)
                                   & SU.To_String (Fld.Name) & "' is '"
                                   & Image (DT) & "' but the field is '"
                                   & Image (Fld.Ty) & "' (spec 5.5.3)");
+                        elsif not Is_Xlatime_Foldable (Fld.Default) then
+                           --  §5.5.3: a field default is materialized once,
+                           --  at translation time, into every struct
+                           --  literal that omits the field -- it shall be
+                           --  translation-time evaluable, exactly like a
+                           --  const initializer (a runtime fn call or a
+                           --  static read is not).
+                           Error ("struct '" & SU.To_String (D.Name)
+                                  & "': default for field '"
+                                  & SU.To_String (Fld.Name)
+                                  & "' is not evaluable at translation "
+                                  & "time (spec 5.5.3, bootstrap subset: "
+                                  & "literals, type intrinsics, consts, "
+                                  & "aggregate literals over those, and "
+                                  & "pure operators)");
                         end if;
                      end;
                   end if;
@@ -618,6 +756,27 @@ separate (Kurt.Sema)
          end loop;
       end loop;
 
+      --  §9.1: an inherent `impl Type { ... }` (no `as Trait`) shall not
+      --  define associated types -- `type Item = ...;` is a trait-impl-only
+      --  construct (§9.3.1). Silently discarding it would leave a
+      --  `selftype::Item` reference resolved against nothing.
+      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+         declare
+            TI : Trait_Impl renames U.Trait_Impls.Element (I);
+         begin
+            if SU.Length (TI.Trait_Name) = 0
+              and then not TI.Assoc_Types.Is_Empty
+            then
+               Error ("inherent `impl " & SU.To_String (TI.Ty_Name)
+                      & "` defines associated type '"
+                      & SU.To_String (TI.Assoc_Types.First_Element.Name)
+                      & "' -- associated types are permitted only in a "
+                      & "trait impl (`impl " & SU.To_String (TI.Ty_Name)
+                      & " as Trait`) (spec 9.1)");
+            end if;
+         end;
+      end loop;
+
       --  §9.1: two items (methods / associated fns) with the same mangled
       --  symbol on one type — e.g. two inherent `impl Type { fn a }` blocks —
       --  are a declaration-time TF (they would otherwise collide in codegen).
@@ -669,6 +828,69 @@ separate (Kurt.Sema)
                   end loop;
                end if;
             end loop;
+         end;
+      end loop;
+
+      --  §9.5 dyn-safety: a trait with a generic method is not a legal
+      --  `&dyn Trait`/`$dyn Trait` target -- forming its dispatch table
+      --  would need a vtable slot for a method that is never lowered
+      --  under a fixed (unmonomorphised) symbol, an undetected translation
+      --  failure that would otherwise surface only as a LINKER error.
+      --  The bootstrap builds one static dispatch table per concrete
+      --  `impl Type as Trait` unconditionally (not only when a `dyn`
+      --  reference is actually formed), so the failure is raised here,
+      --  at every such impl of a non-object-safe trait.
+      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+         declare
+            TI : Trait_Impl renames U.Trait_Impls.Element (I);
+            Tr : constant String := SU.To_String (TI.Trait_Name);
+         begin
+            if Tr /= "" then
+               for T in U.Traits.First_Index .. U.Traits.Last_Index loop
+                  if SU.To_String (U.Traits.Element (T).Name) = Tr then
+                     for M in U.Traits.Element (T).Methods.First_Index ..
+                              U.Traits.Element (T).Methods.Last_Index
+                     loop
+                        declare
+                           TM : Trait_Method renames
+                             U.Traits.Element (T).Methods.Element (M);
+                        begin
+                           if not TM.Sig.Generic_Params.Is_Empty then
+                              Error ("trait '" & Tr & "' has a generic "
+                                     & "method '"
+                                     & SU.To_String (TM.Sig.Name)
+                                     & "' and is not a valid "
+                                     & "`&dyn`/`$dyn` target; `impl "
+                                     & SU.To_String (TI.Ty_Name) & " as "
+                                     & Tr & "` cannot form a dispatch "
+                                     & "table for it (spec 9.5)");
+                           end if;
+                           --  §9.5: "No method shall return `selftype` by
+                           --  value." A by-value `selftype` return has no
+                           --  fixed size under erasure (the concrete type
+                           --  is only known per-implementor), so it cannot
+                           --  be a dispatch-table slot. `&selftype`/
+                           --  `$selftype` returns are T_Ref, not T_Named,
+                           --  so they never match this check.
+                           if TM.Sig.Return_Type /= null
+                             and then TM.Sig.Return_Type.Kind = T_Named
+                             and then SU.To_String (TM.Sig.Return_Type.Name)
+                                      = "selftype"
+                           then
+                              Error ("trait '" & Tr & "' has method '"
+                                     & SU.To_String (TM.Sig.Name)
+                                     & "' returning `selftype` by value "
+                                     & "and is not a valid "
+                                     & "`&dyn`/`$dyn` target; `impl "
+                                     & SU.To_String (TI.Ty_Name) & " as "
+                                     & Tr & "` cannot form a dispatch "
+                                     & "table for it (spec 9.5)");
+                           end if;
+                        end;
+                     end loop;
+                  end if;
+               end loop;
+            end if;
          end;
       end loop;
 

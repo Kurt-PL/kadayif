@@ -163,6 +163,17 @@ separate (Kurt.Sema.Check.Infer)
                   FT.Fn_Params.Append (P.Ty);
                end loop;
                FT.Fn_Ret := RT;
+               --  §9.9.3: a non-capturing `xfer` closure's value type is
+               --  the consuming invocable form `xfer /.T/ -> U`, not a
+               --  plain subroutine pointer -- otherwise Assignable's
+               --  invocable-coercion ladder would treat it as rank 0 and
+               --  let it flow into a non-`xfer` invocable/fn-pointer
+               --  target, silently discarding the "invoke at most once"
+               --  obligation.
+               if E.Clo_Xfer then
+                  FT.Fn_Invocable := True;
+                  FT.Fn_Xfer      := True;
+               end if;
                E.Sem_Ty := FT;
                return FT;
             end;

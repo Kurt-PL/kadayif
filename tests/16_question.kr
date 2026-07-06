@@ -13,13 +13,13 @@ fn main() -> ui1 {
     let rp: verdict.<si4, si4> = add1(p);    // succeeds -> Pass { 42 }
     let rf: verdict.<si4, si4> = add1(f);    // ? propagates -> Fail { 7 }
 
-    let vp <- rp else _ {
+    let vp = contract rp else {
         airside { posix::printf("rp unexpectedly failed\n\0".ptr); }
         return 1;
     };
     airside { posix::printf("rp -> %d\n\0".ptr, vp); }       // 42
 
-    let _vf <- rf else e {
+    let _vf = contract rf else.e {
         airside { posix::printf("rf -> failure %d\n\0".ptr, e); }  // 7
         return 0;
     };

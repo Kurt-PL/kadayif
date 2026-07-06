@@ -17,4 +17,8 @@ package Kurt.Codegen is
    --  Kurt-level function `name` is emitted as `_name`.
    procedure Emit (U : Kurt.Parser.Translation_Unit; Out_Path : String);
 
+   --  §2.9.1: a construct the bootstrap cannot yet lower is reported as a
+   --  clean diagnostic ("not yet supported: ..."), not an Ada traceback.
+   Codegen_Error : exception;
+
 end Kurt.Codegen;

@@ -1,4 +1,6 @@
 with Ada.Strings.Fixed;
+with Ada.Unchecked_Conversion;
+with Interfaces;
 
 package body Kurt.Parser is
 
@@ -37,6 +39,19 @@ package body Kurt.Parser is
       --  (namespace-qualified) struct literal rather than the default
       --  `Enum::Variant { ... }` reading of a 2-segment path.
       Add_Aliases : Path_Segments.Vector;
+      --  §10.6 nesting depth of `module { ... }` bodies currently open
+      --  around the token being parsed; 0 at source-unit top level. Lets a
+      --  `super` path head be rejected outside any module.
+      Module_Depth : Natural := 0;
+      --  §6.10/§6.10.2 nesting depth of translation-time-evaluated regions
+      --  currently open around the token being parsed: the body of an
+      --  `xlatime { ... }` block, or a `const`/`static` initializer
+      --  expression (§6.10.2's "implicit xlatime"). `if xlatime`/
+      --  `if !xlatime` consult this (> 0 means the surrounding context is
+      --  itself translation-time evaluation, so `xlatime` is TRUE) to pick
+      --  which branch is kept and which is discarded unchecked. Zero at an
+      --  ordinary (execution-time) fn body, where `xlatime` is FALSE.
+      Xlatime_Depth : Natural := 0;
    end record;
 
    procedure Advance (C : in out Cursor) is
@@ -154,13 +169,26 @@ package body Kurt.Parser is
       Store    : in out Ref_Store)
    is separate;
 
+   --  §8.4.3 `lifetime_body` grammar shared by the subroutine and the
+   --  composite-type forms of `with lifetime` — called with the cursor
+   --  just past the `lifetime` keyword:
+   --      'a 'b                  (single chain, braces optional)
+   --      { 'a 'b, 'c 'd }       (multiple chains)
+   --  Each chain becomes one Path_Segments.Vector of lifetime names,
+   --  appended to Chains in source order.
+   procedure Parse_Lifetime_Body
+     (C : in out Cursor; Chains : in out Lifetime_Chain_Vectors.Vector)
+   is separate;
+
    --  §8.4.3 `with lifetime` ordering constraints, on a subroutine or a
    --  composite-type declaration:
    --      with lifetime 'a 'b              (single chain, braces optional)
    --      with lifetime { 'a 'b, 'c 'd }   (multiple chains)
-   --  Lifetimes are a compile-time discipline with no representation, so the
-   --  bootstrap validates the shape and erases it. Pre: the current token is
-   --  `with` and the following identifier is `lifetime`.
+   --  On subroutines the bootstrap validates the shape and erases it (no
+   --  outlives checking); on structs/enums the chains are retained by the
+   --  caller (see Parse_Struct_Decl/Parse_Enum_Decl) to govern field
+   --  destruction order. Pre: the current token is `with` and the
+   --  following identifier is `lifetime`.
    procedure Parse_Lifetime_Clause (C : in out Cursor) is separate;
 
    --  Whether the cursor sits at a `with lifetime` clause (`lifetime` is an
@@ -172,6 +200,30 @@ package body Kurt.Parser is
         and then Peek_Tok (C).Kind = Tok_Ident
         and then SU.To_String (Peek_Tok (C).Lexeme) = "lifetime";
    end At_Lifetime_Clause;
+
+   --  §5.9 generic type-parameter names shall be distinct. Called right
+   --  after parsing a struct/enum generic clause, at translation time the
+   --  fn-header equivalent runs in Kurt.Sema.Check (over U.Fns/U.Gen_Fns);
+   --  struct/enum generic templates are not similarly visible to Sema
+   --  after Kurt.Mono.Monomorphize lifts them out of U.Structs/U.Enums, so
+   --  this check is done here, at parse time, instead.
+   procedure Check_Unique_Generic_Names
+     (Owner : String; G : Generic_Param_Vectors.Vector)
+   is
+   begin
+      for I in G.First_Index .. G.Last_Index loop
+         for J in G.First_Index .. I - 1 loop
+            if SU.To_String (G.Element (J).Name)
+                 = SU.To_String (G.Element (I).Name)
+            then
+               raise Syntax_Error with
+                 "duplicate generic parameter '"
+                 & SU.To_String (G.Element (I).Name)
+                 & "' in '" & Owner & "' (spec 5.9)";
+            end if;
+         end loop;
+      end loop;
+   end Check_Unique_Generic_Names;
 
    --  §8.10 parse a `concurrent` with-item body (the keyword `concurrent` is
    --  already consumed): a single item or a braced comma-list, each item
@@ -191,6 +243,13 @@ package body Kurt.Parser is
       Args   : Type_Vectors.Vector) return Type_Access
    is separate;
 
+   --  Forward-declared here (ahead of its "natural" position below, in the
+   --  Expressions section) so Parse_Type's subunit -- which needs to parse
+   --  a general expression in `[T; N]`'s length position, spec 4.7 -- has
+   --  visibility to it. The completion ("is separate") stays at its
+   --  original position.
+   function Parse_Expr (C : in out Cursor) return Expr_Access;
+
    function Parse_Type (C : in out Cursor) return Type_Access is separate;
 
    --  Optional generic parameter clause on a subroutine (§5.9):
@@ -198,11 +257,6 @@ package body Kurt.Parser is
    --  names (§9.8) recorded for the type-erasure check in Kurt.Sema.
    procedure Parse_Opt_Generic_Params_Bounded
      (C : in out Cursor; Params : out Generic_Param_Vectors.Vector)
-   is separate;
-
-   --  Optional generic parameter clause on a declaration: `.<T, U>`.
-   procedure Parse_Opt_Generic_Params
-     (C : in out Cursor; Params : out Path_Segments.Vector)
    is separate;
 
    ----------------------------------------------------------------------
@@ -233,8 +287,6 @@ package body Kurt.Parser is
    --  We convert to "binding power" where higher number = tighter.
    ----------------------------------------------------------------------
 
-   function Parse_Expr (C : in out Cursor) return Expr_Access;
-
    --  §9.9 closure expression (body defined after Parse_Block_Stmts).
    function Parse_Closure
      (C : in out Cursor; Xfer : Boolean) return Expr_Access;
@@ -242,24 +294,28 @@ package body Kurt.Parser is
    function Token_To_Binop (K : Token_Kind; Op : out Binary_Op) return Boolean is separate;
 
    --  Higher = tighter binding. Mirrors §6 precedence table:
-   --    spec prec 7  (* / %)              => bp 70
-   --    spec prec 8  (+ -)                => bp 60
-   --    spec prec 13 (== != < > <= >=)    => bp 30
+   --    spec prec 7  (* / % *| /|)        => bp 70
+   --    spec prec 8  (*@, non-assoc)      => bp 65
+   --    spec prec 9  (+ - +| -|)          => bp 60
+   --    spec prec 10 (+@, non-assoc)      => bp 55
+   --    spec prec 15 (== != < > <= >=)    => bp 30
+   --  `*@`/`+@` each occupy their own level and are non-associative
+   --  (Non_Assoc below); every other level here is leading-to-following.
    function Binding_Power (Op : Binary_Op) return Natural is
    begin
       case Op is
-         when B_Mul | B_Div | B_Mod | B_Sat_Mul | B_Sat_Div
-            | B_Wide_Mul => return 70;
-         when B_Add | B_Sub | B_Sat_Add | B_Sat_Sub
-            | B_Wide_Add => return 60;
-         when B_Shl | B_Shr => return 50;   --  §6 level 9
-         when B_And         => return 45;   --  level 10
-         when B_Xor         => return 40;   --  level 11
-         when B_Or          => return 35;   --  level 12
-         when B_Eq | B_Ne | B_Lt | B_Gt | B_Le | B_Ge => return 30;  --  13
-         when B_LAnd        => return 20;   --  §7.2.2 level 14
-         when B_LXor        => return 18;   --  level 15 (between && and ||)
-         when B_LOr         => return 15;   --  level 16
+         when B_Mul | B_Div | B_Mod | B_Sat_Mul | B_Sat_Div => return 70;
+         when B_Wide_Mul    => return 65;   --  level 8
+         when B_Add | B_Sub | B_Sat_Add | B_Sat_Sub => return 60;
+         when B_Wide_Add    => return 55;   --  level 10
+         when B_Shl | B_Shr => return 50;   --  level 11
+         when B_And         => return 45;   --  level 12
+         when B_Xor         => return 40;   --  level 13
+         when B_Or          => return 35;   --  level 14
+         when B_Eq | B_Ne | B_Lt | B_Gt | B_Le | B_Ge => return 30;  --  15
+         when B_LAnd        => return 20;   --  §7.2.2 level 16
+         when B_LXor        => return 18;   --  level 17 (between && and ||)
+         when B_LOr         => return 15;   --  level 18
       end case;
    end Binding_Power;
 
@@ -268,10 +324,21 @@ package body Kurt.Parser is
    procedure Parse_Block_Stmts
      (C : in out Cursor; Stmts : out Stmt_Vectors.Vector);
 
+   --  §5.10/§7.4 parse a single match/let-else pattern (no top-level `|` --
+   --  callers collect or-pattern alternatives themselves). Shared by
+   --  Prim_Match and, recursively, Parse_Payload_Binds (item(a) nested
+   --  payload sub-patterns, spec 7.4). Forward-declared (mutual recursion
+   --  with Parse_Payload_Binds); the separate body is given after it below.
+   function Parse_Match_Pattern (C : in out Cursor) return Pattern;
+
    --  §7.4 parse a variant pattern's payload destructuring `{ ... }` into
    --  the pattern P: a bare `ident` is a positional binding; `field = ident`
-   --  binds the named field. Assumes the opening `{` is the current token.
+   --  binds the named field; a slot written as a full nested pattern (e.g.
+   --  `res::Yes { v }`) recurses via Parse_Match_Pattern (item(a), spec
+   --  7.4). Assumes the opening `{` is the current token.
    procedure Parse_Payload_Binds (C : in out Cursor; P : in out Pattern) is separate;
+
+   function Parse_Match_Pattern (C : in out Cursor) return Pattern is separate;
 
    function Parse_Primary (C : in out Cursor) return Expr_Access is separate;
 
@@ -289,6 +356,19 @@ package body Kurt.Parser is
 
    function Is_Cmp (Op : Binary_Op) return Boolean is
      (Op in B_Eq | B_Ne | B_Lt | B_Gt | B_Le | B_Ge);
+
+   --  §6.4.3 widening arithmetic (`+@`, `*@`) — each occupies its own
+   --  precedence level and is non-associative (Non_Assoc below), unlike
+   --  the leading-to-following levels around it.
+   function Is_Wide (Op : Binary_Op) return Boolean is
+     (Op in B_Wide_Add | B_Wide_Mul);
+
+   --  §6.4.3/§6.6: an operator whose precedence TIER forbids chaining --
+   --  comparisons (all one shared tier) and each widening operator (its
+   --  own singleton tier). Two operators sharing a Binding_Power that is
+   --  Non_Assoc shall not appear back-to-back without parentheses.
+   function Non_Assoc (Op : Binary_Op) return Boolean is
+     (Is_Cmp (Op) or else Is_Wide (Op));
 
    --  §6.6 bitwise / shift operators (`& | ^ << >>`).
    function Is_Bitsh (Op : Binary_Op) return Boolean is
@@ -314,8 +394,8 @@ package body Kurt.Parser is
      (C : in out Cursor; Min_BP : Natural) return Expr_Access
    is separate;
 
-   --  §8.7 compare-and-swap: `target >.< expected <- new` (eq-CAS) and
-   --  `target >!< expected <- new` (ne-CAS), at the lowest binding power
+   --  §8.7 compare-and-swap: `target >.< expected then new` (eq-CAS) and
+   --  `target >!< expected then new` (ne-CAS), at the lowest binding power
    --  (the operands are full binary expressions). Non-associative.
    function Parse_Expr (C : in out Cursor) return Expr_Access is separate;
 
@@ -447,12 +527,26 @@ package body Kurt.Parser is
 
    procedure Resolve_Aliases
      (U              : in out Translation_Unit;
+      Pub_Source     : Translation_Unit;
+      Cur_Prefix     : String;
       Alias_Names    : Path_Segments.Vector;
-      Alias_Prefixes : Path_Segments.Vector)
+      Alias_Prefixes : Path_Segments.Vector;
+      NS_Names       : Path_Segments.Vector;
+      NS_Pubs        : Bool_Vectors.Vector)
    is separate;
 
    function Parse_Unit (Lex : in out Kurt.Lexer.Lexer)
       return Translation_Unit
+   is separate;
+
+   ----------------------------------------------------------------------
+   --  §5.3/§5.4/§6.10 small-integer xlatime folding (see kurt-parser.ads).
+   ----------------------------------------------------------------------
+
+   function Fold_Int_Expr
+     (U     : Translation_Unit;
+      E     : Expr_Access;
+      Value : out Long_Long_Integer) return Boolean
    is separate;
 
 end Kurt.Parser;

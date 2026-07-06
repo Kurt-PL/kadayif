@@ -24,6 +24,8 @@ separate (Kurt.Sema.Check.Check_Stmt)
                         Error ("enum '" & EN & "' has no variant '" & VN
                                & "' (spec 7.5.1)");
                      else
+                        --  §5.10.2 field coverage.
+                        Check_Payload_Coverage (S.W_Let_Pat, EN, VN);
                         Saved := Natural (Scope.Length);
                         Bound_Let := True;
                         for K in 1 .. Natural (S.W_Let_Pat.Bindings.Length)
@@ -71,17 +73,56 @@ separate (Kurt.Sema.Check.Check_Stmt)
                   declare
                      CT : constant Type_Access :=
                        Infer (S.W_Cond, Mk_Named ("bool"));
-                     pragma Unreferenced (CT);
                   begin
-                     null;
+                     --  §7.5.1: the condition of a plain `while` shall
+                     --  satisfy `contract` (bool, verdict, or an enum
+                     --  `with contract`); a truthy C-style condition is
+                     --  a TF.
+                     if not Is_Contract_Ty (CT) then
+                        Error ("`while` condition must satisfy `contract` "
+                               & "(bool, verdict, or an enum `with "
+                               & "contract`); got '" & Image (CT)
+                               & "' (spec 7.5.1)");
+                     end if;
                   end;
                end if;
                In_Loop := In_Loop + 1;
                if Has_Label then
-                  Label_Stack.Append (S.W_Label);   --  §7.9 in scope
+                  --  §7.9 loop label in scope for the body.
+                  Label_Stack.Append ((Name => S.W_Label, Is_Block => False));
                end if;
-               Check_Block (S.W_Body);
-               Check_Block (S.W_Then);   --  §7.5.3 step block
+               declare
+                  --  §5.2: the body (+ step block) may run zero times, so
+                  --  a deferred binding declared OUTSIDE the loop that the
+                  --  body assigns can only leave the loop Maybe-init, never
+                  --  Init -- reads inside the body still see the body's
+                  --  own straight-line flow (Check_Block below runs
+                  --  normally, from the current, pre-loop state).
+                  Init_Pre : constant Init_Vec.Vector := Init_States;
+               begin
+                  Check_Block (S.W_Body);
+                  Check_Block (S.W_Then);   --  §7.5.3 step block
+                  for P of Init_Pre loop
+                     if P.State /= St_Init then
+                        for J in Init_States.First_Index ..
+                                 Init_States.Last_Index
+                        loop
+                           if SU.To_String (Init_States.Element (J).Name)
+                                = SU.To_String (P.Name)
+                             and then Init_States.Element (J).State
+                                        = St_Init
+                           then
+                              declare
+                                 IB : Init_Bind := Init_States.Element (J);
+                              begin
+                                 IB.State := St_Maybe;
+                                 Init_States.Replace_Element (J, IB);
+                              end;
+                           end if;
+                        end loop;
+                     end if;
+                  end loop;
+               end;
                if Has_Label then
                   Label_Stack.Delete_Last;
                end if;

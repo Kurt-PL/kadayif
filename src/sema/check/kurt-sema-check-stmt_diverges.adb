@@ -21,8 +21,7 @@ separate (Kurt.Sema.Check)
             --  break/express it never transfers control onward.
             return Cond_Is_True (S.W_Cond)
               and then not Has_Escape (S.W_Body);
-         when S_Let | S_Mut | S_Assign | S_Fence | S_Extract
-            | S_Asm =>
+         when S_Let | S_Mut | S_Assign | S_Fence | S_Asm =>
             return False;
       end case;
    end Stmt_Diverges;

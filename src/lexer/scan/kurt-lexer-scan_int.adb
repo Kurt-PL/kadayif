@@ -42,16 +42,19 @@ separate (Kurt.Lexer)
          end;
       end if;
 
-      --  Radix prefix.
+      --  Radix prefix. §3.5.1 permits either case for the radix letter
+      --  ('0x'|'0X', '0o'|'0O', '0b'|'0B', '0q'|'0Q').
       if Peek (L) = '0'
-        and then (Peek (L, 1) = 'x' or else Peek (L, 1) = 'o'
-                  or else Peek (L, 1) = 'b' or else Peek (L, 1) = 'q')
+        and then (Peek (L, 1) = 'x' or else Peek (L, 1) = 'X'
+                  or else Peek (L, 1) = 'o' or else Peek (L, 1) = 'O'
+                  or else Peek (L, 1) = 'b' or else Peek (L, 1) = 'B'
+                  or else Peek (L, 1) = 'q' or else Peek (L, 1) = 'Q')
       then
          case Peek (L, 1) is
-            when 'x' => Base := 16;
-            when 'o' => Base := 8;
-            when 'b' => Base := 2;
-            when 'q' => Base := 4;
+            when 'x' | 'X' => Base := 16;
+            when 'o' | 'O' => Base := 8;
+            when 'b' | 'B' => Base := 2;
+            when 'q' | 'Q' => Base := 4;
             when others => null;
          end case;
          SU.Append (Buf, Peek (L));      --  '0'
@@ -108,12 +111,24 @@ separate (Kurt.Lexer)
          end loop;
       end;
 
-      --  §3.4.2 floating-point literal: a base-10 literal becomes a float
+      --  §3.5.2 floating-point literal: a base-10 literal becomes a float
       --  when a fractional part (`.`digit) or an exponent (`e`/`E`) follows.
       if Base = 10 then
          declare
             Is_Float : Boolean := False;
          begin
+            --  §3.5.8: a digit separator directly after the `.` (before any
+            --  fractional digit) is misplaced -- diagnose it here, since
+            --  otherwise the `.` would be left unconsumed and the trailing
+            --  `_digits` would be mis-scanned as a field-access identifier.
+            if not At_End (L) and then Peek (L) = '.'
+              and then Peek (L, 1) = '_'
+            then
+               raise Translation_Failure with
+                 "misplaced digit separator '_' (§3.5.8) at line"
+                 & Positive'Image (L.Line);
+            end if;
+
             --  Fractional part: `.` then at least one digit.
             if not At_End (L) and then Peek (L) = '.'
               and then Digit_Value (Peek (L, 1)) in 0 .. 9
@@ -138,6 +153,18 @@ separate (Kurt.Lexer)
                   end if;
                end loop;
             end if;
+            --  §3.5.8: a digit separator directly after the exponent marker
+            --  (or after its sign) is misplaced.
+            if not At_End (L) and then (Peek (L) = 'e' or else Peek (L) = 'E')
+              and then (Peek (L, 1) = '_'
+                        or else ((Peek (L, 1) = '+' or else Peek (L, 1) = '-')
+                                 and then Peek (L, 2) = '_'))
+            then
+               raise Translation_Failure with
+                 "misplaced digit separator '_' (§3.5.8) at line"
+                 & Positive'Image (L.Line);
+            end if;
+
             --  Exponent part: `e`/`E` then optional sign then digit(s).
             if not At_End (L) and then (Peek (L) = 'e' or else Peek (L) = 'E')
               and then (Digit_Value (Peek (L, 1)) in 0 .. 9
@@ -218,6 +245,16 @@ separate (Kurt.Lexer)
             Exp      : Integer := 0;
             Exp_Neg  : Boolean := False;
          begin
+            --  §3.5.8: a digit separator directly after the `.` is
+            --  misplaced (see the analogous base-10 check above).
+            if not At_End (L) and then Peek (L) = '.'
+              and then Peek (L, 1) = '_'
+            then
+               raise Translation_Failure with
+                 "misplaced digit separator '_' (§3.5.8) at line"
+                 & Positive'Image (L.Line);
+            end if;
+
             --  Fractional part: `.` then at least one hex digit.
             if not At_End (L) and then Peek (L) = '.'
               and then Digit_Value (Peek (L, 1)) in 0 .. 15
@@ -243,6 +280,19 @@ separate (Kurt.Lexer)
                   end if;
                end loop;
             end if;
+            --  §3.5.8: a digit separator directly after the `p`/`P`
+            --  exponent marker (or after its sign) is misplaced.
+            if not At_End (L)
+              and then (Peek (L) = 'p' or else Peek (L) = 'P')
+              and then (Peek (L, 1) = '_'
+                        or else ((Peek (L, 1) = '+' or else Peek (L, 1) = '-')
+                                 and then Peek (L, 2) = '_'))
+            then
+               raise Translation_Failure with
+                 "misplaced digit separator '_' (§3.5.8) at line"
+                 & Positive'Image (L.Line);
+            end if;
+
             --  Binary exponent: `p`/`P` then optional sign then decimal.
             if not At_End (L)
               and then (Peek (L) = 'p' or else Peek (L) = 'P')

@@ -1,9 +1,233 @@
+with Ada.Characters.Handling;
+
 separate (Kurt.Codegen)
    procedure Emit (U : Kurt.Parser.Translation_Unit; Out_Path : String) is
+      package CH renames Ada.Characters.Handling;
+
       F        : IO.File_Type;
       Pool     : String_Pool;
       Dyn_Syms : Dyn_Sym_Pkg.Vector;
       Fn_Rets  : Fn_Ret_Pkg.Vector;
+
+      --  §5.13 `'(expr)` translation-time injection for top-level `asm`.
+      --  Unlike inline (in-fn) `asm`'s own `'(expr)` evaluator, a name here
+      --  may also denote a top-level `const` (e.g. `.skip '( STACK_SIZE )`
+      --  in the spec's own example), so an identifier atom is resolved
+      --  against U.Consts and folded through Kurt.Parser.Fold_Int_Expr.
+      --  Every other operator/atom form mirrors the inline-asm evaluator.
+      function Splice_Xlatime_Exprs (Body_S : String) return String is
+
+         --  Each `'(...)` span is evaluated independently over its own
+         --  extracted text (Src), with P as the shared cursor into that
+         --  text -- both threaded explicitly since Atom/Parse_E are
+         --  mutually recursive and a fresh span is evaluated per call.
+         function Parse_E
+           (Src : String; P : in out Natural; Min_P : Natural)
+            return Long_Long_Integer;
+
+         procedure WS (Src : String; P : in out Natural) is
+         begin
+            while P <= Src'Last
+              and then (Src (P) = ' ' or else Src (P) = ASCII.HT)
+            loop
+               P := P + 1;
+            end loop;
+         end WS;
+
+         function Atom
+           (Src : String; P : in out Natural) return Long_Long_Integer
+         is
+            V : Long_Long_Integer := 0;
+         begin
+            WS (Src, P);
+            if P <= Src'Last and then Src (P) = '-' then
+               P := P + 1;
+               return -Atom (Src, P);
+            elsif P <= Src'Last and then Src (P) = '(' then
+               P := P + 1;
+               V := Parse_E (Src, P, 0);
+               WS (Src, P);
+               if P <= Src'Last and then Src (P) = ')' then
+                  P := P + 1;
+               end if;
+               return V;
+            elsif P + 1 <= Src'Last and then Src (P) = '0'
+              and then (Src (P + 1) = 'x' or else Src (P + 1) = 'X')
+            then
+               P := P + 2;
+               while P <= Src'Last
+                 and then (Src (P) in '0' .. '9'
+                           or else Src (P) in 'a' .. 'f'
+                           or else Src (P) in 'A' .. 'F'
+                           or else Src (P) = '_')
+               loop
+                  if Src (P) /= '_' then
+                     V := V * 16 + Long_Long_Integer
+                       (if Src (P) in '0' .. '9'
+                        then Character'Pos (Src (P)) - Character'Pos ('0')
+                        elsif Src (P) in 'a' .. 'f'
+                        then Character'Pos (Src (P)) - Character'Pos ('a') + 10
+                        else Character'Pos (Src (P)) - Character'Pos ('A') + 10);
+                  end if;
+                  P := P + 1;
+               end loop;
+               return V;
+            elsif P <= Src'Last and then Src (P) in '0' .. '9' then
+               while P <= Src'Last
+                 and then (Src (P) in '0' .. '9' or else Src (P) = '_')
+               loop
+                  if Src (P) /= '_' then
+                     V := V * 10 +
+                       Long_Long_Integer
+                         (Character'Pos (Src (P)) - Character'Pos ('0'));
+                  end if;
+                  P := P + 1;
+               end loop;
+               return V;
+            elsif P <= Src'Last
+              and then (CH.Is_Letter (Src (P)) or else Src (P) = '_')
+            then
+               --  §5.3/§5.13: an identifier atom names a top-level `const`;
+               --  its value is the const's own folded initialiser.
+               declare
+                  Start : constant Natural := P;
+               begin
+                  while P <= Src'Last
+                    and then (CH.Is_Alphanumeric (Src (P))
+                              or else Src (P) = '_')
+                  loop
+                     P := P + 1;
+                  end loop;
+                  declare
+                     Name : constant String := Src (Start .. P - 1);
+                  begin
+                     for I in U.Consts.First_Index .. U.Consts.Last_Index
+                     loop
+                        if SU.To_String (U.Consts.Element (I).Name) = Name
+                        then
+                           if Fold_Int_Expr
+                             (U, U.Consts.Element (I).Init, V)
+                           then
+                              return V;
+                           end if;
+                           exit;
+                        end if;
+                     end loop;
+                     raise Codegen_Error with
+                       "top-level asm '(...)' expression names '" & Name
+                       & "', which is not a translation-time evaluable "
+                       & "`const` (spec 5.13)";
+                  end;
+               end;
+            else
+               raise Codegen_Error with
+                 "top-level asm '(...)' expression is not translation-time "
+                 & "evaluable (spec 5.13)";
+            end if;
+         end Atom;
+
+         function Parse_E
+           (Src : String; P : in out Natural; Min_P : Natural)
+            return Long_Long_Integer
+         is
+            L : Long_Long_Integer := Atom (Src, P);
+         begin
+            loop
+               WS (Src, P);
+               exit when P > Src'Last;
+               declare
+                  Op2 : constant String :=
+                    (if P + 1 <= Src'Last then Src (P .. P + 1) else "");
+                  C0  : constant Character := Src (P);
+                  BP  : Integer := -1;
+                  Wid : Natural := 1;
+               begin
+                  if Op2 = "<<" or else Op2 = ">>" then
+                     BP := 3; Wid := 2;
+                  elsif C0 = '*' or else C0 = '/' or else C0 = '%' then
+                     BP := 5;
+                  elsif C0 = '+' or else C0 = '-' then BP := 4;
+                  elsif C0 = '&' then BP := 2;
+                  elsif C0 = '^' then BP := 1;
+                  elsif C0 = '|' then BP := 0;
+                  end if;
+                  exit when BP < Integer (Min_P) or else C0 = ')';
+                  P := P + Wid;
+                  declare
+                     R : constant Long_Long_Integer :=
+                       Parse_E (Src, P, Natural (BP) + 1);
+                  begin
+                     if Op2 = "<<" then L := L * (2 ** Natural (R));
+                     elsif Op2 = ">>" then L := L / (2 ** Natural (R));
+                     elsif C0 = '*' then L := L * R;
+                     elsif C0 = '/' then L := L / R;
+                     elsif C0 = '%' then L := L mod R;
+                     elsif C0 = '+' then L := L + R;
+                     elsif C0 = '-' then L := L - R;
+                     elsif C0 = '&' then
+                        L := Long_Long_Integer (Interfaces."and"
+                          (Interfaces.Unsigned_64 (L),
+                           Interfaces.Unsigned_64 (R)));
+                     elsif C0 = '^' then
+                        L := Long_Long_Integer (Interfaces."xor"
+                          (Interfaces.Unsigned_64 (L),
+                           Interfaces.Unsigned_64 (R)));
+                     elsif C0 = '|' then
+                        L := Long_Long_Integer (Interfaces."or"
+                          (Interfaces.Unsigned_64 (L),
+                           Interfaces.Unsigned_64 (R)));
+                     end if;
+                  end;
+               end;
+            end loop;
+            return L;
+         end Parse_E;
+
+         Buf : SU.Unbounded_String := SU.To_Unbounded_String (Body_S);
+      begin
+         loop
+            declare
+               Cur   : constant String := SU.To_String (Buf);
+               Start : constant Natural := SU.Index (Buf, "'(");
+               Depth : Natural;
+               Close : Natural;
+            begin
+               exit when Start = 0;
+               Depth := 1;
+               Close := Start + 2;
+               while Close <= Cur'Last and then Depth > 0 loop
+                  if Cur (Close) = '(' then
+                     Depth := Depth + 1;
+                  elsif Cur (Close) = ')' then
+                     Depth := Depth - 1;
+                  end if;
+                  exit when Depth = 0;
+                  Close := Close + 1;
+               end loop;
+               if Depth /= 0 then
+                  raise Codegen_Error with
+                    "top-level asm has an unterminated '(...)' expression "
+                    & "(spec 5.13)";
+               end if;
+               declare
+                  Expr_Txt : constant String := Cur (Start + 2 .. Close - 1);
+                  Pos      : Natural := Expr_Txt'First;
+                  Val      : constant Long_Long_Integer :=
+                    Parse_E (Expr_Txt, Pos, 0);
+                  Raw      : constant String := Long_Long_Integer'Image (Val);
+                  --  Strip Ada'Image's leading space on non-negative values
+                  --  so the splice reads as a bare decimal (e.g. `16384`,
+                  --  not ` 16384`), matching the spec's `.skip 16384`.
+                  VS       : constant String :=
+                    (if Raw (Raw'First) = ' '
+                     then Raw (Raw'First + 1 .. Raw'Last) else Raw);
+               begin
+                  SU.Replace_Slice (Buf, Start, Close, VS);
+               end;
+            end;
+         end loop;
+         return SU.To_String (Buf);
+      end Splice_Xlatime_Exprs;
       --  Every subroutine to emit. §7.10.1: when a `@trap` handler is
       --  declared it is synthesised as an ordinary void subroutine
       --  `_kurt_trap_handler` so string-pool collection, return-type
@@ -35,6 +259,10 @@ separate (Kurt.Codegen)
       --  §5.4: publish the static-binding table for name resolution in
       --  the lowering passes.
       Unit_Statics := U.Statics;
+
+      --  §5.3: publish top-level consts for Lower_Stmt's inline-`asm`
+      --  `'(expr)` evaluator (§6.11).
+      Unit_Consts := U.Consts;
 
       Unit_Has_Trap_Handler := U.Has_Trap_Handler;
       if U.Has_Trap_Handler then
@@ -91,8 +319,9 @@ separate (Kurt.Codegen)
       --  classify aggregate returns (AAPCS64).
       for I in All_Fns.First_Index .. All_Fns.Last_Index loop
          Fn_Rets.Append
-           ((Name => All_Fns.Element (I).Header.Name,
-             Ty   => All_Fns.Element (I).Header.Return_Type));
+           ((Name   => All_Fns.Element (I).Header.Name,
+             Ty     => All_Fns.Element (I).Header.Return_Type,
+             Symbol => All_Fns.Element (I).Header.Symbol_Name));
       end loop;
 
       --  Build the @dyn symbol table from every @dyn block in the unit.
@@ -135,11 +364,14 @@ separate (Kurt.Codegen)
 
       IO.Put_Line (F, ".section __TEXT,__text,regular,pure_instructions");
 
-      --  §5.13 top-level `asm { … }` blocks, emitted verbatim into the text
-      --  section (declaration order, before the translated subroutines).
+      --  §5.13 top-level `asm { … }` blocks, emitted verbatim (after `'(
+      --  expr )` translation-time splicing) into the text section
+      --  (declaration order, before the translated subroutines).
       for I in U.Top_Asm.First_Index .. U.Top_Asm.Last_Index loop
          declare
-            Body_S : constant String := SU.To_String (U.Top_Asm.Element (I));
+            Body_S : constant String :=
+              Splice_Xlatime_Exprs
+                (SU.To_String (U.Top_Asm.Element (I)));
             Start  : Integer := Body_S'First;
          begin
             for K in Body_S'Range loop

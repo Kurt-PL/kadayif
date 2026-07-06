@@ -1,7 +1,44 @@
 separate (Kurt.Sema.Check)
-   function Infer (E : Expr_Access; Expected : Type_Access)
+   function Infer (E : Expr_Access; Expected : Type_Access;
+                    Neg_Ctx : Boolean := False)
       return Type_Access
    is
+      --  §3.5.1: the fixed-width range of a named integer type, for the
+      --  literal fits-target check below. Returns False for a type name
+      --  that is not a fixed-width integer (the check is then skipped).
+      --  si8/ui8/si16/ui16/si32/ui32/saddr/uaddr are wide enough that no
+      --  literal representable in Long_Long_Integer (the scanner's own
+      --  internal limit, §3.5.1) can overflow them, so their bounds are
+      --  simply Long_Long_Integer's own range.
+      function Int_Lit_Range
+        (Name : String; Lo, Hi : out Long_Long_Integer) return Boolean is
+      begin
+         if Name = "si1" then
+            Lo := -128; Hi := 127;
+         elsif Name = "ui1" then
+            Lo := 0; Hi := 255;
+         elsif Name = "si2" then
+            Lo := -32768; Hi := 32767;
+         elsif Name = "ui2" then
+            Lo := 0; Hi := 65535;
+         elsif Name = "si4" then
+            Lo := -2147483648; Hi := 2147483647;
+         elsif Name = "ui4" then
+            Lo := 0; Hi := 4294967295;
+         elsif Name = "si8" or else Name = "si16" or else Name = "si32"
+           or else Name = "saddr"
+         then
+            Lo := Long_Long_Integer'First; Hi := Long_Long_Integer'Last;
+         elsif Name = "ui8" or else Name = "ui16" or else Name = "ui32"
+           or else Name = "uaddr"
+         then
+            Lo := 0; Hi := Long_Long_Integer'Last;
+         else
+            return False;
+         end if;
+         return True;
+      end Int_Lit_Range;
+
       function Infer_Closure return Type_Access is separate;
       function Infer_Cast return Type_Access is separate;
       function Infer_Match return Type_Access is separate;
@@ -14,14 +51,15 @@ separate (Kurt.Sema.Check)
       function Infer_CAS return Type_Access is separate;
       function Infer_Ref return Type_Access is separate;
       function Infer_Question return Type_Access is separate;
+      function Infer_Extract return Type_Access is separate;
       function Infer_Variant_New return Type_Access is separate;
       function Infer_Field return Type_Access is separate;
    begin
       case E.Kind is
          when E_Int_Lit =>
-            --  §3.4.1: a type suffix fixes the type; otherwise take
+            --  §3.5.1: a type suffix fixes the type; otherwise take
             --  the expected integer type, else default to saddr.
-            --  §3.4.1 also permits an integer literal in a float
+            --  §3.5.1 also permits an integer literal in a float
             --  context (e.g. `let x: fe8m23 = 42;` => 42.0).
             if SU.Length (E.Int_Suffix) > 0 then
                E.Sem_Ty := Mk_Named (SU.To_String (E.Int_Suffix));
@@ -32,10 +70,33 @@ separate (Kurt.Sema.Check)
             else
                E.Sem_Ty := Mk_Named ("saddr");
             end if;
+            --  §3.5.1: the literal's value shall fit its (suffixed or
+            --  inferred/annotated) type. Neg_Ctx means this literal is the
+            --  direct operand of a unary '-' (e.g. `-128`); the value that
+            --  actually has to fit is the negated one.
+            if E.Sem_Ty /= null and then E.Sem_Ty.Kind = T_Named then
+               declare
+                  Lo, Hi : Long_Long_Integer;
+               begin
+                  if Int_Lit_Range (SU.To_String (E.Sem_Ty.Name), Lo, Hi)
+                  then
+                     declare
+                        V : constant Long_Long_Integer :=
+                          (if Neg_Ctx then -E.Int_V else E.Int_V);
+                     begin
+                        if V < Lo or else V > Hi then
+                           Error ("integer literal" & V'Image
+                                  & " does not fit target type '"
+                                  & Image (E.Sem_Ty) & "' (spec 3.5.1)");
+                        end if;
+                     end;
+                  end if;
+               end;
+            end if;
             return E.Sem_Ty;
 
          when E_Float_Lit =>
-            --  §3.4.2: a suffix fixes the type; else an expected float
+            --  §3.5.2: a suffix fixes the type; else an expected float
             --  type; else default fe11m52.
             if SU.Length (E.Float_Suffix) > 0 then
                E.Sem_Ty := Mk_Named (Canon_Float
@@ -48,7 +109,7 @@ separate (Kurt.Sema.Check)
             return E.Sem_Ty;
 
          when E_Bool_Lit =>
-            --  §3.4.3 bool literal: type is the built-in alias `bool`.
+            --  §3.5.3 bool literal: type is the built-in alias `bool`.
             E.Sem_Ty := Mk_Named ("bool");
             return E.Sem_Ty;
 
@@ -62,7 +123,8 @@ separate (Kurt.Sema.Check)
             E.Sem_Ty := Mk_Ref (R_Shared, False, RS_None,
                                 new AST_Type'(Kind => T_Array,
                                               Elem => Mk_Named ("ui1"),
-                                              Len  => 0));
+                                              Len  => 0,
+                                              Len_Expr => null));
             return E.Sem_Ty;
 
          when E_Path =>
@@ -83,8 +145,15 @@ separate (Kurt.Sema.Check)
                ET : constant Type_Access :=
                  Infer (E.I_Else,
                         (if Is_Never_Ty (TT) then Expected else TT));
-               pragma Unreferenced (CT);
             begin
+               --  §7.3: the condition of a `then`/`else` expression form
+               --  shall satisfy `contract` (bool, verdict, or an enum
+               --  `with contract`); a truthy C-style condition is a TF.
+               if not Is_Contract_Ty (CT) then
+                  Error ("`if` condition must satisfy `contract` (bool, "
+                         & "verdict, or an enum `with contract`); got '"
+                         & Image (CT) & "' (spec 7.3)");
+               end if;
                --  §7.11 unification: drop the diverging branch; the
                --  result type comes from the non-diverging one (or is
                --  itself `never` when both diverge).
@@ -150,7 +219,11 @@ separate (Kurt.Sema.Check)
             --  §6.3.1 negation (numeric: int or float) / §6.5.3 bitwise
             --  NOT (integer) / §7.2.1 contract polarity inversion.
             declare
-               OT : constant Type_Access := Infer (E.U_Operand, Expected);
+               OT : constant Type_Access :=
+                 Infer (E.U_Operand, Expected,
+                        Neg_Ctx => E.U_Op = U_Neg
+                                   and then E.U_Operand.Kind = E_Int_Lit);
+               Result_Ty : Type_Access := OT;
             begin
                if OT /= null then
                   if E.U_Op = U_Neg
@@ -164,47 +237,77 @@ separate (Kurt.Sema.Check)
                     and then not Is_Integer_Type (OT)
                   then
                      --  §7.2.1: `!` on a contract value exchanges the
-                     --  success and failure variants. The bootstrap
-                     --  supports the self-inverse cases: bool, and any
-                     --  contract enum whose two payloads are identical
-                     --  (a declared `-> inv_type` pair is otherwise
-                     --  required and not yet implemented).
+                     --  success and failure variants.
                      if not Is_Contract_Ty (OT) then
                         Error ("unary '!' requires an integer or a "
                                & "`contract` operand, got '"
                                & Image (OT) & "'");
-                     elsif SU.To_String (OT.Name) /= "bool" then
+                     elsif SU.To_String (OT.Name) = "bool" then
+                        null;   --  self-inverse; Result_Ty = OT already.
+                     elsif SU.To_String (OT.Name) = "verdict" then
+                        --  §7.2/§4: the built-in `verdict.<T, F>` declares
+                        --  `contract -> selftype.<F, T>` -- swap the two
+                        --  type arguments (works whether or not T = F).
                         declare
-                           EN : constant String :=
-                             SU.To_String (OT.Name);
-                           SV : constant String :=
-                             Kurt.Layout.Contract_Success_Variant (EN);
-                           FV : constant String :=
-                             Kurt.Layout.Contract_Fail_Variant (EN);
-                           SC : constant Natural :=
-                             Kurt.Layout.Variant_Field_Count (EN, SV);
-                           FC : constant Natural :=
-                             Kurt.Layout.Variant_Field_Count (EN, FV);
+                           Inv : constant Type_Access :=
+                             new AST_Type (Kind => T_Named);
                         begin
-                           if SC /= FC
-                             or else (SC > 0 and then not Same_Type
-                               (Kurt.Layout.Variant_Field_Type
-                                  (OT, SV, 1),
-                                Kurt.Layout.Variant_Field_Type
-                                  (OT, FV, 1)))
-                           then
-                              Error ("'!' on '" & Image (OT)
-                                     & "' needs a declared inverted "
-                                     & "pair -- asymmetric payloads "
-                                     & "(spec 7.2.1; bootstrap supports "
-                                     & "the self-inverse case only)");
+                           Inv.Name := OT.Name;
+                           if Natural (OT.Args.Length) = 2 then
+                              Inv.Args.Append
+                                (OT.Args.Element (OT.Args.Last_Index));
+                              Inv.Args.Append
+                                (OT.Args.Element (OT.Args.First_Index));
+                           end if;
+                           Result_Ty := Inv;
+                        end;
+                     else
+                        declare
+                           Decl_Inv : constant Type_Access :=
+                             Kurt.Layout.Contract_Inv_Type (OT);
+                        begin
+                           if Decl_Inv /= null then
+                              --  §7.2 declared inverted pair: the result
+                              --  type is the pair (payload cross-match
+                              --  already enforced at declaration time by
+                              --  Validate_Enums).
+                              Result_Ty := Decl_Inv;
+                           else
+                              --  No declared pair: permitted only when the
+                              --  success/failure payloads are identical
+                              --  (self-inverse case).
+                              declare
+                                 EN : constant String :=
+                                   SU.To_String (OT.Name);
+                                 SV : constant String :=
+                                   Kurt.Layout.Contract_Success_Variant (EN);
+                                 FV : constant String :=
+                                   Kurt.Layout.Contract_Fail_Variant (EN);
+                                 SC : constant Natural :=
+                                   Kurt.Layout.Variant_Field_Count (EN, SV);
+                                 FC : constant Natural :=
+                                   Kurt.Layout.Variant_Field_Count (EN, FV);
+                              begin
+                                 if SC /= FC
+                                   or else (SC > 0 and then not Same_Type
+                                     (Kurt.Layout.Variant_Field_Type
+                                        (OT, SV, 1),
+                                      Kurt.Layout.Variant_Field_Type
+                                        (OT, FV, 1)))
+                                 then
+                                    Error ("'!' on '" & Image (OT)
+                                       & "' needs a declared inverted "
+                                       & "pair -- asymmetric payloads "
+                                       & "(spec 7.2.1)");
+                                 end if;
+                              end;
                            end if;
                         end;
                      end if;
                   end if;
                end if;
-               E.Sem_Ty := OT;
-               return OT;
+               E.Sem_Ty := Result_Ty;
+               return Result_Ty;
             end;
 
          when E_Question =>
@@ -239,6 +342,8 @@ separate (Kurt.Sema.Check)
 
          when E_Ref =>
             return Infer_Ref;
+         when E_Extract =>
+            return Infer_Extract;
          when E_CAS =>
             return Infer_CAS;
          when E_Array_Lit =>
@@ -304,9 +409,15 @@ separate (Kurt.Sema.Check)
             --  no `express` targets the block. (Bootstrap: only a
             --  trailing `express` yields the value.)
             declare
-               Saved : constant Type_Access := Express_Expected;
+               Saved   : constant Type_Access := Express_Expected;
+               Has_Lbl : constant Boolean := SU.Length (E.AB_Label) > 0;
             begin
                Express_Expected := Expected;
+               In_Expr_Block := In_Expr_Block + 1;   --  §7.8 express target
+               if Has_Lbl then
+                  --  §7.9 the block's label is in scope for its body.
+                  Label_Stack.Append ((Name => E.AB_Label, Is_Block => True));
+               end if;
                if E.AB_Airside then
                   In_Airside := In_Airside + 1;
                end if;
@@ -314,13 +425,30 @@ separate (Kurt.Sema.Check)
                if E.AB_Airside then
                   In_Airside := In_Airside - 1;
                end if;
+               if Has_Lbl then
+                  Label_Stack.Delete_Last;
+               end if;
+               In_Expr_Block := In_Expr_Block - 1;
                Express_Expected := Saved;
             end;
+            --  §7.9: a trailing `express 'l` types the block only when
+            --  'l names THIS block (one naming an outer block exits it
+            --  instead); a plain trailing `express` always does.
             if not E.AB_Stmts.Is_Empty
               and then E.AB_Stmts.Last_Element.Kind = S_Express
               and then E.AB_Stmts.Last_Element.Xp_Val /= null
+              and then (SU.Length (E.AB_Stmts.Last_Element.Xp_Label) = 0
+                        or else SU.To_String
+                                  (E.AB_Stmts.Last_Element.Xp_Label)
+                                = SU.To_String (E.AB_Label))
             then
                E.Sem_Ty := E.AB_Stmts.Last_Element.Xp_Val.Sem_Ty;
+            elsif Stmts_Diverge (E.AB_Stmts) then
+               --  §7.11: a block expression where control cannot reach
+               --  the end (a diverging expression on every path) is
+               --  itself diverging — it types as `never` and contributes
+               --  no constraint to any type unification.
+               E.Sem_Ty := Mk_Named ("never");
             else
                E.Sem_Ty := Mk_Named ("void");
             end if;
@@ -333,11 +461,17 @@ separate (Kurt.Sema.Check)
             --  targeting this loop, or `never` when no break carries a
             --  value (a diverging loop).
             declare
-               Found : Type_Access := null;
+               Found      : Type_Access := null;
+               Mismatched : Boolean := False;
 
-               --  Scan for a `break`-with-value that targets this loop:
+               --  Scan for every `break`-with-value that targets this loop:
                --  descend into `if`/`airside` bodies but not into a nested
-               --  loop (whose breaks target the inner loop).
+               --  loop (whose breaks target the inner loop). §7.7: every
+               --  `break value` in the same loop shall agree in type -- the
+               --  loop's type is otherwise ambiguous (which arm's value
+               --  does the loop expression actually produce?). The first
+               --  break-with-value fixes the loop's type; every later one
+               --  is checked against it.
                procedure Scan (V : Stmt_Vectors.Vector) is
                begin
                   for I in V.First_Index .. V.Last_Index loop
@@ -346,10 +480,22 @@ separate (Kurt.Sema.Check)
                      begin
                         case BS.Kind is
                            when S_Break =>
-                              if Found = null
-                                and then BS.Brk_Val /= null
-                              then
-                                 Found := BS.Brk_Val.Sem_Ty;
+                              if BS.Brk_Val /= null then
+                                 if Found = null then
+                                    Found := BS.Brk_Val.Sem_Ty;
+                                 elsif not Mismatched
+                                   and then not Same_Type
+                                     (Found, BS.Brk_Val.Sem_Ty)
+                                 then
+                                    Mismatched := True;
+                                    Error
+                                      ("`break` value type '"
+                                       & Image (BS.Brk_Val.Sem_Ty)
+                                       & "' disagrees with this loop's "
+                                       & "type '" & Image (Found)
+                                       & "', fixed by an earlier `break` "
+                                       & "(spec 7.7)");
+                                 end if;
                               end if;
                            when S_If =>
                               Scan (BS.SI_Then);
@@ -366,10 +512,13 @@ separate (Kurt.Sema.Check)
                In_Loop := In_Loop + 1;
                Check_Block (E.Loop_Body);
                In_Loop := In_Loop - 1;
+               --  Run unconditionally: agreement among the loop's own
+               --  `break value`s is required (spec 7.7) whether or not an
+               --  outer annotation also pins the loop's type.
+               Scan (E.Loop_Body);
                if Expected /= null and then not Is_Void_Type (Expected) then
                   E.Sem_Ty := Expected;
                else
-                  Scan (E.Loop_Body);
                   E.Sem_Ty :=
                     (if Found /= null then Found else Mk_Named ("never"));
                end if;

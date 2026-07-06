@@ -6,6 +6,27 @@ package body Kurt.Borrow is
    function Get (T : Tree; N : Node_Id) return Node_Rec is
      (T.Nodes.Element (Positive (N)));
 
+   --  §8.3: two referent paths conflict when one is a prefix of the other
+   --  at a field boundary (or they are equal) -- a root binding "p" and a
+   --  field projection "p.a" name overlapping storage; sibling fields
+   --  "p.a" and "p.b" do not. A whole-name referent (no '.') is simply the
+   --  degenerate one-segment case of the same rule.
+   function Paths_Overlap (A, B : String) return Boolean is
+      function Is_Prefix (Short, Long : String) return Boolean is
+      begin
+         if Short'Length > Long'Length then
+            return False;
+         end if;
+         if Long (Long'First .. Long'First + Short'Length - 1) /= Short then
+            return False;
+         end if;
+         return Short'Length = Long'Length
+           or else Long (Long'First + Short'Length) = '.';
+      end Is_Prefix;
+   begin
+      return Is_Prefix (A, B) or else Is_Prefix (B, A);
+   end Paths_Overlap;
+
    procedure Clear (T : in out Tree) is
    begin
       T.Nodes.Clear;
@@ -84,7 +105,7 @@ package body Kurt.Borrow is
                --  Foreign := live, distinct referent-overlapping node that is
                --  neither an ancestor nor a descendant of By.
                if R.Live and then M /= By
-                 and then SU.To_String (R.Referent) = Ref
+                 and then Paths_Overlap (SU.To_String (R.Referent), Ref)
                  and then not In_Subtree (T, By, M)
                  and then not In_Subtree (T, M, By)
                then
@@ -146,7 +167,7 @@ package body Kurt.Borrow is
             begin
                if R.Live
                  and then M /= N
-                 and then SU.To_String (R.Referent) = Ref
+                 and then Paths_Overlap (SU.To_String (R.Referent), Ref)
                  and then not In_Subtree (T, N, M)
                  and then not In_Subtree (T, M, N)
                then
@@ -165,7 +186,7 @@ package body Kurt.Borrow is
             R : constant Node_Rec := T.Nodes.Element (I);
          begin
             if R.Live and then R.State = Assert_Excl
-              and then SU.To_String (R.Referent) = Referent
+              and then Paths_Overlap (SU.To_String (R.Referent), Referent)
             then
                return True;
             end if;

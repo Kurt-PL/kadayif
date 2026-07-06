@@ -10,6 +10,19 @@ separate (Kurt.Parser)
          Advance (C);
          P.Is_Mut := True;
       end if;
+      --  §9.2 by-value self parameter: bare `self` (ownership transfer,
+      --  immutable binding) or `mut self` (ownership transfer, mutable
+      --  binding -- the `mut` was already consumed above, same as any
+      --  `mut name: T` parameter). Equivalent to `self: selftype`; the
+      --  slice-receiver bracket forms (`&[self]`/`$[self]`) are a
+      --  separate feature and are not handled here.
+      if C.Cur.Kind = Kw_Self then
+         Advance (C);
+         P.Name := SU.To_Unbounded_String ("self");
+         P.Ty   := new AST_Type (Kind => T_Named);
+         P.Ty.Name := SU.To_Unbounded_String ("selftype");
+         return P;
+      end if;
       --  §9.2 self parameter: `&self` / `$self`. The referent is the
       --  placeholder `selftype`, substituted with the impl type by
       --  Parse_Impl_Decl.

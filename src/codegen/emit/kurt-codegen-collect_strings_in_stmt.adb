@@ -38,11 +38,6 @@ separate (Kurt.Codegen)
             for I in S.SI_Else.First_Index .. S.SI_Else.Last_Index loop
                Collect_Strings_In_Stmt (S.SI_Else.Element (I), Pool);
             end loop;
-         when S_Extract =>
-            Collect_Strings_In_Expr (S.X_Expr, Pool);
-            for I in S.X_Else.First_Index .. S.X_Else.Last_Index loop
-               Collect_Strings_In_Stmt (S.X_Else.Element (I), Pool);
-            end loop;
          when S_Break =>
             Collect_Strings_In_Expr (S.Brk_Val, Pool);
          when S_Continue | S_Fence | S_Trap | S_Asm =>

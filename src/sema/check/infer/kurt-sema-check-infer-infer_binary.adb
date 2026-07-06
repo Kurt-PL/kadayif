@@ -170,8 +170,9 @@ separate (Kurt.Sema.Check.Infer)
                      --  §6.6: enums do not satisfy `numeric` and cannot
                      --  be compared with == != < > <= >= (bool is a
                      --  contract enum but only `==`/`!=` are usable
-                     --  through contract polarity; the bootstrap accepts
-                     --  bool through Is_Integer-like channels for now).
+                     --  through contract polarity; ordered comparisons
+                     --  `< > <= >=` on bool are rejected below since bool
+                     --  is not numeric).
                      if LT /= null and then LT.Kind = T_Named
                        and then Kurt.Layout.Is_Enum (SU.To_String (LT.Name))
                        and then SU.To_String (LT.Name) /= "bool"
@@ -180,6 +181,18 @@ separate (Kurt.Sema.Check.Infer)
                                & "' is not numeric -- comparison "
                                & "operators require numeric operands "
                                & "(spec 6.6)");
+                     end if;
+                     --  §6.6: `bool` is a contract type, not numeric --
+                     --  only `==`/`!=` (contract polarity) are legal;
+                     --  the ordered comparisons require `numeric`.
+                     if LT /= null and then LT.Kind = T_Named
+                       and then SU.To_String (LT.Name) = "bool"
+                       and then E.B_Op in B_Lt | B_Gt | B_Le | B_Ge
+                     then
+                        Error ("'bool' is not numeric -- ordered "
+                               & "comparisons '<', '>', '<=', '>=' "
+                               & "require numeric operands; only '==' "
+                               & "and '!=' are usable on bool (spec 6.6)");
                      end if;
                      E.Sem_Ty := Mk_Named ("bool");
                      return E.Sem_Ty;

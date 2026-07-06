@@ -34,7 +34,7 @@ separate (Kurt.Parser)
             return E;
 
          when Kw_Cellbits =>
-            --  §4.2.1: `cellbits[::exec|::xlat]` evaluates to a `uaddr`
+            --  §4.3.1: `cellbits[::exec|::xlat]` evaluates to a `uaddr`
             --  value. `::exec` / `::xlat` name the execution / translation
             --  cell widths; unqualified `cellbits` is `::exec` outside a
             --  xlatime evaluation and max(exec, xlat) within one. On this
@@ -77,7 +77,7 @@ separate (Kurt.Parser)
             return E;
 
          when Kw_True | Kw_False =>
-            --  §3.4.3 bool literals (built-in constants of type bool).
+            --  §3.5.3 bool literals (built-in constants of type bool).
             E := new Expr_Node (Kind => E_Bool_Lit);
             E.Bool_V := C.Cur.Kind = Kw_True;
             Advance (C);
@@ -129,7 +129,18 @@ separate (Kurt.Parser)
             return Prim_Ident;
          when Punct_LParen =>
             Advance (C);
-            E := Parse_Expr (C);
+            --  Explicit grouping resolves the struct-literal/block-body
+            --  ambiguity that motivates No_Struct_Lit (§6.6): once inside
+            --  '(' ... ')' a `{` cannot be mistaken for the caller's block,
+            --  so a literal is unambiguous here even where the enclosing
+            --  context (e.g. a `match`/`if` scrutinee) forbids one.
+            declare
+               Saved : constant Boolean := C.No_Struct_Lit;
+            begin
+               C.No_Struct_Lit := False;
+               E := Parse_Expr (C);
+               C.No_Struct_Lit := Saved;
+            end;
             Expect (C, Punct_RParen, "')'");
             E.Was_Paren := True;   --  §6.6 explicit grouping
             return E;
@@ -201,7 +212,20 @@ separate (Kurt.Parser)
                      Expect (C, Kw_Else, "'else' in `if xlatime`");
                      E2 := Parse_Expr (C);
                   end if;
-                  return (if Negated then E1 else E2);
+                  --  §6.10: `xlatime` evaluates to true exactly when the
+                  --  surrounding context is itself translation-time
+                  --  evaluation (an enclosing `xlatime { ... }` block or a
+                  --  `const`/`static` initializer, §6.10.2) -- tracked by
+                  --  C.Xlatime_Depth. An ordinary (execution-time) fn body
+                  --  has depth 0, so `xlatime` is false there -- the
+                  --  existing, pre-fix behaviour.
+                  declare
+                     Xlat_True : constant Boolean := C.Xlatime_Depth > 0;
+                     Cond_Val  : constant Boolean :=
+                       (if Negated then not Xlat_True else Xlat_True);
+                  begin
+                     return (if Cond_Val then E1 else E2);
+                  end;
                end;
             end if;
             E := new Expr_Node (Kind => E_If);
@@ -210,6 +234,27 @@ separate (Kurt.Parser)
             E.I_Then := Parse_Expr (C);
             Expect (C, Kw_Else, "'else'");
             E.I_Else := Parse_Expr (C);
+            return E;
+
+         when Kw_Contract =>
+            --  §7.2.3 contract extraction: `contract e else [.id] fallback`.
+            --  A general expression: its type is e's success payload type;
+            --  the (optional) `.id` binds the failure payload, in scope
+            --  only within `fallback`.
+            Advance (C);   --  contract
+            E := new Expr_Node (Kind => E_Extract);
+            E.Ex_Inner := Parse_Expr (C);
+            Expect (C, Kw_Else, "'else' in `contract ... else` (spec 7.2.3)");
+            --  `.id` vs a fallback that itself starts with `.` (a tuple
+            --  literal `.{ ... }`): only `.` followed by an IDENTIFIER is
+            --  the optional binding; `.{` belongs to the fallback.
+            if C.Cur.Kind = Punct_Dot
+              and then Peek_Tok (C).Kind = Tok_Ident
+            then
+               Advance (C);   --  '.'
+               E.Ex_Err := Take_Ident (C, "failure binding after 'else.'");
+            end if;
+            E.Ex_Fallback := Parse_Expr (C);
             return E;
 
          when Kw_Xlatime =>
@@ -222,6 +267,13 @@ separate (Kurt.Parser)
             declare
                Result : Expr_Access := null;
             begin
+               --  §6.10: the body of a `xlatime { ... }` block is a
+               --  translation-time-evaluated region -- `if xlatime` /
+               --  `if !xlatime` nested within it see `xlatime` as TRUE.
+               --  Depth-counted (not a flag) so nesting an ordinary fn
+               --  body inside would be wrong, but xlatime blocks/consts
+               --  themselves may nest.
+               C.Xlatime_Depth := C.Xlatime_Depth + 1;
                while C.Cur.Kind /= Punct_RBrace
                  and then C.Cur.Kind /= Tok_EOF
                loop
@@ -232,12 +284,14 @@ separate (Kurt.Parser)
                         Advance (C);
                      end if;
                   else
+                     C.Xlatime_Depth := C.Xlatime_Depth - 1;
                      raise Syntax_Error with
                        "the bootstrap supports only `xlatime { express E; }` "
                        & "(no statements) at line"
                        & Positive'Image (C.Cur.Line);
                   end if;
                end loop;
+               C.Xlatime_Depth := C.Xlatime_Depth - 1;
                Expect (C, Punct_RBrace, "'}' to close xlatime block");
                if Result = null then
                   raise Syntax_Error with
@@ -267,6 +321,28 @@ separate (Kurt.Parser)
             Parse_Block_Stmts (C, E.AB_Stmts);
             return E;
 
+         when Tok_Label =>
+            --  §7.9 labelled block expression `'name: { … }`. Its value
+            --  is yielded by `express` (plain or `express 'name`); the
+            --  label is what an `express 'name` searches for.
+            declare
+               Lbl : constant SU.Unbounded_String := C.Cur.Lexeme;
+            begin
+               Advance (C);
+               Expect (C, Punct_Colon, "':' after block label (spec 7.9)");
+               if C.Cur.Kind /= Punct_LBrace then
+                  raise Syntax_Error with
+                    "a label in expression position shall prefix a "
+                    & "`{` block (spec 7.9) at line"
+                    & Positive'Image (C.Cur.Line);
+               end if;
+               E := new Expr_Node (Kind => E_Airside_Blk);
+               E.AB_Airside := False;
+               E.AB_Label   := Lbl;
+               Parse_Block_Stmts (C, E.AB_Stmts);
+               return E;
+            end;
+
          when Kw_Loop =>
             --  §7.7 `loop { … }` as an expression, yielding a `break` value.
             --  (Statement-position `loop` never reaches here — Parse_Stmt
@@ -289,15 +365,14 @@ separate (Kurt.Parser)
             end if;
             E.AL_Elems.Append (Parse_Expr (C));
             if C.Cur.Kind = Punct_Semi then
-               --  repeat form: the single element fills N slots.
+               --  repeat form: the single element fills N slots. §6.1.6: N
+               --  "shall be evaluable at translation time" -- any
+               --  expression is accepted here (a bare literal, a `const`,
+               --  or arithmetic over those); Kurt.Sema.Check resolves it
+               --  to a positive literal count (Kurt.Parser.Fold_Int_Expr),
+               --  rejecting non-positive/unfoldable N with a diagnostic.
                Advance (C);
-               if C.Cur.Kind /= Tok_Int_Lit or else C.Cur.Int_V <= 0 then
-                  raise Syntax_Error with
-                    "repeat count must be a positive integer literal at "
-                    & "line" & Positive'Image (C.Cur.Line);
-               end if;
-               E.AL_Repeat := Natural (C.Cur.Int_V);
-               Advance (C);
+               E.AL_Repeat_Expr := Parse_Expr (C);
             else
                while C.Cur.Kind = Punct_Comma loop
                   Advance (C);

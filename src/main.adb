@@ -402,6 +402,12 @@ exception
       Put_E ("kadayif: translation failure: "
              & Ada.Exceptions.Exception_Message (E));
       CLI.Set_Exit_Status (Exit_TransErr);
+   when E : Kurt.Codegen.Codegen_Error =>
+      --  §2.9.1: constructs beyond the bootstrap's lowering are reported
+      --  as diagnostics, not Ada tracebacks.
+      Put_E ("kadayif: not yet supported: "
+             & Ada.Exceptions.Exception_Message (E));
+      CLI.Set_Exit_Status (Exit_TransErr);
    when E : others =>
       Put_E ("kadayif: internal error: "
              & Ada.Exceptions.Exception_Information (E));

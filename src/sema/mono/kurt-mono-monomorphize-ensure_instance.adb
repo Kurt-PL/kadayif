@@ -16,16 +16,24 @@ separate (Kurt.Mono.Monomorphize)
               "wrong number of type arguments for '" & Orig & "'";
          end if;
          declare
-            New_D : Struct_Decl;
+            New_D  : Struct_Decl;
+            --  §5.9: Subst/Copy_Expr substitute by name; strip the
+            --  (now-recorded) inline bounds down to a plain name list.
+            PNames : Path_Segments.Vector;
          begin
+            for I in SD.Generic_Params.First_Index ..
+                     SD.Generic_Params.Last_Index
+            loop
+               PNames.Append (SD.Generic_Params.Element (I).Name);
+            end loop;
             New_D.Name := SU.To_Unbounded_String (Mangled);
             for I in SD.Fields.First_Index .. SD.Fields.Last_Index loop
                New_D.Fields.Append
                  ((Name    => SD.Fields.Element (I).Name,
                    Ty      => Subst (SD.Fields.Element (I).Ty,
-                                     SD.Generic_Params, Inst.Args),
+                                     PNames, Inst.Args),
                    Default => Copy_Expr (SD.Fields.Element (I).Default,
-                                         SD.Generic_Params, Inst.Args),
+                                         PNames, Inst.Args),
                    Is_Mut     => SD.Fields.Element (I).Is_Mut,
                    Is_Pub     => SD.Fields.Element (I).Is_Pub,
                    Is_Airside => SD.Fields.Element (I).Is_Airside));
@@ -42,8 +50,15 @@ separate (Kurt.Mono.Monomorphize)
               "wrong number of type arguments for '" & Orig & "'";
          end if;
          declare
-            New_D : Enum_Decl;
+            New_D  : Enum_Decl;
+            --  §5.9: see the analogous PNames extraction for structs above.
+            PNames : Path_Segments.Vector;
          begin
+            for I in ED.Generic_Params.First_Index ..
+                     ED.Generic_Params.Last_Index
+            loop
+               PNames.Append (ED.Generic_Params.Element (I).Name);
+            end loop;
             New_D.Name        := SU.To_Unbounded_String (Mangled);
             New_D.Is_Contract := ED.Is_Contract;
             for I in ED.Variants.First_Index .. ED.Variants.Last_Index
@@ -60,10 +75,10 @@ separate (Kurt.Mono.Monomorphize)
                      NV.Payload.Append
                        ((Name    => V.Payload.Element (J).Name,
                          Ty      => Subst (V.Payload.Element (J).Ty,
-                                           ED.Generic_Params, Inst.Args),
+                                           PNames, Inst.Args),
                          Default => Copy_Expr
                                       (V.Payload.Element (J).Default,
-                                       ED.Generic_Params, Inst.Args),
+                                       PNames, Inst.Args),
                          others => <>));
                   end loop;
                   New_D.Variants.Append (NV);

@@ -34,10 +34,17 @@ separate (Kurt.Lexer)
             Advance (L);
          end if;
       end;
+      --  §3.5.4: a character literal's value is one cell (8 bits here,
+      --  config/IDB.md). A multi-byte UTF-8 character does not fit -- the
+      --  case above only ever consumed its first raw byte into V, so the
+      --  cursor lands on one of its continuation bytes rather than the
+      --  closing quote, and is caught here rather than being decoded.
       if At_End (L) or else Peek (L) /= ''' then
          raise Translation_Failure
            with "character literal shall contain exactly one character "
-              & "(§3.5.4) at line" & Positive'Image (Start_Line);
+              & "that fits one cell (8 bits); a multi-byte UTF-8 "
+              & "character is not permitted here (§3.5.4, §3.1) at line"
+              & Positive'Image (Start_Line);
       end if;
       Advance (L);  --  consume closing '
       T.Kind  := Tok_Char_Lit;

@@ -1,6 +1,6 @@
---  Kurt.Mono — monomorphisation of generic types (§5.8.1, §5.8.3).
+--  Kurt.Mono — monomorphisation of generic types (§5.9).
 --
---  §5.8.1: an instantiation `G.<A, B>` denotes the concrete type "as if it
+--  §5.9: an instantiation `G.<A, B>` denotes the concrete type "as if it
 --  had been written with the type arguments substituted throughout", and
 --  distinct arguments yield distinct types. This pass realises that: for
 --  every generic instance used in the unit it generates a concrete

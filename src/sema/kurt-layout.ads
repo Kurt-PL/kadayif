@@ -15,6 +15,23 @@ package Kurt.Layout is
    --  Record the unit whose struct declarations subsequent queries use.
    procedure Register (U : Kurt.Parser.Translation_Unit);
 
+   --  §10.2/§10.3 source-unit provenance (bootstrap approximation, driven
+   --  by Kurt.Parser.Merge_Unit/Apply_Namespace's namespace-mangling
+   --  scheme, which is the only per-declaration provenance the bootstrap
+   --  keeps): the driver registers the mangled-name prefix it assigns to
+   --  each non-root `@add`-ed source unit. A mangled name's leading
+   --  '$'-segment then identifies its source unit; a name whose leading
+   --  segment matches no registered prefix is a root-unit declaration
+   --  (this also covers a root-file `module { ... }`, whose declarations
+   --  are prefixed by the MODULE name, not a file prefix -- inline
+   --  `module` nesting is intentionally not a visibility boundary here,
+   --  see Kurt.Sema.Check).
+   procedure Register_File_Prefix (Prefix : String);
+
+   --  Whether mangled names A and B were declared in the same source unit
+   --  (§5.5.1/§6.2.2 non-`pub` visibility boundary).
+   function Same_Source_Unit (A, B : String) return Boolean;
+
    --  Size in cells of a type. A cell is Kurt.Cell_Bits_Exec bits wide;
    --  on this target a cell is a host byte.
    function Size_Of (T : Kurt.Parser.Type_Access) return Natural;
@@ -49,6 +66,11 @@ package Kurt.Layout is
    --  field modifier (atomically storable). False if unknown/not mut.
    function Field_Is_Mut (Struct_Name, Field : String) return Boolean;
 
+   --  §5.5.1: True when Field of struct Struct_Name carries `pub` /
+   --  `airside`. False if unknown/absent.
+   function Field_Is_Pub (Struct_Name, Field : String) return Boolean;
+   function Field_Is_Airside (Struct_Name, Field : String) return Boolean;
+
    --  §5.5.3 default-value expression for a field; null when it has none.
    function Field_Default
      (Struct_Name, Field : String) return Kurt.Parser.Expr_Access;
@@ -58,6 +80,22 @@ package Kurt.Layout is
    function Struct_Field_Count (Struct_Name : String) return Natural;
    function Struct_Field_Name
      (Struct_Name : String; Index : Positive) return String;
+
+   --  §8.4.3 field destruction order: a sequence of 1-based field indices
+   --  (as consulted via Struct_Field_Name/Field_Offset), in the order the
+   --  fields are destroyed. With no `with lifetime` chain this is simply
+   --  reverse declaration order (unchanged bootstrap default); a chain
+   --  'a 'b reorders any two fields it names (by field name — the
+   --  implicit lifetime identifier, §8.4.2) so the shorter-lived one
+   --  (later in the chain) is destroyed first. Fields unrelated by any
+   --  common chain keep reverse declaration order between themselves.
+   type Field_Order is array (Positive range <>) of Positive;
+   function Struct_Destroy_Order (Struct_Name : String) return Field_Order;
+
+   --  Same as Struct_Destroy_Order, for one enum variant's payload fields
+   --  (indices into Variant_Field_Name/Variant_Field_Offset).
+   function Variant_Destroy_Order
+     (Enum_Name, Variant : String) return Field_Order;
 
    --  Whether Name denotes a registered enum type.
    function Is_Enum (Name : String) return Boolean;
@@ -82,13 +120,40 @@ package Kurt.Layout is
    --  WITHOUT such a variant requires an explicit `#wild#` arm.
    function Has_Wild_Variant (Enum_Name : String) return Boolean;
 
+   --  Whether Enum_Name's `#wild#` variant, if any, carries a
+   --  parenthesised canonical value (`#wild#(V)`) rather than the bare
+   --  `#wild#` form (§4.5, §6.8.7).
+   function Wild_Has_Canon (Enum_Name : String) return Boolean;
+
+   --  Whether Variant is the `#wild#` variant of Enum_Name.
+   function Is_Wild_Variant (Enum_Name, Variant : String) return Boolean;
+
+   --  Name of Enum_Name's `#wild#` variant. Raises if there is none.
+   function Wild_Variant_Name (Enum_Name : String) return String;
+
    --  Whether the enum was declared `with contract` (§7).
    function Is_Contract_Enum (Name : String) return Boolean;
 
-   --  For a `with contract` enum: the success (truthy, non-`#wild#`)
-   --  variant and the failure (`#wild#`) variant names.
+   --  For a `with [!]contract` enum: the success (truthy) and failure
+   --  (falsey) variant names -- `with contract`: explicit=success,
+   --  `#wild#`=failure; `with !contract`: polarity exchanged (§7.2).
    function Contract_Success_Variant (Enum_Name : String) return String;
    function Contract_Fail_Variant (Enum_Name : String) return String;
+
+   --  §7.2 `with !contract` polarity flag.
+   function Contract_Is_Inverted (Enum_Name : String) return Boolean;
+
+   --  §7.2 the bare name of the declared `-> inv_type` inverted pair
+   --  (before generic substitution); "" when none is declared or it is
+   --  not a simple named type.
+   function Contract_Inv_Type_Name (Enum_Name : String) return String;
+
+   --  §7.2 the declared `-> inv_type` inverted-pair type, substituted for
+   --  the given (possibly generic) instantiation T -- e.g. for `switch.<T>
+   --  with contract -> switch_inv.<T>` and T = switch.<si4>, returns
+   --  switch_inv.<si4>. Null when no inverted pair is declared.
+   function Contract_Inv_Type
+     (T : Kurt.Parser.Type_Access) return Kurt.Parser.Type_Access;
 
    --  Discriminant value of Variant in Enum_Name. Raises if unknown.
    function Variant_Value
@@ -112,6 +177,14 @@ package Kurt.Layout is
    function Variant_Field_Type
      (Enum_Name, Variant : String; Field_No : Positive)
       return Kurt.Parser.Type_Access;
+   --  Declared name of the Field_No-th payload field ("" when the field
+   --  is positional/unnamed, or absent). §5.10.2 named-field test.
+   function Variant_Field_Name
+     (Enum_Name, Variant : String; Field_No : Positive) return String;
+   --  §5.5.1/§5.7: True when the Field_No-th payload field of Variant
+   --  carries the `airside` field modifier. False if unknown/absent.
+   function Variant_Field_Is_Airside
+     (Enum_Name, Variant : String; Field_No : Positive) return Boolean;
    --  Offset of a payload field by name (or -1 if absent).
    function Variant_Field_Offset_By_Name
      (Enum_Name, Variant, Field : String) return Integer;

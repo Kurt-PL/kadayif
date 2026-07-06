@@ -5,11 +5,17 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
 
       Info      : Dyn_Sym;
       Has_Info  : constant Boolean := Lookup_Dyn_Sym (ST, Callee_Name, Info);
-      --  §5.15: a `@symbol "name"` on the (dyn) callee overrides the
-      --  external name; otherwise the identifier is used.
+      --  §5.15: a `@symbol "name"` on the callee overrides the external
+      --  name a direct call targets — on the `@dyn` prototype for a dyn
+      --  callee, or on the internal `extern` fn declaration otherwise;
+      --  absent either, the Kurt identifier is used.
+      Internal_Sym : constant String := Fn_Symbol_Of (ST, Callee_Name);
       Sym       : constant String := "_"
         & (if Has_Info and then SU.Length (Info.Symbol) > 0
-           then SU.To_String (Info.Symbol) else Callee_Name);
+           then SU.To_String (Info.Symbol)
+           elsif not Has_Info and then Internal_Sym /= ""
+           then Internal_Sym
+           else Callee_Name);
       Is_Var    : constant Boolean := Has_Info and then Info.Is_Variadic;
       Fixed     : constant Natural :=
         (if Is_Var then Natural'Min (Info.Fixed_Args, N) else N);

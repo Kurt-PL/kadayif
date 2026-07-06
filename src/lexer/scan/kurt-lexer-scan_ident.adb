@@ -5,9 +5,24 @@ separate (Kurt.Lexer)
       Buf        : SU.Unbounded_String;
       T          : Token;
    begin
-      while not At_End (L) and then Is_Ident_Continue (Peek (L)) loop
-         SU.Append (Buf, Peek (L));
-         Advance (L);
+      --  §3.4: an identifier is a maximal run of continue characters, each
+      --  either a single ASCII byte or a multi-byte UTF-8 encoding of a
+      --  Unicode letter/digit code point (Ident_Continue_Len, §3.1). The
+      --  stored name is the raw byte sequence -- identity and
+      --  case-sensitivity are untouched, only the character-set test
+      --  changed.
+      loop
+         declare
+            Len : constant Natural := Ident_Continue_Len (L);
+         begin
+            exit when Len = 0;
+            for K in 0 .. Len - 1 loop
+               SU.Append (Buf, Peek (L, K));
+            end loop;
+            for K in 1 .. Len loop
+               Advance (L);
+            end loop;
+         end;
       end loop;
 
       T.Lexeme := Buf;

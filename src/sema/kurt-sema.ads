@@ -8,7 +8,7 @@
 --
 --  Type inference is light bidirectional checking: a synthesised type
 --  flows up, while an "expected" type flows down so that unsuffixed
---  integer literals (§3.4.1) take the surrounding type, falling back to
+--  integer literals (§3.5.1) take the surrounding type, falling back to
 --  `saddr` when no integer context constrains them.
 --
 --  Checks performed:

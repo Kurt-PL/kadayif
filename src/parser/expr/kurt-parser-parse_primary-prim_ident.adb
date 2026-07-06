@@ -5,6 +5,14 @@ separate (Kurt.Parser.Parse_Primary)
             --  `self` (method receiver), `super`, and `srcroot` (module
             --  paths); every other keyword in an identifier position
             --  fails below.
+            --  §10.6: `super` shall not appear at source-unit top level,
+            --  outside any enclosing `module { ... }`.
+            if C.Cur.Kind = Kw_Super and then C.Module_Depth = 0 then
+               raise Syntax_Error with
+                 "`super` is not valid at source-unit top level, outside "
+                 & "any `module` (spec 10.6) at line"
+                 & Positive'Image (C.Cur.Line);
+            end if;
             E := new Expr_Node (Kind => E_Path);
             E.Segments.Append (C.Cur.Lexeme);
             Advance (C);

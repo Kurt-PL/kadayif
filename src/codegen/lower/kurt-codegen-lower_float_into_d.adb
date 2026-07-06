@@ -49,12 +49,17 @@ begin
          end if;
 
       when E_Int_Lit =>
-         --  An integer literal in a float context (§3.4.1): its value is
+         --  An integer literal in a float context (§3.5.1): its value is
          --  representable at translation time, so emit it as a constant.
          Lower_Float_Const (F, D_Reg, Long_Float (E.Int_V), Sizeof (Ty));
 
       when E_Path =>
-         if Natural (E.Segments.Length) = 1 then
+         --  §5.3 / §9.3.2: a const (or associated-const) name was resolved
+         --  by sema to its initialiser value — lower that value, exactly
+         --  as the integer side (Lower_Path) does.
+         if E.P_Assoc_Val /= null then
+            Lower_Float_Into_D (F, E.P_Assoc_Val, D_Reg, ST);
+         elsif Natural (E.Segments.Length) = 1 then
             declare
                Name : constant String :=
                  SU.To_String (E.Segments.Last_Element);

@@ -14,14 +14,22 @@ separate (Kurt.Sema.Check.Infer)
                          & "expression (binding, field, or deref)");
                end if;
                --  §8.5.2: atomic/guard references are restricted to
-               --  unsigned integer referents.
-               if E.Rf_Store in RS_Atomic | RS_Guard
-                 and then not Is_Unsigned_Int_Type (PT)
-               then
-                  Error ("'&" & (if E.Rf_Store = RS_Atomic
-                                 then "atomic" else "guard")
-                         & "' requires an unsigned integer referent, "
-                         & "got '" & Image (PT) & "' (spec 8.5.2)");
+               --  unsigned integer referents, and further to a width the
+               --  execution environment can operate on atomically (this
+               --  arm64 backend: 1/2/4/8 bytes via ldaxr/stlxr).
+               if E.Rf_Store in RS_Atomic | RS_Guard then
+                  if not Is_Unsigned_Int_Type (PT) then
+                     Error ("'&" & (if E.Rf_Store = RS_Atomic
+                                    then "atomic" else "guard")
+                            & "' requires an unsigned integer referent, "
+                            & "got '" & Image (PT) & "' (spec 8.5.2)");
+                  elsif not Is_Atomic_Width_Ok (PT) then
+                     Error ("'&" & (if E.Rf_Store = RS_Atomic
+                                    then "atomic" else "guard")
+                            & "' referent '" & Image (PT) & "' is wider "
+                            & "than this execution environment's atomic "
+                            & "operations support (spec 8.5.2)");
+                  end if;
                end if;
                --  §5.4: only shared references may be created from an
                --  immutable `static` in landside code.

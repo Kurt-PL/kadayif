@@ -1,5 +1,12 @@
 separate (Kurt.Codegen.Lower_Stmt)
    procedure Lower_Let is
+      --  §5.2/§6.1.8: whether the binding has a real value-establishing
+      --  initializer at declaration -- an omitted initializer (deferred
+      --  `let`/`mut`) leaves the drop flag disarmed until an assignment
+      --  later reaches it (Lower_Assign); `= uninit` counts as "had one"
+      --  (spec 6.1.8: the assignment itself establishes the §5.2
+      --  determination, even though it stores no value).
+      Had_Init : constant Boolean := S.L_Init /= null;
    begin
          if S.L_Is_Refut then
             --  §5.2.1 refutable let-else. Like `if let` the scrutinee is a
@@ -67,7 +74,10 @@ separate (Kurt.Codegen.Lower_Stmt)
          --  initialiser. Per §2.2.3 every binding object — struct or
          --  scalar — gets a stack slot (never a register).
          --  §6.1.8: `= uninit` allocates the slot and registers the binding
-         --  but performs no store, exactly like an omitted initialiser.
+         --  but performs no store, exactly like an omitted initialiser --
+         --  except that (spec 6.1.8) the assignment itself establishes the
+         --  §5.2 initialization determination, so (unlike a genuinely
+         --  omitted initialiser) its drop flag is still armed below.
          if S.L_Init /= null and then S.L_Init.Kind = E_Uninit then
             S.L_Init := null;
          end if;
@@ -163,6 +173,18 @@ separate (Kurt.Codegen.Lower_Stmt)
                elsif Is_Agg then
                   if S.L_Init = null then
                      null;  --  mut without initialiser
+                  elsif S.L_Init.Kind = E_Path
+                    and then S.L_Init.P_Assoc_Val /= null
+                    and then S.L_Init.P_Assoc_Val.Kind = E_Struct_Lit
+                  then
+                     --  §5.6: a bare fieldless-struct-name initialiser
+                     --  (`let v = empty_t;`), which Kurt.Sema.Check.Infer
+                     --  substitutes with the equivalent empty literal
+                     --  `empty_t {}` via P_Assoc_Val (E itself stays
+                     --  E_Path, a constrained node). Zero fields means
+                     --  there is nothing to copy — the degenerate case of
+                     --  the E_Struct_Lit branch below.
+                     Zero_Fill (Off, Sizeof (Ty));
                   elsif S.L_Init.Kind = E_Struct_Lit then
                      Zero_Fill (Off, Sizeof (Ty));
                      declare
@@ -548,12 +570,14 @@ separate (Kurt.Codegen.Lower_Stmt)
                              "codegen: aggregate let with scalar call";
                      end case;
                   elsif (S.L_Init.Kind = E_CAS
-                         or else S.L_Init.Kind = E_Unary)
+                         or else S.L_Init.Kind = E_Unary
+                         or else S.L_Init.Kind = E_Extract)
                     and then Sizeof (Ty) <= 8
                   then
                      --  ≤8-byte aggregates that Lower_Expr_Into_Reg packs
-                     --  into a single register: §8.7 CAS verdicts and
-                     --  §7.2.1 polarity-inverted contract values.
+                     --  into a single register: §8.7 CAS verdicts, §7.2.1
+                     --  polarity-inverted contract values, and §7.2.3
+                     --  contract-extraction results.
                      Lower_Expr_Into_Reg (F, S.L_Init, 9, ST);
                      Store_Sized (Off, Sizeof (Ty));
                   elsif S.L_Init.Kind = E_Deref then
@@ -650,9 +674,23 @@ separate (Kurt.Codegen.Lower_Stmt)
                         Flag : constant Natural := ST.Next_Offset;
                      begin
                         ST.Next_Offset := ST.Next_Offset + 8;
-                        IO.Put_Line (F, "    mov     w9, #1");
-                        IO.Put_Line (F, "    strb    w9, [x29, #"
-                                        & Img (Flag) & "]");
+                        --  §5.2: a deferred (genuinely omitted) initializer
+                        --  leaves the flag disarmed -- the binding may
+                        --  never be assigned on this path (Kurt.Sema.Check
+                        --  has already proven that when it IS assigned on
+                        --  only some paths, that is a translation failure
+                        --  for a destruct type, spec 5.2/8.4), so scope
+                        --  exit must statically skip the destructor call
+                        --  unless a later plain assignment arms it
+                        --  (Lower_Assign).
+                        if Had_Init then
+                           IO.Put_Line (F, "    mov     w9, #1");
+                           IO.Put_Line (F, "    strb    w9, [x29, #"
+                                           & Img (Flag) & "]");
+                        else
+                           IO.Put_Line (F, "    strb    wzr, [x29, #"
+                                           & Img (Flag) & "]");
+                        end if;
                         ST.Drop_Flags.Append
                           ((Bind_Off => Off, Flag_Off => Flag));
                      end;

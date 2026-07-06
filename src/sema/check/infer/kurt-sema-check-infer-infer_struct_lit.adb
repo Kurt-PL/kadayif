@@ -15,6 +15,24 @@ separate (Kurt.Sema.Check.Infer)
                if not Kurt.Layout.Is_Struct (SN) then
                   Error ("unknown struct type '" & SN & "'");
                else
+                  --  §5.5.1 constraint: "A composite literal that
+                  --  constructs a composite type with an `airside` field
+                  --  shall appear only inside an `airside` block" -- this
+                  --  gates the WHOLE construction, unconditionally on
+                  --  whether the literal names that particular field.
+                  if In_Airside = 0 then
+                     for K in 1 .. Kurt.Layout.Struct_Field_Count (SN) loop
+                        if Kurt.Layout.Field_Is_Airside
+                             (SN, Kurt.Layout.Struct_Field_Name (SN, K))
+                        then
+                           Error ("struct literal of '" & SN
+                                  & "' constructs a type with an `airside` "
+                                  & "field -- permitted only inside an "
+                                  & "`airside` block (spec 5.5.1)");
+                           exit;
+                        end if;
+                     end loop;
+                  end if;
                   for I in E.SL_Fields.First_Index ..
                            E.SL_Fields.Last_Index
                   loop
@@ -39,6 +57,21 @@ separate (Kurt.Sema.Check.Infer)
                         if FT = null then
                            Error ("struct '" & SN & "' has no field '"
                                   & SU.To_String (FI.Name) & "'");
+                        --  §5.5.1: a non-`pub` field shall be named in a
+                        --  composite literal only within the source unit
+                        --  that declares the struct (an omitted field with
+                        --  a default is NOT "named", so that path is
+                        --  unaffected -- see the coverage loop below).
+                        elsif not Kurt.Layout.Field_Is_Pub
+                                (SN, SU.To_String (FI.Name))
+                          and then not Kurt.Layout.Same_Source_Unit
+                                (SN, SU.To_String (Cur_Fn_Name))
+                        then
+                           Error ("field '" & SU.To_String (FI.Name)
+                                  & "' of '" & SN & "' is not `pub` -- "
+                                  & "shall be named in a composite literal "
+                                  & "only within the source unit that "
+                                  & "declares '" & SN & "' (spec 5.5.1)");
                         end if;
                         VT := Infer (FI.Val, FT);
                         if FT /= null and then not Assignable (FT, VT) then

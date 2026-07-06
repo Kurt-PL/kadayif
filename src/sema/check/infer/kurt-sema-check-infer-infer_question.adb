@@ -19,6 +19,16 @@ separate (Kurt.Sema.Check.Infer)
                   E.Sem_Ty := IT;
                   return E.Sem_Ty;
                end if;
+               --  §7.2.4 bootstrap: like the `if e -> v` scrutinee, the
+               --  `?` operand must be a binding (a place) so the enum
+               --  aggregate is already materialised in a frame slot; a
+               --  call/temporary is not yet supported.
+               if E.Q_Inner.Kind /= E_Path
+                 or else Natural (E.Q_Inner.Segments.Length) /= 1
+               then
+                  Error ("the `?` operand must currently be a binding; "
+                         & "bind the value first (bootstrap)");
+               end if;
                if Ret_EN = ""
                  or else not Kurt.Layout.Is_Contract_Enum (Ret_EN)
                then

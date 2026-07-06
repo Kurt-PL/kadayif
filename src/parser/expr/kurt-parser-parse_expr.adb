@@ -17,7 +17,7 @@ separate (Kurt.Parser)
             Advance (C);
             Next.CAS_Tgt := E;
             Next.CAS_Exp := Parse_Binary (C, 0);
-            Expect (C, Punct_LArrow, "'<-' in compare-and-swap (spec 8.7)");
+            Expect (C, Kw_Then, "'then' in compare-and-swap (spec 8.7)");
             Next.CAS_New := Parse_Binary (C, 0);
             E := Next;
          end;

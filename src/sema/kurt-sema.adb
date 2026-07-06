@@ -202,8 +202,34 @@ package body Kurt.Sema is
      (T /= null and then T.Kind = T_Dyn);
 
    --  A type that may not appear in a value position (§4.6 / §9.5).
+   --  Recurses into T_Array element types and T_Tuple member types: a
+   --  fixed-size array of `dyn Trait` (`[dyn Show; 2]`) or a tuple
+   --  containing one (`.{dyn Show, si4}`) embeds the unsized value just
+   --  as directly as a bare top-level occurrence would, and the codegen
+   --  layout has no more idea how to size that member than it would the
+   --  bare form.
    function Is_Unsized_Value (T : Type_Access) return Boolean is
-     (Is_Unsized_Arr (T) or else Is_Dyn_Bare (T));
+   begin
+      if Is_Unsized_Arr (T) or else Is_Dyn_Bare (T) then
+         return True;
+      end if;
+      if T = null then
+         return False;
+      end if;
+      case T.Kind is
+         when T_Array =>
+            return Is_Unsized_Value (T.Elem);
+         when T_Tuple =>
+            for I in T.Elems.First_Index .. T.Elems.Last_Index loop
+               if Is_Unsized_Value (T.Elems.Element (I)) then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         when others =>
+            return False;
+      end case;
+   end Is_Unsized_Value;
 
    function Is_Uaddr (T : Type_Access) return Boolean is
      (T /= null and then T.Kind = T_Named
@@ -227,6 +253,17 @@ package body Kurt.Sema is
              or else N = "uaddr";
       end;
    end Is_Unsigned_Int_Type;
+
+   --  §8.5.2: "Creating an `&atomic T` or `&guard T` reference for a `T`
+   --  at a width for which the execution environment does not provide
+   --  atomic operations shall not appear." On this arm64 backend, atomic
+   --  load/store/RMW/CAS lower to ldaxr/stlxr, which handle 1/2/4/8-byte
+   --  operands only; a 16-byte (ldaxp-shaped) or wider operand has no
+   --  lowering here, so widths above 8 bytes are not atomic-eligible.
+   function Is_Atomic_Width_Ok (T : Type_Access) return Boolean is
+   begin
+      return Is_Unsigned_Int_Type (T) and then Kurt.Layout.Size_Of (T) <= 8;
+   end Is_Atomic_Width_Ok;
 
    --  §6.5: the unsigned integer type of a given size in cells — the
    --  contextual type of an unsuffixed shift-count literal.
@@ -468,6 +505,15 @@ package body Kurt.Sema is
       Ret         : Type_Access;
       Is_Variadic : Boolean := False;
       Is_Never    : Boolean := False;   --  §4.10 `-> never`
+      --  §5.1.2 `extern(iface)` invocation interface; "" = native. Carried
+      --  into the synthesized `fn(...)->...` type of a bare-name fn-pointer
+      --  value so a non-native interface makes it a distinct type (§4.10).
+      Extern_Iface : SU.Unbounded_String;
+      --  §5.12.1/§9.2: whether the subroutine itself was declared `pub`.
+      --  An `impl` method inherits no visibility of its own (spec 5.12.1),
+      --  so a non-`pub` method is callable via `.method()` receiver syntax
+      --  only from the source unit that declares it (Infer_Call).
+      Is_Pub : Boolean := False;
    end record;
 
    package Sig_Vec is new Ada.Containers.Vectors
@@ -495,6 +541,25 @@ package body Kurt.Sema is
 
    package Moved_Vec is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Moved_Bind);
+
+   --  §5.2 definite-assignment state for a deferred-init binding (`let
+   --  x: T;` / `mut x: T;`, initializer omitted). Uninit: untouched on
+   --  every live path so far. Maybe: assigned on some but not all live
+   --  paths -- a "proof failure": a read/reference-creation is rejected,
+   --  and (if the type satisfies `destruct`) so is scope exit. Init:
+   --  assigned on every live path.
+   type Init_State is (St_Uninit, St_Maybe, St_Init);
+
+   type Init_Bind is record
+      Name   : SU.Unbounded_String;
+      State  : Init_State := St_Uninit;
+      Depth  : Natural := 0;
+      Ty     : Type_Access;
+      Is_Let : Boolean := False;  --  single-assignment (spec 5.2)
+   end record;
+
+   package Init_Vec is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Init_Bind);
 
    ----------------------------------------------------------------------
    procedure Check

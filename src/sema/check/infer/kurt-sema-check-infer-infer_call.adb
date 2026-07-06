@@ -210,6 +210,27 @@ separate (Kurt.Sema.Check.Infer)
                         elsif Fnd
                           and then Find_Sig (SU.To_String (Sym), S)
                         then
+                           --  §5.12.1/§9.2: subroutines inside an `impl`
+                           --  block inherit no visibility of their own --
+                           --  each shall be individually marked `pub` for
+                           --  external access. A non-`pub` method invoked
+                           --  via `.method()` receiver syntax is therefore
+                           --  callable only from the source unit that
+                           --  declares the `impl`.
+                           if not S.Is_Pub
+                             and then not Kurt.Layout.Same_Source_Unit
+                                            (SU.To_String (Sym),
+                                             SU.To_String (Cur_Fn_Name))
+                           then
+                              Error ("method '"
+                                     & SU.To_String (E.C_Callee.F_Name)
+                                     & "' of '" & Image (RTT)
+                                     & "' is not `pub` -- accessible only "
+                                     & "within the source unit that "
+                                     & "declares it (spec 5.12.1/9.2)");
+                              E.Sem_Ty := null;
+                              return null;
+                           end if;
                            declare
                               Self_Ty : constant Type_Access :=
                                 (if not S.Params.Is_Empty
@@ -219,14 +240,22 @@ separate (Kurt.Sema.Check.Infer)
                               NP : constant Expr_Access :=
                                 new Expr_Node (Kind => E_Path);
                            begin
-                              if Is_Ref (RT) then
+                              if not Is_Ref (Self_Ty) then
+                                 --  §9.2 by-value self (`self` / `mut
+                                 --  self`): the receiver is passed by
+                                 --  value, transferred like any by-value
+                                 --  argument (Maybe_Move below) -- no
+                                 --  auto-referencing. If the receiver
+                                 --  expression is itself a reference, the
+                                 --  ordinary argument-assignability check
+                                 --  below rejects the mismatch.
+                                 Recv_Arg := Recv;
+                              elsif Is_Ref (RT) then
                                  Recv_Arg := Recv;
                               else
                                  Recv_Arg :=
                                    new Expr_Node (Kind => E_Ref);
-                                 Recv_Arg.Rf_Sigil :=
-                                   (if Is_Ref (Self_Ty)
-                                    then Self_Ty.Sigil else R_Shared);
+                                 Recv_Arg.Rf_Sigil := Self_Ty.Sigil;
                                  Recv_Arg.Rf_Place := Recv;
                               end if;
                               E.C_Args.Prepend (Recv_Arg);
@@ -369,6 +398,9 @@ separate (Kurt.Sema.Check.Infer)
                            Arg_Ty : constant Type_Access :=
                              Infer (E.C_Args.Element (I), Exp);
                         begin
+                           --  §8.9: `f(*r)` copies out through the
+                           --  dereference.
+                           Check_No_Destruct_Load (E.C_Args.Element (I));
                            --  §9.5 implicit coercion: `&T → &dyn Trait`
                            --  when T implements Trait. Wrap the argument
                            --  in an E_Dyn_Cast so codegen builds the fat
@@ -420,10 +452,25 @@ separate (Kurt.Sema.Check.Infer)
                                      & "'");
                            end if;
                         end;
+                        --  §8.8.2: passing a `destruct`-typed binding as
+                        --  an argument transfers it. NOTE (§2.2.4/§8.11
+                        --  variadic binding materialization is not
+                        --  implemented by this bootstrap — the variadic
+                        --  clause is parsed but the callee never receives
+                        --  or destroys the extras, see Kurt.Parser.
+                        --  Fn_Header.Variadic_Name): do NOT move a
+                        --  variadic-extra argument (Pidx beyond the fixed
+                        --  parameter list). Left un-moved, it stays owned
+                        --  by the caller and is destroyed by the caller's
+                        --  own scope-exit drop, same as if it had not been
+                        --  passed at all — avoiding an unconditional leak
+                        --  (the value would otherwise vanish into an
+                        --  ignored register/stack argument with no
+                        --  destructor ever invoked).
+                        if Pidx <= S.Params.Last_Index then
+                           Maybe_Move (E.C_Args.Element (I));
+                        end if;
                      end;
-                     --  §8.8.2: passing a `destruct`-typed binding as an
-                     --  argument transfers it.
-                     Maybe_Move (E.C_Args.Element (I));
                   end loop;
                   --  §7.11: a call to a `-> never` subroutine is a
                   --  diverging expression; its type is `never`.
@@ -480,6 +527,10 @@ separate (Kurt.Sema.Check.Infer)
                                     Arg_Ty : constant Type_Access :=
                                       Infer (E.C_Args.Element (I), Exp);
                                  begin
+                                    --  §8.9: `f(*r)` copies out through
+                                    --  the dereference.
+                                    Check_No_Destruct_Load
+                                      (E.C_Args.Element (I));
                                     if Exp /= null
                                       and then not Assignable (Exp, Arg_Ty)
                                     then
@@ -529,6 +580,10 @@ separate (Kurt.Sema.Check.Infer)
                                  Arg_Ty : constant Type_Access :=
                                    Infer (E.C_Args.Element (I), Exp);
                               begin
+                                 --  §8.9: `f(*r)` copies out through the
+                                 --  dereference.
+                                 Check_No_Destruct_Load
+                                   (E.C_Args.Element (I));
                                  if Exp /= null
                                    and then not Assignable (Exp, Arg_Ty)
                                  then

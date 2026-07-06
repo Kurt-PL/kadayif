@@ -9,7 +9,11 @@ separate (Kurt.Parser)
       end if;
       Expect (C, Kw_Struct, "'struct'");
       D.Name := Take_Ident (C, "struct name");
-      Parse_Opt_Generic_Params (C, D.Generic_Params);
+      --  §5.9: struct generics accept inline bounds and a trailing
+      --  lifetime, same as fn/impl (`struct box.<T: Display> { ... }`).
+      Parse_Opt_Generic_Params_Bounded (C, D.Generic_Params);
+      Check_Unique_Generic_Names
+        (SU.To_String (D.Name), D.Generic_Params);
       --  §5.5 a struct declaration is either a composite form `{ … }` or,
       --  when the body is absent, a unit struct (`struct s;` / `struct s
       --  with …;`) with zero fields. `Has_Body` gates the trailing `;`.
@@ -60,6 +64,10 @@ separate (Kurt.Parser)
       if C.Cur.Kind = Kw_With then
          Advance (C);
          declare
+            --  §4.11: at most one `repr(...)` and one `align(...)` per
+            --  declaration.
+            Seen_Repr  : Boolean := False;
+            Seen_Align : Boolean := False;
             procedure Parse_Struct_With_Item is
                Item : constant String := SU.To_String (C.Cur.Lexeme);
             begin
@@ -72,6 +80,12 @@ separate (Kurt.Parser)
                end if;
                Advance (C);
                if Item = "repr" then
+                  if Seen_Repr then
+                     raise Syntax_Error with
+                       "duplicate `repr(...)` with-item (spec 4.11) at line"
+                       & Positive'Image (C.Cur.Line);
+                  end if;
+                  Seen_Repr := True;
                   Expect (C, Punct_LParen, "'('");
                   declare
                      Arg : constant String :=
@@ -93,6 +107,12 @@ separate (Kurt.Parser)
                   end;
                   Expect (C, Punct_RParen, "')'");
                elsif Item = "align" then
+                  if Seen_Align then
+                     raise Syntax_Error with
+                       "duplicate `align(...)` with-item (spec 4.11) at line"
+                       & Positive'Image (C.Cur.Line);
+                  end if;
+                  Seen_Align := True;
                   Expect (C, Punct_LParen, "'('");
                   if C.Cur.Kind /= Tok_Int_Lit or else C.Cur.Int_V <= 0 then
                      raise Syntax_Error with
@@ -102,6 +122,13 @@ separate (Kurt.Parser)
                   D.Align_N := Natural (C.Cur.Int_V);
                   Advance (C);
                   Expect (C, Punct_RParen, "')'");
+               elsif Item = "discrim" then
+                  --  §4.11: `discrim(...)` selects an enum's discriminant
+                  --  representation type; it shall not appear on a struct.
+                  raise Syntax_Error with
+                    "`discrim(...)` shall not appear on a struct "
+                    & "declaration (spec 4.11) at line"
+                    & Positive'Image (C.Cur.Line);
                elsif Item = "destruct" then
                   --  §8.11 `with destruct [block]`.
                   D.Has_Destruct := True;
@@ -113,8 +140,19 @@ separate (Kurt.Parser)
                   Parse_Concurrent_Items
                     (C, D.Conc_Transfer, D.Conc_No_Transfer,
                      D.Conc_Reference, D.Conc_No_Reference);
-               else
-                  --  Skip a balanced unrecognised item.
+               elsif Item = "lifetime" then
+                  --  §8.4.3 `with lifetime` — retained on D.Lifetime_Chains
+                  --  to govern field destruction order (see
+                  --  Kurt.Sema/Kurt.Codegen.Emit_Field_Drops). The
+                  --  lifetimes themselves are still erased (no run-time
+                  --  representation).
+                  Parse_Lifetime_Body (C, D.Lifetime_Chains);
+               elsif Item = "variadic" then
+                  --  §4.11.5 `with variadic` is a legitimate struct
+                  --  with-item that the bootstrap does not model
+                  --  semantically (a variadic state struct is treated
+                  --  like any other struct). Parse-and-discard a balanced
+                  --  item body.
                   declare
                      Depth : Natural := 0;
                   begin
@@ -135,6 +173,15 @@ separate (Kurt.Parser)
                         Advance (C);
                      end loop;
                   end;
+               else
+                  --  §5.11: a `with` keyword shall appear only on the
+                  --  declaration kinds for which it is defined; `contract`
+                  --  and `discrim` are enum-only, and any other word is not
+                  --  a with-keyword at all. Neither is legal on a struct.
+                  raise Syntax_Error with
+                    "with-item `" & Item & "` shall not appear on a "
+                    & "struct declaration (spec 5.11) at line"
+                    & Positive'Image (C.Cur.Line);
                end if;
             end Parse_Struct_With_Item;
          begin

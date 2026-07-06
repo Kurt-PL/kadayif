@@ -68,6 +68,9 @@ separate (Kurt.Codegen)
             Collect_Strings_In_Expr (E.Q_Inner, Pool);
          when E_Ref =>
             Collect_Strings_In_Expr (E.Rf_Place, Pool);
+         when E_Extract =>
+            Collect_Strings_In_Expr (E.Ex_Inner, Pool);
+            Collect_Strings_In_Expr (E.Ex_Fallback, Pool);
          when E_CAS =>
             Collect_Strings_In_Expr (E.CAS_Tgt, Pool);
             Collect_Strings_In_Expr (E.CAS_Exp, Pool);

@@ -8,7 +8,13 @@ separate (Kurt.Parser)
               & "spec 5.3)");
       D.Ty := Parse_Type (C);
       Expect (C, Punct_Eq, "'='");
+      --  §6.10.2: a `const` initializer is implicitly `xlatime` -- the same
+      --  operations are permitted as in an explicit `xlatime { ... }` block.
+      --  Nested `if xlatime`/`if !xlatime` therefore see `xlatime` as true
+      --  here, exactly as within an explicit block.
+      C.Xlatime_Depth := C.Xlatime_Depth + 1;
       D.Init := Parse_Expr (C);
+      C.Xlatime_Depth := C.Xlatime_Depth - 1;
       Expect (C, Punct_Semi, "';' after const declaration");
       return D;
    end Parse_Const_Decl;

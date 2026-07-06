@@ -1,10 +1,12 @@
 with Ada.Characters.Handling;
 with Ada.Characters.Latin_1;
+with Ada.Wide_Wide_Characters.Handling;
 
 package body Kurt.Lexer is
 
-   package CH renames Ada.Characters.Handling;
-   package L1 renames Ada.Characters.Latin_1;
+   package CH   renames Ada.Characters.Handling;
+   package L1   renames Ada.Characters.Latin_1;
+   package WWCH renames Ada.Wide_Wide_Characters.Handling;
 
    ------------------------------------------------------------------
    --  Internal helpers
@@ -20,6 +22,28 @@ package body Kurt.Lexer is
       end if;
       return SU.Element (L.Src, L.Pos + Ahead);
    end Peek;
+
+   --  §10.8: does the current line (from L.Pos onward) hold any further
+   --  non-whitespace token before its LF/EOF? Used to detect a line-form
+   --  `@flag_else`/`@flag_else_if` (directive followed by more tokens on
+   --  the same line) encountered while a block-form chain is being
+   --  scanned -- such a mixed chain is not supported in the bootstrap.
+   function Line_Has_More_Tokens (L : Lexer) return Boolean is
+      K : Natural := 0;
+   begin
+      loop
+         declare
+            Ch : constant Character := Peek (L, K);
+         begin
+            exit when Ch = L1.LF or else Ch = L1.NUL;
+            if Ch /= ' ' and then Ch /= L1.HT then
+               return True;
+            end if;
+         end;
+         K := K + 1;
+      end loop;
+      return False;
+   end Line_Has_More_Tokens;
 
    procedure Advance (L : in out Lexer) is
       C : Character;
@@ -37,11 +61,192 @@ package body Kurt.Lexer is
       end if;
    end Advance;
 
+   --  §3.4: the ASCII-only fast path -- ASCII letters and `_` start an
+   --  identifier; ASCII letters, digits, and `_` continue one. (Kept
+   --  distinct from Ada.Characters.Handling.Is_Letter, which is Latin-1
+   --  and would wrongly accept raw UTF-8 lead/continuation bytes 16#80#
+   --  .. 16#FF# as "letters" without decoding the sequence they belong to.)
    function Is_Ident_Start (C : Character) return Boolean is
-     (CH.Is_Letter (C) or else C = '_');
+     (C in 'A' .. 'Z' | 'a' .. 'z' | '_');
 
    function Is_Ident_Continue (C : Character) return Boolean is
-     (CH.Is_Alphanumeric (C) or else C = '_');
+     (C in 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_');
+
+   ------------------------------------------------------------------
+   --  §3.1 UTF-8 decoding.
+   --
+   --  kadayif's implementation-defined source encoding is UTF-8
+   --  (config/IDB.md). §3.4 defines a *letter* as any character the source
+   --  encoding stipulates denotes a letter, and a *digit* as any character
+   --  it stipulates denotes a decimal digit; for UTF-8 that delegates to
+   --  Unicode general-category classification, exposed by
+   --  Ada.Wide_Wide_Characters.Handling (standard Ada 2012, not GNAT-
+   --  specific). Decode_UTF8 turns a byte sequence at a lexer position into
+   --  the code point it encodes; Ident_Start_Len / Ident_Continue_Len then
+   --  answer "is there an identifier character here, and how many bytes
+   --  does it occupy" for both the ASCII fast path and the decoded case.
+   ------------------------------------------------------------------
+
+   type UTF8_Char is record
+      CP     : Wide_Wide_Character;
+      Length : Positive;
+   end record;
+
+   --  Decodes the single Unicode code point whose first byte sits at
+   --  L.Pos + Ahead. Callers only reach here once that byte is known to be
+   --  >= 16#80# (plain ASCII bytes are handled without decoding). Rejects
+   --  overlong encodings, encoded surrogates (U+D800-U+DFFF), values above
+   --  U+10FFFF, and truncated/malformed continuation bytes (including
+   --  running off the end of the source, since Peek yields NUL there,
+   --  which is never a valid continuation byte) -- any of these is a
+   --  translation failure citing §3.1, wherever a code point is read from.
+   function Decode_UTF8 (L : Lexer; Ahead : Natural := 0) return UTF8_Char is
+      B0 : constant Natural := Character'Pos (Peek (L, Ahead));
+
+      function Cont (K : Positive) return Natural is
+         V : constant Natural := Character'Pos (Peek (L, Ahead + K));
+      begin
+         if V not in 16#80# .. 16#BF# then
+            raise Translation_Failure with
+              "malformed UTF-8 sequence: truncated or bad continuation "
+              & "byte (§3.1) at line" & Positive'Image (L.Line);
+         end if;
+         return V;
+      end Cont;
+   begin
+      if B0 in 16#C2# .. 16#DF# then                 --  2-byte, U+80..U+7FF
+         declare
+            C1 : constant Natural := Cont (1);
+         begin
+            return (CP     => Wide_Wide_Character'Val
+                       ((B0 - 16#C0#) * 16#40# + (C1 - 16#80#)),
+                    Length => 2);
+         end;
+      elsif B0 in 16#E0# .. 16#EF# then          --  3-byte, U+800..U+FFFF
+         declare
+            C1 : constant Natural := Cont (1);
+            C2 : constant Natural := Cont (2);
+         begin
+            if B0 = 16#E0# and then C1 < 16#A0# then
+               raise Translation_Failure with
+                 "overlong UTF-8 encoding (§3.1) at line"
+                 & Positive'Image (L.Line);
+            end if;
+            if B0 = 16#ED# and then C1 > 16#9F# then
+               raise Translation_Failure with
+                 "UTF-8 encoding of a surrogate code point U+D800-U+DFFF, "
+                 & "which is not a Unicode scalar value (§3.1) at line"
+                 & Positive'Image (L.Line);
+            end if;
+            return (CP     => Wide_Wide_Character'Val
+                       ((B0 - 16#E0#) * 16#1000#
+                          + (C1 - 16#80#) * 16#40#
+                          + (C2 - 16#80#)),
+                    Length => 3);
+         end;
+      elsif B0 in 16#F0# .. 16#F4# then        --  4-byte, U+10000..U+10FFFF
+         declare
+            C1 : constant Natural := Cont (1);
+            C2 : constant Natural := Cont (2);
+            C3 : constant Natural := Cont (3);
+         begin
+            if B0 = 16#F0# and then C1 < 16#90# then
+               raise Translation_Failure with
+                 "overlong UTF-8 encoding (§3.1) at line"
+                 & Positive'Image (L.Line);
+            end if;
+            if B0 = 16#F4# and then C1 > 16#8F# then
+               raise Translation_Failure with
+                 "UTF-8 encoding of a code point above U+10FFFF (§3.1) "
+                 & "at line" & Positive'Image (L.Line);
+            end if;
+            return (CP     => Wide_Wide_Character'Val
+                       ((B0 - 16#F0#) * 16#40000#
+                          + (C1 - 16#80#) * 16#1000#
+                          + (C2 - 16#80#) * 16#40#
+                          + (C3 - 16#80#)),
+                    Length => 4);
+         end;
+      else
+         --  16#80#..16#C1#: a stray continuation byte, or an overlong
+         --  2-byte lead (16#C0#/16#C1#, which can only encode <= U+7F).
+         --  16#F5#..16#FF#: no valid encoding starts with these (every
+         --  code point they could lead is above U+10FFFF).
+         raise Translation_Failure with
+           "malformed UTF-8 sequence (§3.1) at line"
+           & Positive'Image (L.Line);
+      end if;
+   end Decode_UTF8;
+
+   --  Zero-padded uppercase hex rendering of Value, "U+XXXX" style (at
+   --  least 4 digits), for citing a code point in a diagnostic without
+   --  echoing its raw (and possibly non-printable) UTF-8 bytes.
+   function Hex_Image (Value : Natural) return String is
+      Digit_Chars : constant String := "0123456789ABCDEF";
+      Buf         : String (1 .. 8);
+      N           : Natural := 0;
+      V           : Natural := Value;
+   begin
+      if V = 0 then
+         return "0000";
+      end if;
+      while V > 0 loop
+         N := N + 1;
+         Buf (N) := Digit_Chars (V mod 16 + 1);
+         V := V / 16;
+      end loop;
+      declare
+         Rev : String (1 .. N);
+      begin
+         for I in 1 .. N loop
+            Rev (I) := Buf (N - I + 1);
+         end loop;
+         if N < 4 then
+            return (1 .. 4 - N => '0') & Rev;
+         else
+            return Rev;
+         end if;
+      end;
+   end Hex_Image;
+
+   --  §3.4: is there an identifier-start character at L.Pos + Ahead, and if
+   --  so, how many source bytes does it occupy? A start character is `_`
+   --  or any code point the source encoding stipulates denotes a letter
+   --  (for UTF-8, WWCH.Is_Letter -- which yields exactly 'A'..'Z'/'a'..'z'
+   --  in the ASCII range, so the fast path and the decoded path agree).
+   --  Returns 0 when no identifier-start character begins there.
+   function Ident_Start_Len (L : Lexer; Ahead : Natural := 0) return Natural
+   is
+      C : constant Character := Peek (L, Ahead);
+   begin
+      if Character'Pos (C) < 16#80# then
+         return (if Is_Ident_Start (C) then 1 else 0);
+      end if;
+      declare
+         D : constant UTF8_Char := Decode_UTF8 (L, Ahead);
+      begin
+         return (if WWCH.Is_Letter (D.CP) then D.Length else 0);
+      end;
+   end Ident_Start_Len;
+
+   --  As Ident_Start_Len, for an identifier-continue character: the start
+   --  set plus any code point the source encoding stipulates denotes a
+   --  decimal digit (WWCH.Is_Digit, a.k.a. Is_Decimal_Digit).
+   function Ident_Continue_Len
+     (L : Lexer; Ahead : Natural := 0) return Natural
+   is
+      C : constant Character := Peek (L, Ahead);
+   begin
+      if Character'Pos (C) < 16#80# then
+         return (if Is_Ident_Continue (C) then 1 else 0);
+      end if;
+      declare
+         D : constant UTF8_Char := Decode_UTF8 (L, Ahead);
+      begin
+         return (if WWCH.Is_Letter (D.CP) or else WWCH.Is_Digit (D.CP)
+                 then D.Length else 0);
+      end;
+   end Ident_Continue_Len;
 
    ------------------------------------------------------------------
    --  Trivia: whitespace and §3.5 comments.
@@ -98,8 +303,8 @@ package body Kurt.Lexer is
    function Scan_Ident (L : in out Lexer) return Token is separate;
 
    ------------------------------------------------------------------
-   --  Integer literal (§3.4.1): decimal / 0x / 0o / 0b / 0q, optional
-   --  `_` digit separators (§3.4.8), optional integer type suffix.
+   --  Integer literal (§3.5.1): decimal / 0x / 0o / 0b / 0q, optional
+   --  `_` digit separators (§3.5.8), optional integer type suffix.
    --  Floating-point literals are not yet handled.
    ------------------------------------------------------------------
 
@@ -256,9 +461,46 @@ package body Kurt.Lexer is
       end;
    end Read_Paren_Cond;
 
+   --  §10.8 line branch: is `@` the final non-whitespace character on the
+   --  current line (from L.Pos onward)? That marks a `… @` line branch.
+   function Cur_Line_Ends_With_At (L : Lexer) return Boolean is
+      P        : Natural := L.Pos;
+      Last_NWS : Natural := 0;
+      Len      : constant Natural := SU.Length (L.Src);
+   begin
+      while P <= Len and then SU.Element (L.Src, P) /= ASCII.LF loop
+         if SU.Element (L.Src, P) /= ' '
+           and then SU.Element (L.Src, P) /= ASCII.HT
+         then
+            Last_NWS := P;
+         end if;
+         P := P + 1;
+      end loop;
+      return Last_NWS /= 0 and then SU.Element (L.Src, Last_NWS) = '@';
+   end Cur_Line_Ends_With_At;
+
+   --  Source position of that closing `@` (precondition: the line ends with
+   --  one, per Cur_Line_Ends_With_At).
+   function Find_Line_Close (L : Lexer) return Positive is
+      P        : Natural := L.Pos;
+      Last_NWS : Natural := L.Pos;
+      Len      : constant Natural := SU.Length (L.Src);
+   begin
+      while P <= Len and then SU.Element (L.Src, P) /= ASCII.LF loop
+         if SU.Element (L.Src, P) /= ' '
+           and then SU.Element (L.Src, P) /= ASCII.HT
+         then
+            Last_NWS := P;
+         end if;
+         P := P + 1;
+      end loop;
+      return Last_NWS;
+   end Find_Line_Close;
+
    --  Skip a non-taken branch body from L.Pos to the next depth-0 chain
-   --  directive (handling nested `@flag_if…@flag_endif`). On return L.Pos is
-   --  just after that directive's keyword; the kind is returned.
+   --  directive (handling nested `@flag_if…@flag_endif` of either form).
+   --  On return L.Pos is just after that directive's keyword; the kind is
+   --  returned.
    function Skip_Inactive_Branch (L : in out Lexer) return Flag_Dir is separate;
 
    --  From inside a taken branch that just ended (an `@flag_else`/`else_if`
@@ -301,50 +543,18 @@ package body Kurt.Lexer is
       end;
    end Read_Paren_Ident;
 
-   --  §10.8 line branch: is `@` the final non-whitespace character on the
-   --  current line (from L.Pos onward)? That marks a `… @` line branch.
-   function Cur_Line_Ends_With_At (L : Lexer) return Boolean is
-      P        : Natural := L.Pos;
-      Last_NWS : Natural := 0;
-      Len      : constant Natural := SU.Length (L.Src);
-   begin
-      while P <= Len and then SU.Element (L.Src, P) /= ASCII.LF loop
-         if SU.Element (L.Src, P) /= ' '
-           and then SU.Element (L.Src, P) /= ASCII.HT
-         then
-            Last_NWS := P;
-         end if;
-         P := P + 1;
-      end loop;
-      return Last_NWS /= 0 and then SU.Element (L.Src, Last_NWS) = '@';
-   end Cur_Line_Ends_With_At;
-
-   --  Source position of that closing `@` (precondition: the line ends with
-   --  one, per Cur_Line_Ends_With_At).
-   function Find_Line_Close (L : Lexer) return Positive is
-      P        : Natural := L.Pos;
-      Last_NWS : Natural := L.Pos;
-      Len      : constant Natural := SU.Length (L.Src);
-   begin
-      while P <= Len and then SU.Element (L.Src, P) /= ASCII.LF loop
-         if SU.Element (L.Src, P) /= ' '
-           and then SU.Element (L.Src, P) /= ASCII.HT
-         then
-            Last_NWS := P;
-         end if;
-         P := P + 1;
-      end loop;
-      return Last_NWS;
-   end Find_Line_Close;
-
-   --  §10.8 an all-line-branch `@flag_if` chain. `First_Cond` is the already
-   --  evaluated condition of the first branch; L.Pos sits just after its
-   --  `(expr)`. On return either L.Line_Close marks the taken branch's closing
-   --  `@` (and L.Pos is at the branch body), or the whole chain was skipped.
+   --  §10.8 a `@flag_if` chain whose first branch is line-form.
+   --  `First_Cond` is the already evaluated condition of that branch;
+   --  L.Pos sits just after its `(expr)`. On return: L.Line_Close marks
+   --  the taken line branch's closing `@` (and L.Pos is at its body), or
+   --  a taken block branch's context was pushed on L.Chain_Stack (a mixed
+   --  chain), or the whole chain was skipped.
    procedure Enter_Line_Chain (L : in out Lexer; First_Cond : Boolean) is separate;
 
-   --  After a taken line branch's body, consume its closing `@` and skip any
-   --  remaining (inactive) line branches of the chain.
+   --  After a taken line branch's body, consume its closing `@` and skip
+   --  the chain's remaining (inactive) branches — line- or block-form
+   --  (§10.8) — including the `@flag_endif` when the chain has a block
+   --  branch (L.Line_Has_Block or one found while skipping).
    procedure Skip_Line_Chain_Rest (L : in out Lexer) is separate;
 
    --  Handle a `@flag_if` chain at L.Pos (just after the keyword). On return

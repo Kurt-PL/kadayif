@@ -10,8 +10,13 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
          --  address (the subroutine pointer).
          if E.P_Is_Fn_Ptr then
             declare
-               Lbl : constant String :=
-                 "_" & SU.To_String (E.Segments.Last_Element);
+               --  §5.15: an `@symbol` override on the referenced fn applies
+               --  here too — the pointer value must be the same address a
+               --  direct call to it would branch to.
+               Nm  : constant String :=
+                 SU.To_String (E.Segments.Last_Element);
+               Sym : constant String := Fn_Symbol_Of (ST, Nm);
+               Lbl : constant String := "_" & (if Sym /= "" then Sym else Nm);
             begin
                IO.Put_Line (F, "    adrp    " & Xreg & ", " & Lbl & "@PAGE");
                IO.Put_Line (F, "    add     " & Xreg & ", " & Xreg

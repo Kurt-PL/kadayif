@@ -18,6 +18,13 @@ separate (Kurt.Codegen.Lower_Stmt)
         and then (Init.B_Op = B_Wide_Add or else Init.B_Op = B_Wide_Mul)
       then
          Lower_Widening (Off, Init, Kurt.Layout.Tuple_Field_Offset (Tup, 1));
+      elsif Sizeof (Tup) <= 8 then
+         --  A ≤8-byte tuple produced by some other value-yielding
+         --  expression (e.g. §7.2.3 `contract e else fallback` extracting
+         --  a tuple success payload): Lower_Expr_Into_Reg packs it whole
+         --  into a single register; copy that register out verbatim.
+         Lower_Expr_Into_Reg (F, Init, 9, ST);
+         Store_Sized (Off, Sizeof (Tup));
       else
          raise Program_Error with
            "codegen: unsupported tuple initialiser";

@@ -14,8 +14,151 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
       --  §7.4.2 a `[T;N]` array binding matched by slice patterns in place.
       Array_Binding : Boolean := False;
       Arr_Base      : Natural := 0;
+      --  item(e)/§5.10.2 a struct binding matched by a struct pattern
+      --  (`point { x, y }`) in place: field bindings alias the scrutinee's
+      --  slot + field offset (no copy). Only engaged when some arm
+      --  actually uses the struct-pattern shape -- otherwise the scrutinee
+      --  falls through to the existing scalar/whole-value path unchanged.
+      Struct_Binding : Boolean := False;
+      SBase          : Natural := 0;
+      SN             : SU.Unbounded_String;
+
+      function Is_Struct_Pat (P : Pattern) return Boolean is
+        (P.Kind = Pat_Variant and then Natural (P.Path.Length) = 1
+         and then (not P.Bindings.Is_Empty or else P.Has_Rest));
+
+      --  §7.4 item(a): recursively lower a nested payload sub-pattern P
+      --  against the value at frame offset Base (type Ty), within the
+      --  CURRENT arm -- any failing test (a nested discriminant mismatch)
+      --  branches to that arm's own L_Next, exactly like any other failing
+      --  sub-test within one arm (spec 7.4, sema counterpart: Bind_Nested
+      --  in Kurt.Sema.Check.Infer.Infer_Match).
+      procedure Bind_Nested_CG
+        (P : Pattern; Ty : Type_Access; Base : Natural; L_Next : String)
+      is
+      begin
+         case P.Kind is
+            when Pat_Wild =>
+               if SU.Length (P.Bind_Name) > 0 then
+                  ST.Bindings.Append
+                    ((Name => P.Bind_Name, Offset => Base, Ty => Ty));
+               end if;
+            when Pat_Variant =>
+               if Natural (P.Path.Length) = 1
+                 and then (not P.Bindings.Is_Empty or else P.Has_Rest)
+               then
+                  --  Nested struct pattern: no discriminant, field offsets
+                  --  only (named-field lookup with positional fallback,
+                  --  matching the sema side).
+                  declare
+                     Snm : constant String := SU.To_String (Ty.Name);
+                  begin
+                     for K in 1 .. Natural (P.Bindings.Length) loop
+                        declare
+                           FName : constant String :=
+                             (if K <= Natural (P.Bind_Fields.Length)
+                                and then SU.Length
+                                  (P.Bind_Fields.Element (K)) > 0
+                              then SU.To_String (P.Bind_Fields.Element (K))
+                              elsif SU.Length (P.Bindings.Element (K)) > 0
+                              then SU.To_String (P.Bindings.Element (K))
+                              else Kurt.Layout.Struct_Field_Name (Snm, K));
+                           FOff : constant Natural :=
+                             Base + Kurt.Layout.Field_Offset (Snm, FName);
+                           FT   : constant Type_Access :=
+                             Kurt.Layout.Field_Type (Snm, FName);
+                        begin
+                           if K <= Natural (P.Sub_Pats.Length)
+                             and then P.Sub_Pats.Element (K) /= null
+                           then
+                              Bind_Nested_CG
+                                (P.Sub_Pats.Element (K).all, FT, FOff,
+                                 L_Next);
+                           else
+                              ST.Bindings.Append
+                                ((Name   => P.Bindings.Element (K),
+                                  Offset => FOff, Ty => FT));
+                           end if;
+                        end;
+                     end loop;
+                  end;
+               elsif Natural (P.Path.Length) = 1 then
+                  ST.Bindings.Append
+                    ((Name => P.Path.First_Element, Offset => Base,
+                      Ty => Ty));
+               else
+                  declare
+                     EN2  : constant String := SU.To_String (Ty.Name);
+                     VN2  : constant String :=
+                       SU.To_String (P.Path.Last_Element);
+                     DS2  : constant Natural :=
+                       Kurt.Layout.Enum_Disc_Size (EN2);
+                  begin
+                     if DS2 > 0 then
+                        Load_From_Frame (Base, DS2);
+                        Lower_Imm
+                          (F, 10, Kurt.Layout.Variant_Value (EN2, VN2),
+                           False);
+                        IO.Put_Line (F, "    cmp     w9, w10");
+                        IO.Put_Line (F, "    b.ne    " & L_Next);
+                     end if;
+                     for K in 1 .. Natural (P.Bindings.Length) loop
+                        declare
+                           FOff : constant Natural :=
+                             Base + Pat_Field_Off (P, Ty, VN2, K);
+                           FT   : constant Type_Access :=
+                             Pat_Field_Ty (P, Ty, VN2, K);
+                        begin
+                           if K <= Natural (P.Sub_Pats.Length)
+                             and then P.Sub_Pats.Element (K) /= null
+                           then
+                              Bind_Nested_CG
+                                (P.Sub_Pats.Element (K).all, FT, FOff,
+                                 L_Next);
+                           else
+                              ST.Bindings.Append
+                                ((Name   => P.Bindings.Element (K),
+                                  Offset => FOff, Ty => FT));
+                           end if;
+                        end;
+                     end loop;
+                  end;
+               end if;
+            when others =>
+               null;   --  item(b): not yet shipped.
+         end case;
+      end Bind_Nested_CG;
    begin
       ST.If_Idx := ST.If_Idx + 1;
+
+      if Scrut_T /= null and then Scrut_T.Kind = T_Named
+        and then Kurt.Layout.Is_Struct (SU.To_String (Scrut_T.Name))
+        and then E.M_Scrut.Kind = E_Path
+        and then Natural (E.M_Scrut.Segments.Length) = 1
+      then
+         declare
+            Has_SF : Boolean := False;
+         begin
+            for I in E.M_Arms.First_Index .. E.M_Arms.Last_Index loop
+               if Is_Struct_Pat (E.M_Arms.Element (I).Pat) then
+                  Has_SF := True;
+               end if;
+            end loop;
+            if Has_SF then
+               declare
+                  Bi : constant Natural :=
+                    Find_Binding (ST, SU.To_String
+                                    (E.M_Scrut.Segments.Last_Element));
+               begin
+                  if Bi /= 0 then
+                     Struct_Binding := True;
+                     SBase := ST.Bindings.Element (Bi).Offset;
+                     SN    := Scrut_T.Name;
+                  end if;
+               end;
+            end if;
+         end;
+      end if;
 
       if Scrut_T /= null and then Scrut_T.Kind = T_Named
         and then Kurt.Layout.Is_Enum (SU.To_String (Scrut_T.Name))
@@ -120,15 +263,33 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                               IO.Put_Line (F, "    cmp     w9, w10");
                               IO.Put_Line (F, "    b.ne    " & L_Next);
                            end if;
-                           --  Bind payload fields as slot+offset aliases.
+                           --  Bind payload fields as slot+offset aliases;
+                           --  item(a) a nested-pattern slot recurses (its
+                           --  own discriminant test shares this arm's
+                           --  L_Next) instead of binding a plain name.
                            for K in 1 .. Natural (Arm.Pat.Bindings.Length)
                            loop
-                              ST.Bindings.Append
-                                ((Name   => Arm.Pat.Bindings.Element (K),
-                                  Offset => Base
-                                    + Pat_Field_Off (Arm.Pat, Scrut_T, VN, K),
-                                  Ty     => Pat_Field_Ty
-                                              (Arm.Pat, Scrut_T, VN, K)));
+                              declare
+                                 FOff : constant Natural :=
+                                   Base
+                                     + Pat_Field_Off (Arm.Pat, Scrut_T, VN, K);
+                                 FT   : constant Type_Access :=
+                                   Pat_Field_Ty (Arm.Pat, Scrut_T, VN, K);
+                              begin
+                                 if K <= Natural (Arm.Pat.Sub_Pats.Length)
+                                   and then Arm.Pat.Sub_Pats.Element (K)
+                                              /= null
+                                 then
+                                    Bind_Nested_CG
+                                      (Arm.Pat.Sub_Pats.Element (K).all, FT,
+                                       FOff, L_Next);
+                                 else
+                                    ST.Bindings.Append
+                                      ((Name   => Arm.Pat.Bindings.Element
+                                                    (K),
+                                        Offset => FOff, Ty => FT));
+                                 end if;
+                              end;
                            end loop;
                            --  §7.4: guard runs with payload bindings in scope;
                            --  on failure fall through to the next arm.
@@ -272,15 +433,134 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                end;
             end loop;
          end;
+      elsif Struct_Binding then
+         --  item(e)/§5.10.2: a struct scrutinee matched by a struct
+         --  pattern. No discriminant exists, so a struct-pattern arm
+         --  matches unconditionally (subject to its guard); field
+         --  bindings alias the scrutinee's slot + field offset.
+         declare
+            Snm : constant String := SU.To_String (SN);
+         begin
+            for I in E.M_Arms.First_Index .. E.M_Arms.Last_Index loop
+               declare
+                  Arm    : constant Match_Arm := E.M_Arms.Element (I);
+                  L_Next : constant String :=
+                    "Lmarm_" & FN & "_" & Img (Idx) & "_" & Img (I);
+               begin
+                  if Arm.Pat.Kind = Pat_Wild then
+                     if Arm.Guard /= null then
+                        Lower_Expr_Into_Reg (F, Arm.Guard, Target_Reg, ST);
+                        IO.Put_Line (F, "    cbz     w" & Img (Target_Reg)
+                                        & ", " & L_Next);
+                     end if;
+                     Lower_Expr_Into_Reg (F, Arm.Arm_Body, Target_Reg, ST);
+                     IO.Put_Line (F, "    b       " & L_End);
+                     if Arm.Guard /= null then
+                        IO.Put_Line (F, L_Next & ":");
+                     end if;
+                  elsif Is_Struct_Pat (Arm.Pat) then
+                     declare
+                        Saved : constant Natural :=
+                          Natural (ST.Bindings.Length);
+                     begin
+                        for K in 1 .. Natural (Arm.Pat.Bindings.Length) loop
+                           declare
+                              FName : constant String :=
+                                (if K <= Natural
+                                     (Arm.Pat.Bind_Fields.Length)
+                                   and then SU.Length
+                                     (Arm.Pat.Bind_Fields.Element (K)) > 0
+                                 then SU.To_String
+                                   (Arm.Pat.Bind_Fields.Element (K))
+                                 elsif SU.Length
+                                   (Arm.Pat.Bindings.Element (K)) > 0
+                                 then SU.To_String
+                                   (Arm.Pat.Bindings.Element (K))
+                                 else Kurt.Layout.Struct_Field_Name (Snm, K));
+                              FOff : constant Natural :=
+                                SBase + Kurt.Layout.Field_Offset (Snm, FName);
+                              FT   : constant Type_Access :=
+                                Kurt.Layout.Field_Type (Snm, FName);
+                           begin
+                              if K <= Natural (Arm.Pat.Sub_Pats.Length)
+                                and then Arm.Pat.Sub_Pats.Element (K)
+                                           /= null
+                              then
+                                 Bind_Nested_CG
+                                   (Arm.Pat.Sub_Pats.Element (K).all, FT,
+                                    FOff, L_Next);
+                              else
+                                 ST.Bindings.Append
+                                   ((Name   => Arm.Pat.Bindings.Element (K),
+                                     Offset => FOff, Ty => FT));
+                              end if;
+                           end;
+                        end loop;
+                        if Arm.Guard /= null then
+                           Lower_Expr_Into_Reg
+                             (F, Arm.Guard, Target_Reg, ST);
+                           IO.Put_Line (F, "    cbz     w" & Img (Target_Reg)
+                                           & ", " & L_Next);
+                        end if;
+                        Lower_Expr_Into_Reg (F, Arm.Arm_Body, Target_Reg, ST);
+                        while Natural (ST.Bindings.Length) > Saved loop
+                           ST.Bindings.Delete_Last;
+                        end loop;
+                        IO.Put_Line (F, "    b       " & L_End);
+                        if Arm.Guard /= null then
+                           IO.Put_Line (F, L_Next & ":");
+                        end if;
+                     end;
+                  elsif Natural (Arm.Pat.Path.Length) = 1 then
+                     --  §5.10.1 bare-identifier catch-all: alias the whole
+                     --  struct value to the name.
+                     declare
+                        Saved : constant Natural :=
+                          Natural (ST.Bindings.Length);
+                     begin
+                        ST.Bindings.Append
+                          ((Name   => Arm.Pat.Path.First_Element,
+                            Offset => SBase,
+                            Ty     => Scrut_T));
+                        if Arm.Guard /= null then
+                           Lower_Expr_Into_Reg
+                             (F, Arm.Guard, Target_Reg, ST);
+                           IO.Put_Line (F, "    cbz     w" & Img (Target_Reg)
+                                           & ", " & L_Next);
+                        end if;
+                        Lower_Expr_Into_Reg (F, Arm.Arm_Body, Target_Reg, ST);
+                        while Natural (ST.Bindings.Length) > Saved loop
+                           ST.Bindings.Delete_Last;
+                        end loop;
+                        IO.Put_Line (F, "    b       " & L_End);
+                        if Arm.Guard /= null then
+                           IO.Put_Line (F, L_Next & ":");
+                        end if;
+                     end;
+                  else
+                     raise Program_Error with
+                       "codegen: unsupported pattern kind on struct "
+                       & "scrutinee";
+                  end if;
+               end;
+            end loop;
+         end;
       else
          --  Scalar scrutinee (integer, or unit enum value): stash it in a
          --  frame slot (not the stack pointer, so an arm's `b` to the end
          --  needs no fix-up) and compare in a register per arm.
          declare
-            Wide  : constant Boolean := Sizeof (Scrut_T) > 4;
-            SR    : constant String := (if Wide then "x9" else "w9");
-            CR    : constant String := (if Wide then "x10" else "w10");
-            Slot  : constant Natural := ST.Next_Offset;
+            Wide   : constant Boolean := Sizeof (Scrut_T) > 4;
+            SR     : constant String := (if Wide then "x9" else "w9");
+            CR     : constant String := (if Wide then "x10" else "w10");
+            Slot   : constant Natural := ST.Next_Offset;
+            --  §6.6/§5.10: a `lo..hi` range pattern over an unsigned
+            --  scrutinee must fall through on the unsigned (carry-based)
+            --  conditions, not the signed (overflow-based) ones.
+            Signed : constant Boolean := Is_Signed_Int (Scrut_T);
+            C_Lt   : constant String := (if Signed then "lt" else "lo");
+            C_Gt   : constant String := (if Signed then "gt" else "hi");
+            C_Ge   : constant String := (if Signed then "ge" else "hs");
          begin
             ST.Next_Offset := ST.Next_Offset + 8;
             Lower_Expr_Into_Reg (F, E.M_Scrut, 9, ST);
@@ -327,11 +607,11 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                                         & ", [x29, #" & Img (Slot) & "]");
                         Lower_Imm (F, 10, Arm.Pat.Int_V, Wide);
                         IO.Put_Line (F, "    cmp     " & SR & ", " & CR);
-                        IO.Put_Line (F, "    b.lt    " & L_Next);
+                        IO.Put_Line (F, "    b." & C_Lt & "    " & L_Next);
                         Lower_Imm (F, 10, Arm.Pat.Range_Hi, Wide);
                         IO.Put_Line (F, "    cmp     " & SR & ", " & CR);
                         IO.Put_Line (F, "    b."
-                          & (if Arm.Pat.Range_Incl then "gt" else "ge")
+                          & (if Arm.Pat.Range_Incl then C_Gt else C_Ge)
                           & "    " & L_Next);
                      elsif Is_Cmp then
                         IO.Put_Line (F, "    ldr     " & SR

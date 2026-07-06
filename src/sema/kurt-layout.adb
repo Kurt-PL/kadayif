@@ -1,4 +1,5 @@
 with Ada.Strings.Unbounded;
+with Ada.Strings.Fixed;
 
 package body Kurt.Layout is
 
@@ -10,6 +11,34 @@ package body Kurt.Layout is
    Have_Unit : Boolean := False;
 
    procedure Register (U : Kurt.Parser.Translation_Unit) is separate;
+
+   --  §10.2/§10.3 source-unit provenance — see Kurt.Layout.ads.
+   File_Prefixes : Path_Segments.Vector;
+
+   procedure Register_File_Prefix (Prefix : String) is
+   begin
+      File_Prefixes.Append (SU.To_Unbounded_String (Prefix));
+   end Register_File_Prefix;
+
+   --  The registered file prefix that mangled Name's leading '$'-segment
+   --  matches, or "" (the root unit) when none does.
+   function Unit_Tag (Name : String) return String is
+      Dollar : constant Natural := Ada.Strings.Fixed.Index (Name, "$");
+      Head   : constant String :=
+        (if Dollar = 0 then Name else Name (Name'First .. Dollar - 1));
+   begin
+      for P of File_Prefixes loop
+         if SU.To_String (P) = Head then
+            return Head;
+         end if;
+      end loop;
+      return "";
+   end Unit_Tag;
+
+   function Same_Source_Unit (A, B : String) return Boolean is
+   begin
+      return Unit_Tag (A) = Unit_Tag (B);
+   end Same_Source_Unit;
 
    --  ceil(X, A): round X up to the nearest multiple of A (A = 0 => X).
    function Ceil (X, A : Natural) return Natural is
@@ -141,6 +170,49 @@ package body Kurt.Layout is
       return False;
    end Has_Wild_Variant;
 
+   function Wild_Has_Canon (Enum_Name : String) return Boolean is
+      D : Enum_Decl;
+   begin
+      if not Find_Enum (Enum_Name, D) then
+         return False;
+      end if;
+      for I in D.Variants.First_Index .. D.Variants.Last_Index loop
+         if D.Variants.Element (I).Is_Wild then
+            return D.Variants.Element (I).Wild_Canon;
+         end if;
+      end loop;
+      return False;
+   end Wild_Has_Canon;
+
+   function Is_Wild_Variant (Enum_Name, Variant : String) return Boolean is
+      D : Enum_Decl;
+   begin
+      if not Find_Enum (Enum_Name, D) then
+         return False;
+      end if;
+      for I in D.Variants.First_Index .. D.Variants.Last_Index loop
+         if SU.To_String (D.Variants.Element (I).Name) = Variant then
+            return D.Variants.Element (I).Is_Wild;
+         end if;
+      end loop;
+      return False;
+   end Is_Wild_Variant;
+
+   function Wild_Variant_Name (Enum_Name : String) return String is
+      D : Enum_Decl;
+   begin
+      if not Find_Enum (Enum_Name, D) then
+         raise Layout_Error with "unknown enum '" & Enum_Name & "'";
+      end if;
+      for I in D.Variants.First_Index .. D.Variants.Last_Index loop
+         if D.Variants.Element (I).Is_Wild then
+            return SU.To_String (D.Variants.Element (I).Name);
+         end if;
+      end loop;
+      raise Layout_Error with
+        "enum '" & Enum_Name & "' has no #wild# variant";
+   end Wild_Variant_Name;
+
    function Is_Contract_Enum (Name : String) return Boolean is
       D : Enum_Decl;
    begin
@@ -153,9 +225,11 @@ package body Kurt.Layout is
       if not Find_Enum (Enum_Name, D) then
          raise Layout_Error with "unknown enum '" & Enum_Name & "'";
       end if;
-      --  `with contract`: the explicit (non-#wild#) variant is success.
+      --  §7.2 `with contract`: the explicit (non-#wild#) variant is
+      --  success; `with !contract`: polarity exchanged -- #wild# is
+      --  success.
       for I in D.Variants.First_Index .. D.Variants.Last_Index loop
-         if not D.Variants.Element (I).Is_Wild then
+         if D.Variants.Element (I).Is_Wild = D.Contract_Inv then
             return SU.To_String (D.Variants.Element (I).Name);
          end if;
       end loop;
@@ -170,13 +244,85 @@ package body Kurt.Layout is
          raise Layout_Error with "unknown enum '" & Enum_Name & "'";
       end if;
       for I in D.Variants.First_Index .. D.Variants.Last_Index loop
-         if D.Variants.Element (I).Is_Wild then
+         if D.Variants.Element (I).Is_Wild /= D.Contract_Inv then
             return SU.To_String (D.Variants.Element (I).Name);
          end if;
       end loop;
       raise Layout_Error with
-        "contract enum '" & Enum_Name & "' has no #wild# (failure) variant";
+        "contract enum '" & Enum_Name & "' has no failure variant";
    end Contract_Fail_Variant;
+
+   function Contract_Is_Inverted (Enum_Name : String) return Boolean is
+      D : Enum_Decl;
+   begin
+      return Find_Enum (Enum_Name, D) and then D.Contract_Inv;
+   end Contract_Is_Inverted;
+
+   function Contract_Inv_Type_Name (Enum_Name : String) return String is
+      D : Enum_Decl;
+   begin
+      if Find_Enum (Enum_Name, D) and then D.Inv_Type /= null
+        and then D.Inv_Type.Kind = T_Named
+      then
+         return SU.To_String (D.Inv_Type.Name);
+      end if;
+      return "";
+   end Contract_Inv_Type_Name;
+
+   function Contract_Inv_Type
+     (T : Kurt.Parser.Type_Access) return Kurt.Parser.Type_Access
+   is
+      D : Enum_Decl;
+   begin
+      if T = null or else T.Kind /= T_Named
+        or else not Find_Enum (SU.To_String (T.Name), D)
+        or else D.Inv_Type = null
+      then
+         return null;
+      end if;
+      --  §7.2/§5.9: the declared inverted-pair type is written against
+      --  D's OWN (still-generic) parameter names, e.g. `switch_inv.<T>`
+      --  inside `switch.<T>`. Substitute each of D's generic parameter
+      --  names, positionally, with T's actual type arguments -- the same
+      --  positional-substitution model used for template instantiation
+      --  elsewhere (Kurt.Mono).
+      declare
+         function Subst (N : Kurt.Parser.Type_Access)
+           return Kurt.Parser.Type_Access
+         is
+            R : Kurt.Parser.Type_Access;
+         begin
+            if N = null then
+               return null;
+            end if;
+            if N.Kind = T_Named and then N.Args.Is_Empty then
+               for I in D.Generic_Params.First_Index ..
+                        D.Generic_Params.Last_Index
+               loop
+                  if SU.To_String (D.Generic_Params.Element (I).Name)
+                       = SU.To_String (N.Name)
+                    and then I - D.Generic_Params.First_Index
+                               < Natural (T.Args.Length)
+                  then
+                     return T.Args.Element
+                       (T.Args.First_Index
+                          + (I - D.Generic_Params.First_Index));
+                  end if;
+               end loop;
+            end if;
+            R := new Kurt.Parser.AST_Type'(N.all);
+            if N.Kind = T_Named then
+               R.Args.Clear;
+               for I in N.Args.First_Index .. N.Args.Last_Index loop
+                  R.Args.Append (Subst (N.Args.Element (I)));
+               end loop;
+            end if;
+            return R;
+         end Subst;
+      begin
+         return Subst (D.Inv_Type);
+      end;
+   end Contract_Inv_Type;
 
    function Variant_Value
      (Enum_Name, Variant : String) return Long_Long_Integer
@@ -191,9 +337,11 @@ package body Kurt.Layout is
      (Enum_Name, Variant : String; Found : out Enum_Variant) return Boolean
    is separate;
 
-   --  KSA size of a named-field group (a variant payload).
+   --  KSA size of a named-field group (a variant payload). §4.11.3 `Packed`
+   --  suppresses inter-field padding and forces align 1.
    function Group_Size
-     (Fields : Kurt.Parser.Struct_Field_Vectors.Vector) return Natural
+     (Fields : Kurt.Parser.Struct_Field_Vectors.Vector;
+      Packed : Boolean := False) return Natural
    is separate;
 
    --  Enum alignment: max of discriminant size and every payload field's
@@ -217,9 +365,37 @@ package body Kurt.Layout is
       return Natural (V.Payload.Length);
    end Variant_Field_Count;
 
+   function Variant_Field_Name
+     (Enum_Name, Variant : String; Field_No : Positive) return String
+   is
+      V : Enum_Variant;
+   begin
+      if not Find_Variant (Enum_Name, Variant, V)
+        or else Field_No > Natural (V.Payload.Length)
+      then
+         return "";
+      end if;
+      return SU.To_String
+        (V.Payload.Element (V.Payload.First_Index + (Field_No - 1)).Name);
+   end Variant_Field_Name;
+
    function Variant_Field_Offset
      (Enum_Name, Variant : String; Field_No : Positive) return Natural
    is separate;
+
+   function Variant_Field_Is_Airside
+     (Enum_Name, Variant : String; Field_No : Positive) return Boolean
+   is
+      V : Enum_Variant;
+   begin
+      if not Find_Variant (Enum_Name, Variant, V)
+        or else Field_No > Natural (V.Payload.Length)
+      then
+         return False;
+      end if;
+      return V.Payload.Element
+        (V.Payload.First_Index + (Field_No - 1)).Is_Airside;
+   end Variant_Field_Is_Airside;
 
    function Variant_Field_Type
      (Enum_Name, Variant : String; Field_No : Positive)
@@ -426,6 +602,35 @@ package body Kurt.Layout is
       return False;
    end Field_Is_Mut;
 
+   --  §5.5.1 `pub`/`airside` field modifiers.
+   function Field_Is_Pub (Struct_Name, Field : String) return Boolean is
+      D : Struct_Decl;
+   begin
+      if not Find_Struct (Struct_Name, D) then
+         return False;
+      end if;
+      for I in D.Fields.First_Index .. D.Fields.Last_Index loop
+         if SU.To_String (D.Fields.Element (I).Name) = Field then
+            return D.Fields.Element (I).Is_Pub;
+         end if;
+      end loop;
+      return False;
+   end Field_Is_Pub;
+
+   function Field_Is_Airside (Struct_Name, Field : String) return Boolean is
+      D : Struct_Decl;
+   begin
+      if not Find_Struct (Struct_Name, D) then
+         return False;
+      end if;
+      for I in D.Fields.First_Index .. D.Fields.Last_Index loop
+         if SU.To_String (D.Fields.Element (I).Name) = Field then
+            return D.Fields.Element (I).Is_Airside;
+         end if;
+      end loop;
+      return False;
+   end Field_Is_Airside;
+
    --  §5.5.3 default-value expression for a field, or null when none.
    function Field_Default
      (Struct_Name, Field : String) return Kurt.Parser.Expr_Access
@@ -463,5 +668,159 @@ package body Kurt.Layout is
       return SU.To_String
         (D.Fields.Element (D.Fields.First_Index + (Index - 1)).Name);
    end Struct_Field_Name;
+
+   --  §8.4.2: a field's effective lifetime identifier — its explicit
+   --  reference annotation (`&'a T`) when present and not permanent
+   --  ('static/'const, §8.4.1), otherwise the field name (the implicit
+   --  lifetime identifier).
+   function Life_Id (F : Struct_Field) return String is
+   begin
+      if F.Ty /= null and then F.Ty.Kind = T_Ref
+        and then SU.Length (F.Ty.R_Life) > 0
+        and then SU.To_String (F.Ty.R_Life) /= "static"
+        and then SU.To_String (F.Ty.R_Life) /= "const"
+      then
+         return SU.To_String (F.Ty.R_Life);
+      end if;
+      return SU.To_String (F.Name);
+   end Life_Id;
+
+   --  §8.4.3: position of Name (a field's lifetime identifier, §8.4.2)
+   --  within whichever chain of Chains mentions it (1 = longest in that
+   --  chain), or 0 when Name appears in none.
+   function Lifetime_Chain_Pos
+     (Chains : Lifetime_Chain_Vectors.Vector; Name : String) return Natural
+   is
+   begin
+      for Ch of Chains loop
+         for P in Ch.First_Index .. Ch.Last_Index loop
+            if SU.To_String (Ch.Element (P)) = Name then
+               return P;
+            end if;
+         end loop;
+      end loop;
+      return 0;
+   end Lifetime_Chain_Pos;
+
+   --  §8.4.3: whether NA and NB both appear in a common chain of Chains.
+   function Lifetime_Same_Chain
+     (Chains : Lifetime_Chain_Vectors.Vector; NA, NB : String) return Boolean
+   is
+   begin
+      for Ch of Chains loop
+         declare
+            Has_A, Has_B : Boolean := False;
+         begin
+            for P in Ch.First_Index .. Ch.Last_Index loop
+               if SU.To_String (Ch.Element (P)) = NA then
+                  Has_A := True;
+               end if;
+               if SU.To_String (Ch.Element (P)) = NB then
+                  Has_B := True;
+               end if;
+            end loop;
+            if Has_A and then Has_B then
+               return True;
+            end if;
+         end;
+      end loop;
+      return False;
+   end Lifetime_Same_Chain;
+
+   --  §8.4.3: destroy A before B? A common chain relates them: the one
+   --  whose name sits later in the chain is shorter-lived and destroyed
+   --  first. Otherwise (unrelated / no chain): reverse declaration order,
+   --  same as the pre-existing no-chain default.
+   function Lifetime_Destroy_Before
+     (Chains : Lifetime_Chain_Vectors.Vector;
+      NA, NB : String; IA, IB : Positive) return Boolean
+   is
+   begin
+      if Lifetime_Same_Chain (Chains, NA, NB) then
+         return Lifetime_Chain_Pos (Chains, NA) >
+                Lifetime_Chain_Pos (Chains, NB);
+      end if;
+      return IA > IB;
+   end Lifetime_Destroy_Before;
+
+   function Struct_Destroy_Order (Struct_Name : String) return Field_Order is
+      D : Struct_Decl;
+      N : Natural;
+   begin
+      if not Find_Struct (Struct_Name, D) then
+         return (1 .. 0 => 1);
+      end if;
+      N := Natural (D.Fields.Length);
+      declare
+         Order : Field_Order (1 .. N);
+
+         function Name_Of (Idx : Positive) return String is
+           (Life_Id (D.Fields.Element (D.Fields.First_Index + Idx - 1)));
+      begin
+         for I in 1 .. N loop
+            Order (I) := I;
+         end loop;
+         --  insertion sort: Order ends up in destruction order.
+         for I in 2 .. N loop
+            declare
+               Key : constant Positive := Order (I);
+               KN  : constant String := Name_Of (Key);
+               J : Integer := I - 1;
+            begin
+               while J >= 1 and then Lifetime_Destroy_Before
+                       (D.Lifetime_Chains, KN, Name_Of (Order (J)),
+                        Key, Order (J))
+               loop
+                  Order (J + 1) := Order (J);
+                  J := J - 1;
+               end loop;
+               Order (J + 1) := Key;
+            end;
+         end loop;
+         return Order;
+      end;
+   end Struct_Destroy_Order;
+
+   function Variant_Destroy_Order
+     (Enum_Name, Variant : String) return Field_Order
+   is
+      ED : Enum_Decl;
+      VD : Enum_Variant;
+      N  : Natural;
+   begin
+      if not Find_Enum (Enum_Name, ED)
+        or else not Find_Variant (Enum_Name, Variant, VD)
+      then
+         return (1 .. 0 => 1);
+      end if;
+      N := Natural (VD.Payload.Length);
+      declare
+         Order : Field_Order (1 .. N);
+
+         function Name_Of (Idx : Positive) return String is
+           (Life_Id (VD.Payload.Element (VD.Payload.First_Index + Idx - 1)));
+      begin
+         for I in 1 .. N loop
+            Order (I) := I;
+         end loop;
+         for I in 2 .. N loop
+            declare
+               Key : constant Positive := Order (I);
+               KN  : constant String := Name_Of (Key);
+               J : Integer := I - 1;
+            begin
+               while J >= 1 and then Lifetime_Destroy_Before
+                       (ED.Lifetime_Chains, KN, Name_Of (Order (J)),
+                        Key, Order (J))
+               loop
+                  Order (J + 1) := Order (J);
+                  J := J - 1;
+               end loop;
+               Order (J + 1) := Key;
+            end;
+         end loop;
+         return Order;
+      end;
+   end Variant_Destroy_Order;
 
 end Kurt.Layout;

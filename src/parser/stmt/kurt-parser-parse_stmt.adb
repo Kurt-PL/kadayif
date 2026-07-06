@@ -5,6 +5,7 @@ separate (Kurt.Parser)
       function Stmt_If return Stmt_Access is separate;
       function Stmt_Let return Stmt_Access is separate;
       function Stmt_Asm return Stmt_Access is separate;
+      function Stmt_Const return Stmt_Access is separate;
    begin
       case C.Cur.Kind is
          when Kw_Return =>
@@ -68,6 +69,12 @@ separate (Kurt.Parser)
 
          when Kw_Let =>
             return Stmt_Let;
+         when Kw_Const =>
+            --  §5.3: statement-position `const NAME: T = expr;` inside a
+            --  fn body (the spec's examples use `const` both at top level
+            --  and locally; the bootstrap previously accepted only the
+            --  former).
+            return Stmt_Const;
          when Kw_Mut =>
             --  §5.2: mut IDENT [: type] [= expr] ;
             --  Multi-assignment binding (§2.2.1).
@@ -92,17 +99,35 @@ separate (Kurt.Parser)
             return S;
 
          when Tok_Label =>
-            --  §7.9: a `'name:` label prefixes a loop (labelled blocks are
-            --  not yet supported). Attach the name to the loop it heads.
+            --  §7.9: a `'name:` label prefixes a loop or a block. A
+            --  labelled block in statement position is an expression
+            --  statement (§7.1) whose value, if any, is discarded.
             declare
                Lbl : constant SU.Unbounded_String := C.Cur.Lexeme;
             begin
                Advance (C);
-               Expect (C, Punct_Colon, "':' after loop label (spec 7.9)");
+               Expect (C, Punct_Colon, "':' after label (spec 7.9)");
+               if C.Cur.Kind = Punct_LBrace then
+                  declare
+                     E : constant Expr_Access :=
+                       new Expr_Node (Kind => E_Airside_Blk);
+                  begin
+                     E.AB_Airside := False;
+                     E.AB_Label   := Lbl;
+                     Parse_Block_Stmts (C, E.AB_Stmts);
+                     S := new Stmt_Node (Kind => S_Expr);
+                     S.E_Val := E;
+                     --  §3.2: block expressions as statements need no ';'
+                     if C.Cur.Kind = Punct_Semi then
+                        Advance (C);
+                     end if;
+                     return S;
+                  end;
+               end if;
                if C.Cur.Kind /= Kw_While and then C.Cur.Kind /= Kw_Loop then
                   raise Syntax_Error with
-                    "a label shall prefix a `while`/`loop` (labelled blocks "
-                    & "are not supported) at line"
+                    "a label shall prefix a `while`/`loop`/`{` block "
+                    & "(spec 7.9) at line"
                     & Positive'Image (C.Cur.Line);
                end if;
                S := Parse_Stmt (C);   --  parse the loop, then label it
@@ -166,6 +191,17 @@ separate (Kurt.Parser)
 
          when Kw_If =>
             return Stmt_If;
+
+         when Kw_Match =>
+            --  §3.3: `match` used as a statement admits an OPTIONAL
+            --  trailing ';', like if/while/loop/airside.
+            S := new Stmt_Node (Kind => S_Expr);
+            S.E_Val := Parse_Expr (C);
+            if C.Cur.Kind = Punct_Semi then
+               Advance (C);
+            end if;
+            return S;
+
          when Kw_Break =>
             --  §7.7 / §7.9: break ['label] [expr] ";". The label names the
             --  loop to terminate; the optional expression is its value.
@@ -193,9 +229,15 @@ separate (Kurt.Parser)
             return S;
 
          when Kw_Express =>
-            --  §7.8: express <expr> ";"  (labels deferred).
+            --  §7.8/§7.9: express ['label] <expr> ";". The label names
+            --  the enclosing labelled block to exit; without one the
+            --  immediately enclosing block is targeted.
             Advance (C);
             S := new Stmt_Node (Kind => S_Express);
+            if C.Cur.Kind = Tok_Label then
+               S.Xp_Label := C.Cur.Lexeme;
+               Advance (C);
+            end if;
             S.Xp_Val := Parse_Expr (C);
             Expect (C, Punct_Semi, "';'");
             return S;
@@ -237,27 +279,6 @@ separate (Kurt.Parser)
                   S := new Stmt_Node (Kind => S_Assign);
                   S.Asn_Lhs := E;
                   S.Asn_Rhs := Parse_Expr (C);
-                  Expect (C, Punct_Semi, "';'");
-                  return S;
-               elsif C.Cur.Kind = Punct_LArrow then
-                  --  §7.2.3 extract-assignment `place <- e else [err] { }`.
-                  if E.Kind /= E_Path
-                    or else Natural (E.Segments.Length) /= 1
-                  then
-                     raise Syntax_Error with
-                       "extract-assignment target must be a place at line"
-                       & Positive'Image (C.Cur.Line);
-                  end if;
-                  Advance (C);   --  <-
-                  S := new Stmt_Node (Kind => S_Extract);
-                  S.X_Is_Place := True;
-                  S.X_Bind := E.Segments.Last_Element;
-                  S.X_Expr := Parse_Expr (C);
-                  Expect (C, Kw_Else, "'else' in extract-assignment");
-                  if C.Cur.Kind = Tok_Ident then
-                     S.X_Err := Take_Ident (C, "failure binding");
-                  end if;
-                  Parse_Block_Stmts (C, S.X_Else);
                   Expect (C, Punct_Semi, "';'");
                   return S;
                elsif Compound_Op (C.Cur.Kind, C_Op) then

@@ -44,6 +44,17 @@ separate (Kurt.Parser)
       if C.Cur.Kind = Kw_Extern then
          H.Is_Extern := True;
          Advance (C);
+         --  §5.1.2 `extern(iface)`: the parenthesised identifier names the
+         --  invocation interface; `extern(native)` (and bare `extern`)
+         --  denote the native interface, recorded as empty.
+         if C.Cur.Kind = Punct_LParen then
+            Advance (C);
+            H.Extern_Iface := Take_Ident (C, "extern interface name");
+            if SU.To_String (H.Extern_Iface) = "native" then
+               H.Extern_Iface := SU.Null_Unbounded_String;
+            end if;
+            Expect (C, Punct_RParen, "')'");
+         end if;
       end if;
 
       if C.Cur.Kind = Kw_Variadic then

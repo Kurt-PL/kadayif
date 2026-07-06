@@ -80,6 +80,14 @@ is
 
    procedure Lower_If (E : Expr_Access) is separate;
 
+   ------------------------------------------------------------------
+   --  §7.2.3 `contract e else fallback` lowering: materialise e's
+   --  (possibly polarity-inverted) value in a fresh stack temp, branch on
+   --  its discriminant, and land the success payload or the fallback's
+   --  value in Target_Reg.
+   ------------------------------------------------------------------
+   procedure Lower_Extract (E : Expr_Access) is separate;
+
    procedure Lower_Cast is separate;
    procedure Lower_CAS is separate;
    procedure Lower_Path is separate;
@@ -106,41 +114,42 @@ begin
          end;
 
       when E_Airside_Blk =>
-         --  §6.9 airside block expression: run the body as a lexical scope
-         --  (mirrors Lower_Scoped), then yield the trailing `express` value
-         --  in the target register. Destructor calls at scope exit clobber
-         --  registers, so the expressed value is parked in a fresh frame
-         --  temp across the drops.
+         --  §6.9/§7.8 block expression (airside or plain): run the body as
+         --  a lexical scope (mirrors Lower_Scoped); its value is yielded by
+         --  `express` — anywhere in the block, not only in trailing
+         --  position. The block gets a frame result slot and an end label;
+         --  every `express` targeting it (see S_Express in Lower_Stmt)
+         --  stores to the slot, runs the intervening destructors, and
+         --  branches to the end label. Falling off the end means no
+         --  `express` executed — the block is `void` on that path and the
+         --  slot's (indeterminate) value is never used.
          declare
             Entry_Len : constant Natural := Natural (ST.Bindings.Length);
-            Has_Val   : constant Boolean :=
-              not E.AB_Stmts.Is_Empty
-              and then E.AB_Stmts.Last_Element.Kind = S_Express;
-            Tmp : Natural := 0;
+            FN        : constant String  := SU.To_String (ST.Fn_Name);
+            Idx       : constant Natural := ST.If_Idx;
+            L_End     : constant String  := "Lblk_" & FN & "_" & Img (Idx);
+            Res_Off   : constant Natural := ST.Next_Offset;
          begin
+            ST.If_Idx := ST.If_Idx + 1;
+            ST.Next_Offset := ST.Next_Offset + 8;   --  result slot
+            ST.Expr_Blocks.Append
+              ((End_Lbl    => SU.To_Unbounded_String (L_End),
+                Result_Off => Res_Off,
+                Body_Entry => Entry_Len,
+                Name       => E.AB_Label));   --  §7.9 label; empty = none
             for I in E.AB_Stmts.First_Index .. E.AB_Stmts.Last_Index loop
-               if Has_Val and then I = E.AB_Stmts.Last_Index then
-                  Lower_Expr_Into_Reg
-                    (F, E.AB_Stmts.Element (I).Xp_Val, Target_Reg, ST);
-               else
-                  Lower_Stmt (F, E.AB_Stmts.Element (I), ST);
-               end if;
+               Lower_Stmt (F, E.AB_Stmts.Element (I), ST);
             end loop;
-            if Has_Val then
-               Tmp := ST.Next_Offset;
-               ST.Next_Offset := ST.Next_Offset + 8;
-               IO.Put_Line (F, "    str     " & Xreg
-                               & ", [x29, #" & Img (Tmp) & "]");
-            end if;
+            ST.Expr_Blocks.Delete_Last;
+            --  Fall-through path (no `express` executed): scope exit.
             Emit_Binding_Drops
               (F, ST, Keep => Entry_Len, Preserve_Ret => False);
             while Natural (ST.Bindings.Length) > Entry_Len loop
                ST.Bindings.Delete_Last;
             end loop;
-            if Has_Val then
-               IO.Put_Line (F, "    ldr     " & Xreg
-                               & ", [x29, #" & Img (Tmp) & "]");
-            end if;
+            IO.Put_Line (F, L_End & ":");
+            IO.Put_Line (F, "    ldr     " & Xreg
+                            & ", [x29, #" & Img (Res_Off) & "]");
          end;
 
       when E_Loop =>
@@ -256,10 +265,63 @@ begin
                  Kurt.Layout.Implicit_Wild_Value (EN),
                  Sizeof (E.Sem_Ty) > 4);
             end;
+         elsif E.Kind = E_Variant_New
+           and then not Kurt.Layout.Enum_Has_Payload
+                          (if E.Sem_Ty /= null then SU.To_String (E.Sem_Ty.Name)
+                           else SU.To_String (E.VN_Enum))
+         then
+            --  A unit (payload-free) variant is a bare discriminant value,
+            --  same as the `#wild#` case above -- no temporary needed.
+            declare
+               EN : constant String :=
+                 (if E.Sem_Ty /= null then SU.To_String (E.Sem_Ty.Name)
+                  else SU.To_String (E.VN_Enum));
+               VN : constant String := SU.To_String (E.VN_Variant);
+            begin
+               if Kurt.Layout.Enum_Disc_Size (EN) > 0 then
+                  Lower_Imm (F, Target_Reg,
+                    Kurt.Layout.Variant_Value (EN, VN),
+                    Sizeof (E.Sem_Ty) > 4);
+               end if;
+            end;
          else
-            raise Program_Error with
-              "codegen: a struct/variant/tuple/array literal is only "
-              & "supported as a let/mut initialiser in the bootstrap";
+            declare
+               Lit_Ty : constant Type_Access := Type_Of_Expr (E, ST);
+            begin
+               if Classify_Agg (Lit_Ty) = One_Reg then
+                  --  §2.1.4: materialise into a hidden stack temporary and
+                  --  load its value — the shape a composite literal takes
+                  --  in a "value in a register" position (call argument,
+                  --  `return`, match scrutinee). Every one of those
+                  --  positions transfers the value onward per §8.8.2, so
+                  --  no drop is owed on the temporary; this is not a
+                  --  general temporary-drop mechanism.
+                  declare
+                     Off : constant Natural :=
+                       Materialize_Composite (F, ST, Lit_Ty, E);
+                     Sz  : constant Natural := Sizeof (Lit_Ty);
+                  begin
+                     if Sz > 4 then
+                        IO.Put_Line (F, "    ldr     " & Xreg & ", [x29, #"
+                                        & Img (Off) & "]");
+                     elsif Sz = 2 then
+                        IO.Put_Line (F, "    ldrh    " & Wreg & ", [x29, #"
+                                        & Img (Off) & "]");
+                     elsif Sz = 1 then
+                        IO.Put_Line (F, "    ldrb    " & Wreg & ", [x29, #"
+                                        & Img (Off) & "]");
+                     else
+                        IO.Put_Line (F, "    ldr     " & Wreg & ", [x29, #"
+                                        & Img (Off) & "]");
+                     end if;
+                  end;
+               else
+                  raise Codegen_Error with
+                    "not yet supported: a struct/variant/tuple/array "
+                    & "literal wider than 8 bytes outside a let/mut "
+                    & "initialiser (bootstrap)";
+               end if;
+            end;
          end if;
 
 
@@ -335,6 +397,9 @@ begin
          Lower_Path;
       when E_If =>
          Lower_If (E);
+
+      when E_Extract =>
+         Lower_Extract (E);
 
       when E_Match =>
          Lower_Match (E);
@@ -564,11 +629,18 @@ begin
             OT : constant Type_Access := Type_Of_Expr (E.U_Operand, ST);
          begin
             if E.U_Op = U_Not and then Is_Contract_Ty (OT) then
-               --  §7.2.1: exchange the success/failure variants of the
-               --  self-inverse contract (sema guarantees symmetric
-               --  payloads, so the payload bits are preserved unchanged;
-               --  only the discriminant is rewritten).
+               --  §7.2.1: exchange the success/failure variants. The
+               --  result type (Inv_T) is OT itself for the self-inverse
+               --  case (bool, or any contract enum with no declared
+               --  inverted pair) and the declared pair's type otherwise
+               --  (Kurt.Sema.Check.Infer already resolved E.Sem_Ty) --
+               --  either way, the payload cross-match sema enforces means
+               --  the payload bits are preserved unchanged; only the
+               --  discriminant is rewritten, to Inv_T's OWN corresponding
+               --  variant's discriminant value (spec 7.2.1).
                declare
+                  Inv_T : constant Type_Access :=
+                    (if E.Sem_Ty /= null then E.Sem_Ty else OT);
                   Is_Bool : constant Boolean :=
                     SU.To_String (OT.Name) = "bool";
                   Has_Pay : constant Boolean :=
@@ -581,14 +653,17 @@ begin
                begin
                   if Has_Pay then
                      --  Whole ≤8B aggregate in the register: test the
-                     --  masked discriminant, then bfi the flipped one.
+                     --  masked discriminant against OT's success value,
+                     --  then bfi in Inv_T's corresponding (fail/success)
+                     --  discriminant.
                      IO.Put_Line (F, "    and     x12, " & Xreg & ", #0x"
                        & (case DSz is
                              when 1 => "ff", when 2 => "ffff",
                              when others => "ffffffff"));
                      Lower_Imm (F, 13, Contract_Succ_Val (OT), True);
                      IO.Put_Line (F, "    cmp     x12, x13");
-                     Lower_Imm (F, 12, Contract_Fail_Val (OT), True);
+                     Lower_Imm (F, 12, Contract_Fail_Val (Inv_T), True);
+                     Lower_Imm (F, 13, Contract_Succ_Val (Inv_T), True);
                      IO.Put_Line (F, "    csel    x12, x12, x13, eq");
                      IO.Put_Line (F, "    bfi     " & Xreg
                                      & ", x12, #0, #" & Img (8 * DSz));
@@ -596,8 +671,8 @@ begin
                      --  Scalar discriminant: select the opposite value.
                      Lower_Imm (F, 12, Contract_Succ_Val (OT), True);
                      IO.Put_Line (F, "    cmp     " & Xreg & ", x12");
-                     Lower_Imm (F, 12, Contract_Fail_Val (OT), True);
-                     Lower_Imm (F, 13, Contract_Succ_Val (OT), True);
+                     Lower_Imm (F, 12, Contract_Fail_Val (Inv_T), True);
+                     Lower_Imm (F, 13, Contract_Succ_Val (Inv_T), True);
                      IO.Put_Line (F, "    csel    " & Xreg
                                      & ", x12, x13, eq");
                   end if;

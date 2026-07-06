@@ -106,6 +106,12 @@ package body Kurt.Codegen is
    --  §5.4 static bindings of the unit being emitted (label `_Kst_NAME`).
    Unit_Statics : Static_Vectors.Vector;
 
+   --  §5.3 top-level `const` declarations, published so Lower_Stmt's
+   --  inline-`asm` `'(expr)` evaluator (§6.11) can resolve a `const` name
+   --  the same way Emit's top-level-`asm` evaluator does (§5.13) — see
+   --  Kurt.Parser.Fold_Int_Expr.
+   Unit_Consts : Const_Vectors.Vector;
+
    --  §7.10.1 whether this unit declares a `@trap` handler. When set, a
    --  `@trap;` branches to the synthesised `_kurt_trap_handler`; otherwise
    --  it goes straight to the default divergence.
@@ -176,11 +182,29 @@ package body Kurt.Codegen is
    package Loop_Stack_Pkg is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Loop_Labels);
 
+   --  §7.8 active express-block targets, innermost last. An `express`
+   --  stores its value to the innermost target's Result_Off, destroys
+   --  the bindings declared since the block's entry (Body_Entry), and
+   --  branches to End_Lbl — an early exit from the block expression.
+   type Express_Target is record
+      End_Lbl    : SU.Unbounded_String;
+      Result_Off : Natural := 0;
+      Body_Entry : Natural := 0;
+      Name       : SU.Unbounded_String;   --  §7.9 block label; empty = none
+   end record;
+
+   package Express_Stack_Pkg is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Express_Target);
+
    --  Internal fn return types, so call sites can classify the return
    --  value per the Apple AAPCS64 composite rules (1 reg / 2 regs / sret).
    type Fn_Ret is record
       Name : SU.Unbounded_String;
       Ty   : Type_Access;
+      --  §5.15 `@symbol "name"` on an `extern` fn WITH a body: overrides the
+      --  external name a direct call site (and a bare-name fn-pointer
+      --  coercion) targets. Empty = use the Kurt identifier (Name).
+      Symbol : SU.Unbounded_String;
    end record;
 
    package Fn_Ret_Pkg is new Ada.Containers.Vectors
@@ -196,6 +220,8 @@ package body Kurt.Codegen is
       Loop_Idx     : Natural := 0;
       Dyn_Syms     : Dyn_Sym_Pkg.Vector;
       Loops        : Loop_Stack_Pkg.Vector;
+      --  §7.8 express-block targets (innermost last; see Express_Target).
+      Expr_Blocks  : Express_Stack_Pkg.Vector;
       --  Aggregate-ABI context (AAPCS64). Ret_Ty is the enclosing fn's
       --  return type; Sret_Off is the frame slot holding the incoming x8
       --  indirect-result pointer (-1 when the return is not sret-class);
@@ -236,6 +262,20 @@ package body Kurt.Codegen is
       end loop;
       return null;
    end Lookup_Fn_Ret;
+
+   --  §5.15: the `@symbol` override for internal fn Name, or "" when it has
+   --  none (or Name is unknown here — a `@dyn` callee, handled separately).
+   function Fn_Symbol_Of
+     (ST : Lower_State; Name : String) return String
+   is
+   begin
+      for I in ST.Fn_Rets.First_Index .. ST.Fn_Rets.Last_Index loop
+         if SU.To_String (ST.Fn_Rets.Element (I).Name) = Name then
+            return SU.To_String (ST.Fn_Rets.Element (I).Symbol);
+         end if;
+      end loop;
+      return "";
+   end Fn_Symbol_Of;
 
    function Lookup_Dyn_Sym
      (ST : Lower_State; Name : String; Found : out Dyn_Sym) return Boolean
@@ -321,6 +361,17 @@ package body Kurt.Codegen is
 
    function Is_Ref (T : Type_Access) return Boolean is
      (T /= null and then T.Kind = T_Ref);
+
+   --  §7.11: "an invocation of a subroutine declared with the return-type
+   --  keyword `never`" is a diverging expression (mirrors Kurt.Sema.
+   --  Check.Stmt_Diverges' `when S_Expr` case, which this codegen pass
+   --  cannot call directly). Shared by Lower_Stmt (nested blocks) and
+   --  Emit_Fn (the top-level function body) so both insert the implicit
+   --  `@trap` the spec requires after such a statement.
+   function Is_Never_Expr (E : Expr_Access) return Boolean is
+     (E /= null and then E.Sem_Ty /= null
+      and then E.Sem_Ty.Kind = T_Named
+      and then SU.To_String (E.Sem_Ty.Name) = "never");
 
    --  An aggregate lives in RAM: a struct, an enum with a payload, a
    --  tuple, or an array. A unit-only enum is a bare discriminant (scalar).
@@ -537,6 +588,22 @@ package body Kurt.Codegen is
       S  : Stmt_Access;
       ST : in out Lower_State);
 
+   --  §2.1.4: materialise a struct/variant/tuple/array literal into a
+   --  freshly bump-allocated stack temporary (same allocation scheme as a
+   --  let-binding's slot), returning its frame offset. This lets a
+   --  composite literal appear anywhere an lvalue-shaped source is needed
+   --  (call argument, return value, match scrutinee) and not only as a
+   --  let/mut initialiser. The temporary is never registered as a binding,
+   --  so it carries no runtime drop flag and no scope-exit destructor is
+   --  ever emitted for it: the only reachable non-initialiser positions
+   --  (call arguments, `return`) TRANSFER the value into the callee/caller
+   --  per §8.8.2, so no drop is owed. This routine is not a general
+   --  temporary-drop mechanism and shall not be used where the value could
+   --  be read without being transferred while its type satisfies destruct.
+   function Materialize_Composite
+     (F : IO.File_Type; ST : in out Lower_State;
+      Ty : Type_Access; Init : Expr_Access)
+      return Natural;
 
    --  Completions as separate subunits.
    procedure Lower_Float_Into_D
@@ -555,6 +622,12 @@ package body Kurt.Codegen is
      (F  : IO.File_Type;
       S  : Stmt_Access;
       ST : in out Lower_State) is separate;
+
+   function Materialize_Composite
+     (F : IO.File_Type; ST : in out Lower_State;
+      Ty : Type_Access; Init : Expr_Access)
+      return Natural
+   is separate;
 
    ----------------------------------------------------------------------
    --  Function lowering

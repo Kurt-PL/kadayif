@@ -33,6 +33,14 @@ separate (Kurt.Parser)
                         Advance (C);
                      end loop;
                   end if;
+                  --  §5.9 `generic_item = identifier [':' bound]
+                  --  [lifetime_param]`: a single item may carry a bound
+                  --  AND a trailing lifetime, e.g. `.<T: Display 'a>`.
+                  --  Lifetimes are erased later; discard it here just as
+                  --  the standalone-lifetime-item branch above does.
+                  if C.Cur.Kind = Tok_Label then
+                     Advance (C);
+                  end if;
                   Params.Append (P);
                end;
             end if;

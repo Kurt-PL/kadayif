@@ -13,6 +13,11 @@ separate (Kurt.Parser)
       Into.Gen_Methods.Append (From.Gen_Methods);
       Into.Gen_Fns.Append (From.Gen_Fns);
       Into.Top_Asm.Append (From.Top_Asm);
+      --  §10.6: carry each unit's `module` names into the merged unit so
+      --  Kurt.Sema.Check can see them (e.g. for the name-collision check
+      --  against sibling fn/struct/enum/... declarations, spec 10.6).
+      Into.Module_Names.Append (From.Module_Names);
+      Into.Module_Pubs.Append (From.Module_Pubs);
       --  §7.10.1 at most one trap handler across the translation unit.
       if From.Has_Trap_Handler then
          if Into.Has_Trap_Handler then

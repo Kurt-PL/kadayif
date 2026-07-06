@@ -212,6 +212,8 @@ separate (Kurt.Parser)
                RE (E.Q_Inner);
             when E_Ref =>
                RE (E.Rf_Place);
+            when E_Extract =>
+               RE (E.Ex_Inner); RE (E.Ex_Fallback);
             when E_CAS =>
                RE (E.CAS_Tgt); RE (E.CAS_Exp); RE (E.CAS_New);
             when E_Array_Lit =>
@@ -276,9 +278,6 @@ separate (Kurt.Parser)
                if S.SI_Is_Let then
                   RPat (S.SI_Let_Pat);
                end if;
-            when S_Extract =>
-               RE (S.X_Expr);
-               RBlk (S.X_Else);
             when S_Break => RE (S.Brk_Val);
             when S_Continue => null;
             when S_Express => RE (S.Xp_Val);

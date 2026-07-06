@@ -9,19 +9,50 @@ separate (Main)
       Unit    : Kurt.Parser.Translation_Unit;
       Visited : Unbounded_String;   --  space-bracketed canonical paths
 
-      --  §10.3 the crate-wide namespace tables. Kurt has no crate/package
-      --  federation — every `@add`-ed source unit lives in ONE flat
-      --  compilation, so both tables are simply global: each canonical file
-      --  is assigned one mangling prefix (implementation-defined; derived
-      --  from its file name here) the first time it is loaded, and every
-      --  `@add ... as name;` site anywhere in the graph registers `name` as
-      --  an alias for that prefix. A name reused for a different target is
-      --  permitted (not a TF — the spec does not constrain cross-file alias
-      --  uniqueness); the first registration for that name wins.
+      --  §10.2/§10.3 every `@add`-ed source unit lives in ONE flat
+      --  compilation: each canonical file is assigned one mangling prefix
+      --  (implementation-defined; derived from its file name here) the
+      --  first time it is loaded.
       Canon_Paths    : Kurt.Parser.Path_Segments.Vector;
       Canon_Prefixes : Kurt.Parser.Path_Segments.Vector;
-      Alias_Names    : Kurt.Parser.Path_Segments.Vector;
-      Alias_Prefixes : Kurt.Parser.Path_Segments.Vector;
+
+      --  §10.3 `@add pub` / §10.4 `@dyn pub` re-export registry:
+      --  (Export_Owner, Export_Name, Export_Target) triples. Populated once
+      --  per loaded file (keyed by its OWN assigned prefix) with every
+      --  alias it makes directly usable, bare, by its importers -- a
+      --  `@add pub ... as name;` or `@dyn pub as name {...}` site it
+      --  declares itself, plus anything it in turn inherited from one of
+      --  ITS OWN pub-marked imports. Propagation is transitive and, once
+      --  granted, permanent ("pub is viral": a name that reached
+      --  visibility through one `pub` link keeps propagating through
+      --  further `@add`s regardless of whether those further sites are
+      --  themselves marked `pub` -- see Load's `@add` loop). A name never
+      --  added here (i.e. every alias by default) stays strictly private
+      --  to the one source unit that declared it -- this is §10.3's
+      --  alias-privacy rule, and the entire reason the OLD flat/global
+      --  alias table was wrong: every `@add ... as name;` site anywhere in
+      --  the graph used to register `name` unconditionally, so a private
+      --  alias in one file silently leaked into (and could shadow/collide
+      --  with) every other file's resolution.
+      Export_Owner  : Kurt.Parser.Path_Segments.Vector;
+      Export_Name   : Kurt.Parser.Path_Segments.Vector;
+      Export_Target : Kurt.Parser.Path_Segments.Vector;
+
+      --  §10.6 flat, whole-programme registry of every `module`'s fully
+      --  mangled namespace prefix (e.g. "geoPrefix$shapes") and whether it
+      --  was declared `pub module`. Unlike `@add pub`/`@dyn pub` above, a
+      --  module's mangled prefix is already globally unique (composed from
+      --  its owning file's own mangling prefix), so there is no need to
+      --  hand-propagate it through each importer's local alias table: it
+      --  is instead checked directly, the moment a collapse step's head
+      --  matches it, by Kurt.Parser.Resolve_Aliases's Prefix_Of. A
+      --  cross-unit qualified access always reaches a module through an
+      --  ordinary `@add` alias first (`fileAlias::modname::item`, per
+      --  spec 10.6's own examples) -- this registry gates only the second
+      --  (module) segment.
+      NS_Names : Kurt.Parser.Path_Segments.Vector;
+      NS_Pubs  : Kurt.Parser.Bool_Vectors.Vector;
+
       --  §10.5 `@path` prefixes seen across ALL source units: the same
       --  prefix name re-declared in another unit shall carry an identical
       --  base path; a mismatch is a translation failure.
@@ -127,10 +158,27 @@ separate (Main)
          Append (Visited, Canon & " ");
          declare
             Prefix : constant String := Compute_Prefix (Canon);
+            --  §10.3 this file's OWN per-source-unit alias table (see the
+            --  design note above Kurt.Parser.Resolve_Aliases): every name
+            --  usable, bare, from WITHIN this file's own source text --
+            --  its own `@add`/`@dyn` sites (regardless of `pub` -- a unit
+            --  always sees its own declarations) and its own `module`
+            --  namespaces (self-mapped, likewise unconditional), plus
+            --  anything transitively inherited from a `pub`-marked import.
+            Local_Names    : Kurt.Parser.Path_Segments.Vector;
+            Local_Prefixes : Kurt.Parser.Path_Segments.Vector;
          begin
             Canon_Paths.Append (To_Unbounded_String (Canon));
             Canon_Prefixes.Append (To_Unbounded_String (Prefix));
             U := Parse_One (Path);
+            if not Is_Root then
+               --  §5.5.1/§6.2.2 non-`pub` visibility, and §10.4's same-
+               --  source-unit `@dyn` exemption: registered up front (rather
+               --  than after Apply_Namespace, as before the per-unit
+               --  refactor) so Resolve_Aliases below can already tell this
+               --  unit apart from others while it runs.
+               Kurt.Layout.Register_File_Prefix (Prefix);
+            end if;
             --  §10.5 cross-unit `@path` consistency: the same prefix name
             --  declared in more than one source unit shall have identical
             --  base paths.
@@ -159,6 +207,27 @@ separate (Main)
                      Seen_Path_Bases.Append (U.Path_Bases.Element (I));
                   end if;
                end;
+            end loop;
+            --  §10.6 this file's own `module` namespaces: self-mapped local
+            --  aliases (unprefixed, matching how Close_Module left them),
+            --  so an in-file qualified reference `modname::item` collapses
+            --  through the SAME alias machinery as an `@add`. A `pub
+            --  module`'s eventual fully mangled prefix is also registered
+            --  into the cross-unit namespace registry -- computed directly
+            --  here (Prefix & "$" & name) rather than waiting for
+            --  Apply_Namespace below; the formula is the same one
+            --  Apply_Namespace itself applies to this same name.
+            for MI in U.Module_Names.First_Index ..
+                      U.Module_Names.Last_Index loop
+               Local_Names.Append (U.Module_Names.Element (MI));
+               Local_Prefixes.Append (U.Module_Names.Element (MI));
+               if not Is_Root then
+                  NS_Names.Append
+                    (To_Unbounded_String
+                       (Prefix & "$"
+                        & To_String (U.Module_Names.Element (MI))));
+                  NS_Pubs.Append (U.Module_Pubs.Element (MI));
+               end if;
             end loop;
             declare
                Base : constant String := Dir.Containing_Directory (Canon);
@@ -205,16 +274,122 @@ separate (Main)
                      else
                         Load (Sub);
                         --  §10.3 register this @add site's `as name;` as an
-                        --  alias for the target's canonical prefix.
-                        Alias_Names.Append (U.Add_Names.Element (I));
-                        Alias_Prefixes.Append
-                          (To_Unbounded_String
-                             (Prefix_For_Canon (Dir.Full_Name (Sub))));
+                        --  alias for the target's canonical prefix, USABLE
+                        --  ONLY FROM THIS FILE -- Local_Names/Local_Prefixes
+                        --  are this Load call's own locals, never shared
+                        --  with any other file's resolution.
+                        declare
+                           Target_Prefix : constant String :=
+                             Prefix_For_Canon (Dir.Full_Name (Sub));
+                           Nm          : constant Unbounded_String :=
+                             U.Add_Names.Element (I);
+                           Is_Pub_Site : constant Boolean :=
+                             U.Add_Pubs.Element (I);
+                           --  Snapshot: iterate only entries that existed
+                           --  BEFORE this site's own inheritance loop below
+                           --  appends more (avoids scanning what we just
+                           --  added, which would re-derive nothing new but
+                           --  must not become an unbounded/self-referential
+                           --  scan).
+                           Snap : constant Natural :=
+                             Natural (Export_Owner.Length);
+                        begin
+                           Local_Names.Append (Nm);
+                           Local_Prefixes.Append
+                             (To_Unbounded_String (Target_Prefix));
+                           if Is_Pub_Site then
+                              Export_Owner.Append
+                                (To_Unbounded_String (Prefix));
+                              Export_Name.Append (Nm);
+                              Export_Target.Append
+                                (To_Unbounded_String (Target_Prefix));
+                           end if;
+                           --  §10.3 `@add pub` re-export propagation: any
+                           --  name Target_Prefix's own file already exports
+                           --  becomes usable, bare, in THIS file too, and
+                           --  (transitively -- once granted, `pub`
+                           --  propagation is permanent regardless of a
+                           --  further `@add` site's own `pub` flag) is
+                           --  re-exported onward from this file as well.
+                           for K in 1 .. Snap loop
+                              if To_String (Export_Owner.Element (K))
+                                   = Target_Prefix
+                              then
+                                 Local_Names.Append
+                                   (Export_Name.Element (K));
+                                 Local_Prefixes.Append
+                                   (Export_Target.Element (K));
+                                 Export_Owner.Append
+                                   (To_Unbounded_String (Prefix));
+                                 Export_Name.Append
+                                   (Export_Name.Element (K));
+                                 Export_Target.Append
+                                   (Export_Target.Element (K));
+                              end if;
+                           end loop;
+                        end;
                      end if;
                   end;
                end loop;
             end;
+            --  §10.4 `@dyn as name { ... }` is a namespace exactly like
+            --  `@add` (its `as` clause is likewise mandatory, spec 10.4):
+            --  each prototype is renamed `[Prefix$]name$item` -- file-
+            --  prefixed for a non-root unit, so Kurt.Layout.Same_Source_Unit
+            --  can tell this `@dyn` block's own source unit apart from
+            --  another's (spec 10.4's same-unit exemption on non-`pub`
+            --  symbols) -- and registered as a self-mapped local alias so
+            --  Resolve_Aliases collapses `name::item` call sites to match.
+            --  The *external link symbol* is untouched — a `@dyn`
+            --  prototype's `Symbol_Name` (empty = "derive from the
+            --  identifier") is pinned to the ORIGINAL bare identifier
+            --  first, so mangling the Kurt-side name never changes what
+            --  gets linked. `@dyn pub` additionally exports the namespace
+            --  identifier itself (bare) to this file's own importers.
+            for I in U.Dyns.First_Index .. U.Dyns.Last_Index loop
+               declare
+                  D : Kurt.Parser.Dyn_Decl := U.Dyns.Element (I);
+                  Qualified : constant String :=
+                    (if Is_Root then To_String (D.Alias)
+                     else Prefix & "$" & To_String (D.Alias));
+               begin
+                  for J in D.Items.First_Index .. D.Items.Last_Index loop
+                     declare
+                        P : Kurt.Parser.Fn_Proto := D.Items.Element (J);
+                     begin
+                        if Length (P.Symbol_Name) = 0 then
+                           P.Symbol_Name := P.Name;
+                        end if;
+                        P.Name := To_Unbounded_String
+                          (Qualified & "$" & To_String (P.Name));
+                        D.Items.Replace_Element (J, P);
+                     end;
+                  end loop;
+                  U.Dyns.Replace_Element (I, D);
+                  Local_Names.Append (D.Alias);
+                  Local_Prefixes.Append (To_Unbounded_String (Qualified));
+                  if D.Is_Pub then
+                     Export_Owner.Append (To_Unbounded_String (Prefix));
+                     Export_Name.Append (D.Alias);
+                     Export_Target.Append
+                       (To_Unbounded_String (Qualified));
+                  end if;
+               end;
+            end loop;
+            --  §10.3/§10.4/§10.6 resolve this unit's OWN alias references
+            --  (before it is mangled and merged) against ITS OWN per-unit
+            --  table computed just above; `Unit` (the accumulator so far)
+            --  already holds every dependency this unit `@add`s, fully
+            --  merged (Load recurses dependency-first), so Check_Pub can
+            --  already see it.
+            Kurt.Parser.Resolve_Aliases
+              (U, Unit, (if Is_Root then "" else Prefix),
+               Local_Names, Local_Prefixes, NS_Names, NS_Pubs);
             if not Is_Root then
+               --  §5.5.1/§6.2.2 non-`pub` visibility: this file's
+               --  declarations all end up prefixed `Prefix$...` below, so
+               --  Kurt.Layout can tell a same-source-unit access from a
+               --  cross-unit one by that leading segment.
                --  §10.3/§10.6 whole-file namespace pass. Module-mangled
                --  declarations (`a$b$f`) are reached through their module
                --  heads (Extra_Names); a leading `srcroot` names this
@@ -263,12 +438,6 @@ separate (Main)
                            & To_String (U.Module_Names.Element (I))));
                end loop;
             end if;
-            --  §10.6 every module prefix is its own namespace alias
-            --  (`a::b::item` collapses stepwise to `a$b$item`).
-            for M of U.Module_Names loop
-               Alias_Names.Append (M);
-               Alias_Prefixes.Append (M);
-            end loop;
             Kurt.Parser.Merge_Unit (Unit, U);
          end;
       end Load;
@@ -279,37 +448,6 @@ separate (Main)
       if Errors > 0 then
          return;   --  missing imports; do not proceed to sema/codegen
       end if;
-      --  §10.4 `@dyn as name { ... }` is a namespace exactly like `@add`
-      --  (its `as` clause is likewise mandatory, spec 10.4): each prototype
-      --  is looked up on the Kurt side as `name$item`, registered as an
-      --  alias `name -> name` so `Resolve_Aliases` collapses `name::item`
-      --  call sites to match. The *external link symbol* is untouched — a
-      --  `@dyn` prototype's `Symbol_Name` (empty = "derive from the
-      --  identifier") is pinned to the ORIGINAL bare identifier first, so
-      --  mangling the Kurt-side name never changes what gets linked.
-      for I in Unit.Dyns.First_Index .. Unit.Dyns.Last_Index loop
-         declare
-            D : Kurt.Parser.Dyn_Decl := Unit.Dyns.Element (I);
-         begin
-            for J in D.Items.First_Index .. D.Items.Last_Index loop
-               declare
-                  P : Kurt.Parser.Fn_Proto := D.Items.Element (J);
-               begin
-                  if Length (P.Symbol_Name) = 0 then
-                     P.Symbol_Name := P.Name;
-                  end if;
-                  P.Name := D.Alias & "$" & P.Name;
-                  D.Items.Replace_Element (J, P);
-               end;
-            end loop;
-            Unit.Dyns.Replace_Element (I, D);
-            Alias_Names.Append (D.Alias);
-            Alias_Prefixes.Append (D.Alias);
-         end;
-      end loop;
-      --  §10.3/§10.4 resolve every `alias::item` reference anywhere in the
-      --  fully merged unit against the alias table built above.
-      Kurt.Parser.Resolve_Aliases (Unit, Alias_Names, Alias_Prefixes);
       --  Built-in types verdict (§4.5) and the ranges (§4.8) are intrinsic —
       --  recognised by name/structure in Kurt.Layout like the primitives, not
       --  monomorphised here.

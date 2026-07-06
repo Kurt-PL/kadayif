@@ -53,6 +53,14 @@ separate (Kurt.Sema.Check.Infer)
                             & Image (Src) & "' and '"
                             & Image (E.Cast_Ty) & "' differ in size");
                   end if;
+                  --  §6.8.11/§8.8.2: reinterpreting a value whose type
+                  --  satisfies destruct transfers it out of the source
+                  --  binding, exactly as an ordinary transfer would --
+                  --  the bits now live (bitwise) inside the cast result,
+                  --  so the original binding shall not be read again.
+                  --  Maybe_Move is a no-op unless the operand is a bare
+                  --  binding path of a destruct-satisfying type.
+                  Maybe_Move (E.Cast_Inner);
                   E.Sem_Ty := E.Cast_Ty;
                elsif (Src /= null and then Src.Kind = T_Fn)
                  or else (E.Cast_Ty /= null and then E.Cast_Ty.Kind = T_Fn)
@@ -90,8 +98,17 @@ separate (Kurt.Sema.Check.Infer)
                      E.Sem_Ty := E.Cast_Ty;
                   end;
                elsif Is_Integer_Type (E.Cast_Ty) then
+                  --  §5.9.2 erasure: a source that is an (unbounded)
+                  --  generic parameter cannot be checked against a
+                  --  concrete numeric type without knowing which
+                  --  concrete type it names -- whether the cast is
+                  --  actually valid is necessarily a per-instantiation
+                  --  question (every generated instance is independently
+                  --  checked when Kurt.Mono copies it into U.Fns), not
+                  --  one the abstract template can answer.
                   if not (Is_Integer_Type (Src) or else Src_Is_Enum
-                          or else Is_Float_Type (Src))
+                          or else Is_Float_Type (Src)
+                          or else Is_Generic_Param_Ty (Src))
                   then
                      Error ("cannot cast '" & Image (Src)
                             & "' to integer type '"
@@ -107,7 +124,8 @@ separate (Kurt.Sema.Check.Infer)
                   end if;
                   E.Sem_Ty := E.Cast_Ty;
                elsif Is_Float_Type (E.Cast_Ty) then
-                  if not (Is_Integer_Type (Src) or else Is_Float_Type (Src))
+                  if not (Is_Integer_Type (Src) or else Is_Float_Type (Src)
+                          or else Is_Generic_Param_Ty (Src))
                   then
                      Error ("cannot cast '" & Image (Src)
                             & "' to float type '"

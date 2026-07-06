@@ -20,9 +20,6 @@ separate (Kurt.Mono.Monomorphize)
             Visit_Expr (S.SI_Cond);
             Visit_Block (S.SI_Then);
             Visit_Block (S.SI_Else);
-         when S_Extract =>
-            Visit_Expr (S.X_Expr);
-            Visit_Block (S.X_Else);
          when S_Airside_Block =>
             Visit_Block (S.A_Stmts);
          when S_Break =>

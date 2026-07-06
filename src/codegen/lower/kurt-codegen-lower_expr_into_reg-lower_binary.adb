@@ -9,7 +9,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
       Use_64 : constant Boolean := Is_Ref (Lhs_Ty)
                                 or else Sizeof (Lhs_Ty) > 4;
    begin
-      --  §4.3.3 floating-point comparison via the hardware `fcmp`, which
+      --  §4.4.3 floating-point comparison via the hardware `fcmp`, which
       --  follows ISO/IEC 60559:2020 (unordered → all relational false,
       --  ordered-equal handles ±0). The Kurt deviations are patched on top:
       --    == reflexive over NaN (both-NaN → true);
@@ -296,23 +296,33 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             end;
 
          when B_Eq | B_Ne | B_Lt | B_Gt | B_Le | B_Ge =>
-            if Use_64 then
-               IO.Put_Line (F, "    cmp     " & Xt & ", " & Xr);
-            else
-               IO.Put_Line (F, "    cmp     " & Wt & ", " & Wr);
-            end if;
+            --  §6.6: relational codes follow operand signedness. `==`/`!=`
+            --  do not depend on it (eq/ne is the same for both), but
+            --  </>/<=/>= over an unsigned type must use the unsigned
+            --  (carry-based) condition codes lo/hi/ls/hs, not the signed
+            --  (overflow-based) lt/gt/le/ge, or e.g. 0xFFFFFFFF > 1 (ui4)
+            --  would come out false.
             declare
-               C : constant String :=
-                 (case E.B_Op is
-                     when B_Eq => "eq",
-                     when B_Ne => "ne",
-                     when B_Lt => "lt",
-                     when B_Gt => "gt",
-                     when B_Le => "le",
-                     when B_Ge => "ge",
-                     when others => "eq");
+               Signed : constant Boolean := Is_Signed_Int (Lhs_Ty);
             begin
-               IO.Put_Line (F, "    cset    " & Wt & ", " & C);
+               if Use_64 then
+                  IO.Put_Line (F, "    cmp     " & Xt & ", " & Xr);
+               else
+                  IO.Put_Line (F, "    cmp     " & Wt & ", " & Wr);
+               end if;
+               declare
+                  C : constant String :=
+                    (case E.B_Op is
+                        when B_Eq => "eq",
+                        when B_Ne => "ne",
+                        when B_Lt => (if Signed then "lt" else "lo"),
+                        when B_Gt => (if Signed then "gt" else "hi"),
+                        when B_Le => (if Signed then "le" else "ls"),
+                        when B_Ge => (if Signed then "ge" else "hs"),
+                        when others => "eq");
+               begin
+                  IO.Put_Line (F, "    cset    " & Wt & ", " & C);
+               end;
             end;
 
          when B_LAnd | B_LOr | B_LXor =>

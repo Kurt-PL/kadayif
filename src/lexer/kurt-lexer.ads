@@ -17,14 +17,14 @@ package Kurt.Lexer is
      (Tok_EOF,
       Tok_Ident,
       Tok_Int_Lit,
-      Tok_Float_Lit,   --  value in Float_V, type suffix in Int_Suffix
+      Tok_Float_Lit,   --  value in Float_V (§3.5.2), type suffix in Int_Suffix
       Tok_String_Lit,  --  payload in Str_Bytes (post-escape resolution)
       Tok_Char_Lit,    --  §3.5.4 character literal; cell value in Int_V
       Tok_Label,       --  §7.9 loop/block label `'name` (name in Lexeme)
       Tok_Hash_Wild,   --  #wild#  (§3.6, single indivisible token)
       Tok_Hash,        --  #       (§5.10 binding pattern `name # sub`)
       Tok_Asm,         --  asm { … } raw instruction body (§6.11, lexeme=body)
-      --  Keywords (§3.3.1)
+      --  Keywords (§3.4.1)
       Kw_Fn,
       Kw_Return,
       Kw_As,
@@ -54,7 +54,7 @@ package Kurt.Lexer is
       Kw_Const,          --  associated constant (§9.3.2)
       Kw_True,
       Kw_False,
-      Kw_Cellbits,       --  cell-width keyword (§4.2.1, replaces CELL_BITS)
+      Kw_Cellbits,       --  cell-width keyword (§4.3.1, replaces CELL_BITS)
       Kw_Never,          --  `never` diverging return type (§4.10, §7.11)
       Kw_Xlatime,        --  `xlatime` translation-time evaluation (§6.10)
       --  §3.4.1: the keyword list is exhaustive and normative — all 50
@@ -143,7 +143,7 @@ package Kurt.Lexer is
       Punct_LBracket,    --  [  (array types / literals / indexing, §4.6)
       Punct_RBracket,    --  ]
       Punct_Arrow,       --  ->
-      Punct_LArrow,      --  <-  (contract extraction)
+      Punct_LArrow,      --  <-  (closure short-form arrow, §9.9)
       Punct_Semi,        --  ;
       Punct_Comma,       --  ,
       Punct_Colon,       --  :
@@ -173,19 +173,19 @@ package Kurt.Lexer is
       Kind      : Token_Kind   := Tok_EOF;
       Lexeme    : SU.Unbounded_String;
       Int_V     : Long_Long_Integer := 0;
-      --  Value of a Tok_Float_Lit (§3.4.2).
+      --  Value of a Tok_Float_Lit (§3.5.2).
       Float_V   : Long_Float := 0.0;
       --  §3.5.2 special float literal: 0 = ordinary (value in Float_V),
       --  1 = `0nan`, 2 = `0inf`. Non-finite values are carried as this tag
       --  (never as a Long_Float — the compiler is built with validity
       --  checks, which reject NaN/infinity as invalid data).
       Float_Special : Natural := 0;
-      --  Numeric type suffix (§3.4.1/§3.4.2), e.g. "si4" / "fe8m23"; empty
+      --  Numeric type suffix (§3.5.1/§3.5.2), e.g. "si4" / "fe8m23"; empty
       --  if absent. Shared by integer and floating-point literals.
       Int_Suffix : SU.Unbounded_String;
       --  Post-escape byte sequence for Tok_String_Lit. Each Character
       --  in the string corresponds to one source-encoding byte. Escapes
-      --  defined in §3.4.7 are resolved by the lexer.
+      --  defined in §3.5.7 are resolved by the lexer.
       Str_Bytes : SU.Unbounded_String;
       Line      : Positive     := 1;
       Col       : Positive     := 1;
@@ -228,6 +228,11 @@ private
       --  `@flag_else` (including when the taken branch IS the else); lets
       --  Skip_Line_Chain_Rest reject a duplicate else after the taken body.
       Line_Else_Seen : Boolean := False;
+      --  §10.8 whether the taken line branch's chain contains a block
+      --  branch so far (a mixed chain). Such a chain requires a closing
+      --  `@flag_endif`, which an all-line chain forbids; Skip_Line_Chain_
+      --  Rest enforces whichever applies after the taken body.
+      Line_Has_Block : Boolean := False;
       --  §10.8 block-chain context stack: one character per enclosing block
       --  chain whose taken branch is currently being lexed — 'e' when the
       --  taken branch is the `@flag_else` branch, 'i' otherwise. Lets the

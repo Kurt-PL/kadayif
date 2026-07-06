@@ -9,7 +9,11 @@ separate (Kurt.Parser)
       end if;
       Expect (C, Kw_Enum, "'enum'");
       D.Name := Take_Ident (C, "enum name");
-      Parse_Opt_Generic_Params (C, D.Generic_Params);
+      --  §5.9: enum generics accept inline bounds and a trailing lifetime,
+      --  same as fn/impl (`enum box.<T: Display> { ... }`).
+      Parse_Opt_Generic_Params_Bounded (C, D.Generic_Params);
+      Check_Unique_Generic_Names
+        (SU.To_String (D.Name), D.Generic_Params);
       Expect (C, Punct_LBrace, "'{'");
       if C.Cur.Kind /= Punct_RBrace then
          loop
@@ -26,22 +30,47 @@ separate (Kurt.Parser)
                if C.Cur.Kind = Punct_LBrace then
                   Advance (C);
                   if C.Cur.Kind /= Punct_RBrace then
-                     --  Skip leading modifiers to peek the first payload
-                     --  token (modifiers themselves are not stored in the
-                     --  bootstrap field model).
-                     while C.Cur.Kind in Kw_Pub | Kw_Mut | Kw_Airside loop
-                        Advance (C);
-                     end loop;
+                     --  §5.5.1/§5.7: payload-field modifiers are parsed and
+                     --  retained on the field (the spec defines their
+                     --  combination for struct fields; it is silent on
+                     --  enum payload fields specifically, so the bootstrap
+                     --  carries the same three flags through uniformly and
+                     --  enforces `airside` — see Kurt.Sema.Check).
                      declare
-                        Is_Struct_Variant : constant Boolean :=
-                          C.Cur.Kind = Tok_Ident
-                          and then Peek_Tok (C).Kind = Punct_Colon;
-                        Idx : Natural := 0;
+                        procedure Skip_Mods
+                          (Is_Pub, Is_Mut, Is_Airside : out Boolean)
+                        is
+                        begin
+                           Is_Pub := False;
+                           Is_Mut := False;
+                           Is_Airside := False;
+                           while C.Cur.Kind in Kw_Pub | Kw_Mut | Kw_Airside
+                           loop
+                              case C.Cur.Kind is
+                                 when Kw_Pub     => Is_Pub     := True;
+                                 when Kw_Mut     => Is_Mut     := True;
+                                 when Kw_Airside => Is_Airside := True;
+                                 when others     => null;
+                              end case;
+                              Advance (C);
+                           end loop;
+                        end Skip_Mods;
+                        Fld_Pub, Fld_Mut, Fld_Airside : Boolean;
                      begin
+                        Skip_Mods (Fld_Pub, Fld_Mut, Fld_Airside);
+                        declare
+                           Is_Struct_Variant : constant Boolean :=
+                             C.Cur.Kind = Tok_Ident
+                             and then Peek_Tok (C).Kind = Punct_Colon;
+                           Idx : Natural := 0;
+                        begin
                         loop
                            declare
                               Fld : Struct_Field;
                            begin
+                              Fld.Is_Pub     := Fld_Pub;
+                              Fld.Is_Mut     := Fld_Mut;
+                              Fld.Is_Airside := Fld_Airside;
                               if Is_Struct_Variant then
                                  if C.Cur.Kind = Op_Question then
                                     Fld.Name := SU.To_Unbounded_String ("?");
@@ -67,12 +96,10 @@ separate (Kurt.Parser)
                            exit when C.Cur.Kind /= Punct_Comma;
                            Advance (C);
                            exit when C.Cur.Kind = Punct_RBrace;
-                           while C.Cur.Kind in Kw_Pub | Kw_Mut | Kw_Airside
-                           loop
-                              Advance (C);
-                           end loop;
+                           Skip_Mods (Fld_Pub, Fld_Mut, Fld_Airside);
                         end loop;
                      end;
+                  end;
                   end if;
                   Expect (C, Punct_RBrace, "'}'");
                end if;
@@ -133,6 +160,7 @@ separate (Kurt.Parser)
                      end;
                      Advance (C);
                      V.Value := Next;          --  explicit value
+                     D.Any_Explicit := True;   --  §4.11.2: no void discriminant
                   else
                      raise Syntax_Error with
                        "expected discriminant value after '=', got "
@@ -199,26 +227,56 @@ separate (Kurt.Parser)
             Advance (C);
             loop
                exit when C.Cur.Kind = Punct_RBrace;
-               if Kurt.Lexer.Is_Word (C.Cur.Kind) then
+               --  §7.2 `!contract`: the inverted-polarity form. `!` is not
+               --  itself a "word" token, so it is peeled off here before
+               --  the with-item-word dispatch below.
+               if C.Cur.Kind = Op_Bang
+                 and then Peek_Tok (C).Kind = Kw_Contract
+               then
+                  if D.Is_Contract then
+                     raise Syntax_Error with
+                       "an enum shall declare `contract` or `!contract` "
+                       & "at most once, not both (spec 7.2) at line"
+                       & Positive'Image (C.Cur.Line);
+                  end if;
+                  Advance (C);   --  '!'
+                  Advance (C);   --  'contract'
+                  D.Is_Contract   := True;
+                  D.Contract_Inv  := True;
+                  if C.Cur.Kind = Punct_Arrow then
+                     Advance (C);
+                     D.Inv_Type := Parse_Type (C);
+                  end if;
+               elsif Kurt.Lexer.Is_Word (C.Cur.Kind) then
                   declare
                      Item : constant String := SU.To_String (C.Cur.Lexeme);
                   begin
                      Advance (C);
                      if Item = "contract" then
+                        if D.Is_Contract then
+                           raise Syntax_Error with
+                             "an enum shall declare `contract` or "
+                             & "`!contract` at most once, not both "
+                             & "(spec 7.2) at line"
+                             & Positive'Image (C.Cur.Line);
+                        end if;
                         D.Is_Contract := True;
-                        --  Optional `-> inverted_pair_type` (§7.2). The
-                        --  inverted pair is parsed and discarded; `!verdict`
-                        --  is not yet activated.
+                        --  §7.2 optional `-> inverted_pair_type`; the
+                        --  symmetry constraint is enforced in Validate_Enums.
                         if C.Cur.Kind = Punct_Arrow then
                            Advance (C);
-                           declare
-                              Ignore : constant Type_Access := Parse_Type (C);
-                              pragma Unreferenced (Ignore);
-                           begin null; end;
+                           D.Inv_Type := Parse_Type (C);
                         end if;
                      elsif Item = "discrim" then
                         --  §4.11.3: `with discrim(T)` fixes the
-                        --  discriminant type (validated by sema).
+                        --  discriminant type (validated by sema). At most
+                        --  one `discrim(...)` per declaration (spec 4.11).
+                        if D.Discrim_Ty /= null then
+                           raise Syntax_Error with
+                             "duplicate `discrim(...)` with-item "
+                             & "(spec 4.11) at line"
+                             & Positive'Image (C.Cur.Line);
+                        end if;
                         Expect (C, Punct_LParen, "'('");
                         D.Discrim_Ty := Parse_Type (C);
                         Expect (C, Punct_RParen, "')'");
@@ -233,10 +291,43 @@ separate (Kurt.Parser)
                         Parse_Concurrent_Items
                           (C, D.Conc_Transfer, D.Conc_No_Transfer,
                            D.Conc_Reference, D.Conc_No_Reference);
-                     else
-                        --  Unrecognised with-item: skip balanced tokens up
-                        --  to the next ',' or '}'. The bootstrap does not
-                        --  semantically use repr/align/lifetime/...
+                     elsif Item = "repr" then
+                        --  §4.11/§4.11.3: on an enum, `repr` governs the
+                        --  payload region's layout. At most one per decl.
+                        if D.Repr_Packed then
+                           raise Syntax_Error with
+                             "duplicate `repr(...)` with-item (spec 4.11) "
+                             & "at line" & Positive'Image (C.Cur.Line);
+                        end if;
+                        Expect (C, Punct_LParen, "'('");
+                        declare
+                           Arg : constant String :=
+                             SU.To_String (Take_Ident (C, "repr argument"));
+                        begin
+                           if Arg = "packed" then
+                              D.Repr_Packed := True;
+                           elsif Arg = "native" then
+                              null;   --  §10.9.2: default layout, no effect.
+                           else
+                              raise Syntax_Error with
+                                "unknown `repr(" & Arg & ")` - expected "
+                                & "`packed` or `native` (spec 4.11.4) at "
+                                & "line" & Positive'Image (C.Cur.Line);
+                           end if;
+                        end;
+                        Expect (C, Punct_RParen, "')'");
+                     elsif Item = "lifetime" then
+                        --  §8.4.3 `with lifetime` — retained on
+                        --  D.Lifetime_Chains to govern variant payload
+                        --  field destruction order (see Kurt.Codegen.
+                        --  Emit_Field_Drops). Lifetimes themselves are
+                        --  still erased (no run-time representation).
+                        Parse_Lifetime_Body (C, D.Lifetime_Chains);
+                     elsif Item = "align" then
+                        --  §4.11.4 `with align(N)` is a legitimate enum
+                        --  with-item that the bootstrap does not model
+                        --  semantically. Parse-and-discard a balanced
+                        --  item body.
                         declare
                            Depth : Natural := 0;
                         begin
@@ -257,6 +348,16 @@ separate (Kurt.Parser)
                               Advance (C);
                            end loop;
                         end;
+                     else
+                        --  §5.11: a `with` keyword shall appear only on
+                        --  the declaration kinds for which it is defined;
+                        --  `variadic` is struct-only, and any other word
+                        --  is not a with-keyword at all. Neither is legal
+                        --  on an enum.
+                        raise Syntax_Error with
+                          "with-item `" & Item & "` shall not appear on "
+                          & "an enum declaration (spec 5.11) at line"
+                          & Positive'Image (C.Cur.Line);
                      end if;
                   end;
                else
@@ -271,6 +372,22 @@ separate (Kurt.Parser)
          elsif C.Cur.Kind = Kw_Contract then
             D.Is_Contract := True;
             Advance (C);
+            --  §7.2 bare `with contract -> inv_type`.
+            if C.Cur.Kind = Punct_Arrow then
+               Advance (C);
+               D.Inv_Type := Parse_Type (C);
+            end if;
+         elsif C.Cur.Kind = Op_Bang and then Peek_Tok (C).Kind = Kw_Contract
+         then
+            --  §7.2 bare `with !contract [-> inv_type]`.
+            Advance (C);   --  '!'
+            Advance (C);   --  'contract'
+            D.Is_Contract  := True;
+            D.Contract_Inv := True;
+            if C.Cur.Kind = Punct_Arrow then
+               Advance (C);
+               D.Inv_Type := Parse_Type (C);
+            end if;
          elsif C.Cur.Kind = Tok_Ident
            and then SU.To_String (C.Cur.Lexeme) = "discrim"
          then
@@ -279,13 +396,38 @@ separate (Kurt.Parser)
             Expect (C, Punct_LParen, "'('");
             D.Discrim_Ty := Parse_Type (C);
             Expect (C, Punct_RParen, "')'");
+         elsif C.Cur.Kind = Tok_Ident
+           and then SU.To_String (C.Cur.Lexeme) = "repr"
+         then
+            --  Bare form `with repr(packed);` (§4.11 example form).
+            Advance (C);
+            Expect (C, Punct_LParen, "'('");
+            declare
+               Arg : constant String :=
+                 SU.To_String (Take_Ident (C, "repr argument"));
+            begin
+               if Arg = "packed" then
+                  D.Repr_Packed := True;
+               elsif Arg = "native" then
+                  null;
+               else
+                  raise Syntax_Error with
+                    "unknown `repr(" & Arg & ")` - expected `packed` or "
+                    & "`native` (spec 4.11.4) at line"
+                    & Positive'Image (C.Cur.Line);
+               end if;
+            end;
+            Expect (C, Punct_RParen, "')'");
          elsif C.Cur.Kind = Kw_Destruct then
-            --  §8.11 bare `with destruct [block]`.
+            --  §8.11/§5.11 bare `with destruct [block]`. This is the
+            --  with_single form; per §5.11 the form itself never includes
+            --  its own terminator, even when the item's body is a `{...}`
+            --  block — the enclosing declaration's grammar (here, a
+            --  trailing ';') always follows. Do NOT set Is_Braced here.
             Advance (C);
             D.Has_Destruct := True;
             if C.Cur.Kind = Punct_LBrace then
                Parse_Block_Stmts (C, D.Destruct_Block);
-               Is_Braced := True;   --  the block terminates it; no ';'
             end if;
          else
             raise Syntax_Error with

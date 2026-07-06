@@ -70,6 +70,16 @@ separate (Kurt.Mono.Monomorphize)
             end loop;
          when E_Question  => Scan_Expr (E.Q_Inner, Used, Bound);
          when E_Ref       => Scan_Expr (E.Rf_Place, Used, Bound);
+         when E_Extract =>
+            --  §7.2.3: `.id` (if any) is bound only within Ex_Fallback --
+            --  Bound is a flat per-closure "locally introduced" set with
+            --  no exit-scope popping elsewhere in this scanner either, so
+            --  this mirrors the existing (slightly coarse) precision.
+            Scan_Expr (E.Ex_Inner, Used, Bound);
+            if SU.Length (E.Ex_Err) > 0 then
+               Add_Once (Bound, E.Ex_Err);
+            end if;
+            Scan_Expr (E.Ex_Fallback, Used, Bound);
          when E_CAS =>
             Scan_Expr (E.CAS_Tgt, Used, Bound);
             Scan_Expr (E.CAS_Exp, Used, Bound);
@@ -78,6 +88,7 @@ separate (Kurt.Mono.Monomorphize)
             for I in E.AL_Elems.First_Index .. E.AL_Elems.Last_Index loop
                Scan_Expr (E.AL_Elems.Element (I), Used, Bound);
             end loop;
+            Scan_Expr (E.AL_Repeat_Expr, Used, Bound);
          when E_Dyn_Cast   => Scan_Expr (E.DC_Inner, Used, Bound);
          when E_Slice_Cast => Scan_Expr (E.SC_Inner, Used, Bound);
          when E_Destruct   => Scan_Expr (E.DT_Inner, Used, Bound);

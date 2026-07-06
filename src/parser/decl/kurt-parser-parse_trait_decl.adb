@@ -54,7 +54,11 @@ separate (Kurt.Parser)
                AC.Ty := Parse_Type (C);
                if C.Cur.Kind = Punct_Eq then
                   Advance (C);
+                  --  §6.10.2/§9.3.2: same implicit-xlatime treatment as
+                  --  Parse_Impl_Decl's associated const.
+                  C.Xlatime_Depth := C.Xlatime_Depth + 1;
                   AC.Val := Parse_Expr (C);
+                  C.Xlatime_Depth := C.Xlatime_Depth - 1;
                   AC.Has_Val := True;
                end if;
                Expect (C, Punct_Semi, "';' after associated const");
@@ -64,10 +68,23 @@ separate (Kurt.Parser)
             declare
                M : Trait_Method;
             begin
-               --  Parse_Fn_Header consumes `fn name(params) -> ret`.
-               Parse_Fn_Header (C, Allow_Unnamed => False, H => M.Sig);
+               --  §5.1: a trait method prototype (no body) permits unnamed
+               --  parameters; a default method (with a body) requires
+               --  parameter names, since names are mandatory in any
+               --  declaration form that includes a body. We do not know
+               --  which form this is until we see whether '{' follows, so
+               --  parse permissively and check afterwards.
+               Parse_Fn_Header (C, Allow_Unnamed => True, H => M.Sig);
                if C.Cur.Kind = Punct_LBrace then
                   --  §9.3.4 default method: a signature with a body.
+                  for P of M.Sig.Params loop
+                     if SU.Length (P.Name) = 0 then
+                        raise Syntax_Error with
+                          "parameter names are mandatory in a trait "
+                          & "default method, which has a body (spec "
+                          & "5.1) at line" & Positive'Image (C.Cur.Line);
+                     end if;
+                  end loop;
                   M.Has_Body := True;
                   Parse_Block_Stmts (C, M.Body_Stmts);
                else

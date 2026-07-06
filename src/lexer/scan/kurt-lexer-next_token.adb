@@ -22,7 +22,11 @@ separate (Kurt.Lexer)
          Tok.Line := L.Line;
          Tok.Col  := L.Col;
 
-         if Is_Ident_Start (C) then
+         --  §3.4: an identifier-start character here may be a plain ASCII
+         --  byte or the lead byte of a multi-byte UTF-8 letter (Unicode
+         --  Kurt supports non-ASCII identifiers; §3.1 malformed sequences
+         --  are rejected by Ident_Start_Len itself).
+         if Ident_Start_Len (L) > 0 then
             --  §3.5.6 raw string literal (e.g. r"..." or r#..."#)
             if C = 'r' then
                declare
@@ -48,8 +52,11 @@ separate (Kurt.Lexer)
 
             --  §3.4.2 raw identifier `i#foo`: a single token denoting
             --  the identifier `foo`, bypassing keyword classification.
+            --  `foo` follows the same §3.4 identifier-start rule as any
+            --  other identifier, so a Unicode letter is admissible here
+            --  too (e.g. `i#변수`).
             if C = 'i' and then Peek (L, 1) = '#'
-              and then Is_Ident_Start (Peek (L, 2))
+              and then Ident_Start_Len (L, 2) > 0
             then
                Advance (L);   --  'i'
                Advance (L);   --  '#'
@@ -451,6 +458,24 @@ separate (Kurt.Lexer)
                   end if;
                end;
             when others =>
+               --  A byte >= 16#80# here is a Unicode code point that is
+               --  well-formed UTF-8 but not admissible outside an
+               --  identifier/string/comment/char-literal (§3.1): report
+               --  its decoded value rather than splicing its raw bytes
+               --  into the message, which would garble a multibyte
+               --  sequence. Decode_UTF8 itself raises citing §3.1 if the
+               --  sequence is malformed.
+               if Character'Pos (C) >= 16#80# then
+                  declare
+                     D : constant UTF8_Char := Decode_UTF8 (L);
+                  begin
+                     raise Translation_Failure
+                       with "unexpected character U+"
+                          & Hex_Image (Wide_Wide_Character'Pos (D.CP))
+                          & " at line" & Positive'Image (L.Line)
+                          & ", col"    & Positive'Image (L.Col);
+                  end;
+               end if;
                raise Translation_Failure
                  with "unexpected character '" & C
                     & "' at line"  & Positive'Image (L.Line)

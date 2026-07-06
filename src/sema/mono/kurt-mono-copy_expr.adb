@@ -109,6 +109,10 @@ separate (Kurt.Mono)
             R.Rf_Volatile := E.Rf_Volatile;
             R.Rf_Store    := E.Rf_Store;
             R.Rf_Place    := C (E.Rf_Place);
+         when E_Extract =>
+            R.Ex_Inner    := C (E.Ex_Inner);
+            R.Ex_Err      := E.Ex_Err;
+            R.Ex_Fallback := C (E.Ex_Fallback);
          when E_CAS =>
             R.CAS_Tgt := C (E.CAS_Tgt);
             R.CAS_Exp := C (E.CAS_Exp);
@@ -118,7 +122,8 @@ separate (Kurt.Mono)
             for I in E.AL_Elems.First_Index .. E.AL_Elems.Last_Index loop
                R.AL_Elems.Append (C (E.AL_Elems.Element (I)));
             end loop;
-            R.AL_Repeat := E.AL_Repeat;
+            R.AL_Repeat      := E.AL_Repeat;
+            R.AL_Repeat_Expr := C (E.AL_Repeat_Expr);
          when E_Dyn_Cast =>
             R.DC_Inner := C (E.DC_Inner);
             R.DC_Conc  := E.DC_Conc;
@@ -148,6 +153,7 @@ separate (Kurt.Mono)
          when E_Airside_Blk =>
             R.AB_Stmts := Copy_Block (E.AB_Stmts, Params, Args);
             R.AB_Airside := E.AB_Airside;
+            R.AB_Label   := E.AB_Label;
          when E_Loop =>
             R.Loop_Body := Copy_Block (E.Loop_Body, Params, Args);
       end case;

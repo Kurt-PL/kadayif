@@ -17,10 +17,9 @@ separate (Kurt.Lexer)
                T.Line      := Start_Line;
                T.Col       := Start_Col;
                return T;
-            elsif C = L1.LF then
-               raise Translation_Failure
-                 with "unescaped line ending in string literal (§3.4.5) at line"
-                    & Positive'Image (L.Line);
+            --  §3.5.5: an unescaped line ending between the delimiters is
+            --  legal and maps to cells like any other character; only an
+            --  unescaped '"' terminates the literal.
             elsif C = '\' then
                Advance (L);
                if At_End (L) then

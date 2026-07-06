@@ -6,7 +6,8 @@ separate (Kurt.Layout)
       if Find_Enum (Name, D) then
          for I in D.Variants.First_Index .. D.Variants.Last_Index loop
             Max_PL := Natural'Max
-              (Max_PL, Group_Size (D.Variants.Element (I).Payload));
+              (Max_PL, Group_Size
+                 (D.Variants.Element (I).Payload, D.Repr_Packed));
          end loop;
       end if;
       if Max_PL = 0 then

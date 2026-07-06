@@ -17,14 +17,16 @@ separate (Kurt.Parser)
                R : constant Expr_Access := Parse_Binary (C, BP + 1);
                Next_Op : Binary_Op;
             begin
-               --  §6.6: comparison operators are non-associative.
-               --  `a < b < c` shall be parenthesised, not chained.
-               if Is_Cmp (Op)
+               --  §6.6/§6.4.3: comparison operators (all one shared tier)
+               --  and each widening operator (`+@`, `*@`, its own tier) are
+               --  non-associative. `a < b < c` / `a *@ b *@ c` shall be
+               --  parenthesised, not chained.
+               if Non_Assoc (Op)
                  and then Token_To_Binop (C.Cur.Kind, Next_Op)
-                 and then Is_Cmp (Next_Op)
+                 and then Binding_Power (Next_Op) = BP
                then
                   raise Syntax_Error with
-                    "comparison operators are non-associative (§6.6); "
+                    "this operator is non-associative (§6.4.3/§6.6); "
                     & "parenthesise the chain at line"
                     & Positive'Image (C.Cur.Line);
                end if;

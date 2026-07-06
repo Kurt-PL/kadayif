@@ -18,7 +18,13 @@ separate (Kurt.Layout)
                Has_Canon := True;
             end if;
          end loop;
-         if Natural (D.Variants.Length) <= 1 and then not Has_Canon then
+         --  §4.11.2: void only when <= 1 variant, no `#wild#(V)` canonical
+         --  value, no explicit discriminant value, and no `with discrim(T)`
+         --  (the discrim(T) case returned above).
+         if Natural (D.Variants.Length) <= 1
+           and then not Has_Canon
+           and then not D.Any_Explicit
+         then
             return 0;
          end if;
       end;

@@ -2,6 +2,8 @@
 --  Sees all of the parent body's declarations and recurses into
 --  Lower_Expr_Into_Reg / Lower_Stmt freely.
 
+with Ada.Characters.Handling;
+
 separate (Kurt.Codegen)
 procedure Lower_Stmt
   (F  : IO.File_Type;
@@ -54,13 +56,32 @@ is
    begin
       for I in Stmts.First_Index .. Stmts.Last_Index loop
          Lower_Stmt (F, Stmts.Element (I), ST);
+         --  §7.11: a diverging statement transfers control away from this
+         --  point, so any statement still to come in this block sits at a
+         --  programme point translation-time evaluation proves unreachable.
+         --  Insert the implicit `@trap` the spec requires there, mirroring
+         --  `@trap`'s own lowering (handler dispatch, then the default
+         --  undefined-instruction divergence). Covers the statement kinds
+         --  that always diverge (S_Return/S_Break/S_Continue/S_Express/
+         --  S_Trap) plus a bare `-> never` call statement (S_Expr).
+         if I /= Stmts.Last_Index
+           and then (Stmts.Element (I).Kind in
+                       S_Return | S_Break | S_Continue | S_Express | S_Trap
+                     or else (Stmts.Element (I).Kind = S_Expr
+                              and then Is_Never_Expr
+                                         (Stmts.Element (I).E_Val)))
+         then
+            if Unit_Has_Trap_Handler then
+               IO.Put_Line (F, "    bl      _kurt_trap_handler");
+            end if;
+            IO.Put_Line (F, "    udf     #0         // implicit @trap (§7.11)");
+         end if;
       end loop;
       Emit_Binding_Drops (F, ST, Keep => Entry_Len, Preserve_Ret => False);
       while Natural (ST.Bindings.Length) > Entry_Len loop
          ST.Bindings.Delete_Last;
       end loop;
    end Lower_Scoped;
-   procedure Lower_Extract is separate;
    procedure Lower_If is separate;
    procedure Lower_While is separate;
    procedure Lower_Assign is separate;
@@ -130,8 +151,6 @@ begin
          Lower_While;
       when S_If =>
          Lower_If;
-      when S_Extract =>
-         Lower_Extract;
       when S_Break =>
          if ST.Loops.Is_Empty then
             raise Program_Error with "codegen: 'break' outside a loop";
@@ -175,10 +194,53 @@ begin
                              (Target_Loop (ST, S.Cont_Label).Cont_Lbl));
 
       when S_Express =>
-         --  §7.8 block exit-with-value. Full block-expression support is
-         --  deferred; for now evaluate the value for effect (works as a
-         --  no-op in the trailing-position case).
+         --  §7.8/§7.9 block exit-with-value: store the value into the
+         --  targeted express block's result slot — the innermost one, or
+         --  the nearest enclosing block labelled `'l` for `express 'l`
+         --  (an inner label shadows an outer one) — destroy the bindings
+         --  declared since that block's entry (§7.8 dynamic semantics),
+         --  and branch to its end label, an early exit wherever the
+         --  `express` sits. Outside any block expression (e.g. a
+         --  statement-position `airside { ... }` scope) the value is
+         --  evaluated for effect.
          Lower_Expr_Into_Reg (F, S.Xp_Val, 9, ST);
+         declare
+            TI : Natural := 0;
+         begin
+            if SU.Length (S.Xp_Label) = 0 then
+               if not ST.Expr_Blocks.Is_Empty then
+                  TI := ST.Expr_Blocks.Last_Index;
+               end if;
+            else
+               for I in reverse ST.Expr_Blocks.First_Index ..
+                        ST.Expr_Blocks.Last_Index
+               loop
+                  if SU.To_String (ST.Expr_Blocks.Element (I).Name)
+                       = SU.To_String (S.Xp_Label)
+                  then
+                     TI := I;
+                     exit;
+                  end if;
+               end loop;
+               if TI = 0 then
+                  raise Program_Error with
+                    "codegen: express to unknown block label '"
+                    & SU.To_String (S.Xp_Label) & "'";
+               end if;
+            end if;
+            if TI /= 0 then
+               declare
+                  T : constant Express_Target := ST.Expr_Blocks.Element (TI);
+               begin
+                  IO.Put_Line (F, "    str     x9, [x29, #"
+                                  & Img (T.Result_Off) & "]");
+                  Emit_Binding_Drops
+                    (F, ST, Keep => T.Body_Entry, Preserve_Ret => False);
+                  IO.Put_Line (F, "    b       "
+                                  & SU.To_String (T.End_Lbl));
+               end;
+            end if;
+         end;
 
       when S_Fence =>
          --  §8.5.3 ordering fences. The bootstrap emits in program order
@@ -281,8 +343,10 @@ begin
 
             --  §6.11 `'(expr)` immediate: a small constant-integer evaluator
             --  over the embedded expression text (literals + `+ - * / % & | ^
-            --  << >>`, parens, unary `-`), folded at translation time.
+            --  << >>`, parens, unary `-`, a top-level `const` name — see
+            --  Unit_Consts), folded at translation time.
             function Eval_Int (Src : String) return Long_Long_Integer is
+               package CH renames Ada.Characters.Handling;
                P : Natural := Src'First;
                function Parse_E (Min_P : Natural) return Long_Long_Integer;
                procedure WS is
@@ -324,7 +388,7 @@ begin
                         P := P + 1;
                      end loop;
                      return V;
-                  else
+                  elsif P <= Src'Last and then Src (P) in '0' .. '9' then
                      while P <= Src'Last
                        and then (Src (P) in '0' .. '9' or else Src (P) = '_')
                      loop
@@ -336,6 +400,54 @@ begin
                         P := P + 1;
                      end loop;
                      return V;
+                  elsif P <= Src'Last
+                    and then (CH.Is_Letter (Src (P)) or else Src (P) = '_')
+                  then
+                     --  §5.3/§6.11: an identifier atom names a top-level
+                     --  `const`; its value is the const's own folded
+                     --  initialiser (mirrors Emit's top-level-`asm`
+                     --  evaluator, spec 5.13).
+                     declare
+                        Start : constant Natural := P;
+                     begin
+                        while P <= Src'Last
+                          and then (CH.Is_Alphanumeric (Src (P))
+                                    or else Src (P) = '_')
+                        loop
+                           P := P + 1;
+                        end loop;
+                        declare
+                           Name : constant String := Src (Start .. P - 1);
+                        begin
+                           for I in Unit_Consts.First_Index ..
+                                    Unit_Consts.Last_Index
+                           loop
+                              if SU.To_String (Unit_Consts.Element (I).Name)
+                                = Name
+                              then
+                                 declare
+                                    U2 : Kurt.Parser.Translation_Unit;
+                                 begin
+                                    U2.Consts := Unit_Consts;
+                                    if Kurt.Parser.Fold_Int_Expr
+                                         (U2, Unit_Consts.Element (I).Init, V)
+                                    then
+                                       return V;
+                                    end if;
+                                 end;
+                                 exit;
+                              end if;
+                           end loop;
+                           raise Codegen_Error with
+                             "inline asm '(...)' expression names '" & Name
+                             & "', which is not a translation-time "
+                             & "evaluable `const` (spec 6.11)";
+                        end;
+                     end;
+                  else
+                     raise Codegen_Error with
+                       "inline asm '(...)' expression is not "
+                       & "translation-time evaluable (spec 6.11)";
                   end if;
                end Atom;
                --  Binding power: * / % = 5; + - = 4; << >> = 3; & = 2;

@@ -79,6 +79,65 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                   Eff_Sz     := DS;
                   Eff_Signed := Kurt.Layout.Enum_Disc_Signed
                                   (SU.To_String (Src_T.Name));
+
+                  --  §6.8.7: a `#wild#(V)` canonical value wins over the
+                  --  raw stored bits whenever those bits match none of the
+                  --  enum's declared (non-wild) variants. A bare `#wild#`
+                  --  (no canonical value) always keeps the raw bit
+                  --  pattern, so no chain is needed in that case.
+                  declare
+                     Ename : constant String := SU.To_String (Src_T.Name);
+                  begin
+                     if Kurt.Layout.Has_Wild_Variant (Ename)
+                       and then Kurt.Layout.Wild_Has_Canon (Ename)
+                     then
+                        declare
+                           FN : constant String :=
+                             SU.To_String (ST.Fn_Name);
+                           L_Match : constant String :=
+                             "Lwildcast_" & FN & "_" & Img (ST.If_Idx);
+                        begin
+                           ST.If_Idx := ST.If_Idx + 1;
+                           --  Scratch x13 (Lower_Sat's high scratch range)
+                           --  so this never clobbers the raw discriminant
+                           --  sitting in Target_Reg -- which is x9 for the
+                           --  common case of a top-level cast operand.
+                           for I in 1 .. Kurt.Layout.Variant_Count (Ename)
+                           loop
+                              declare
+                                 VN : constant String :=
+                                   Kurt.Layout.Variant_Name (Ename, I);
+                              begin
+                                 if not Kurt.Layout.Is_Wild_Variant
+                                          (Ename, VN)
+                                 then
+                                    Lower_Imm
+                                      (F, 13,
+                                       Kurt.Layout.Variant_Value (Ename, VN),
+                                       True);
+                                    IO.Put_Line
+                                      (F, "    cmp     " & Xreg & ", x13");
+                                    IO.Put_Line
+                                      (F, "    b.eq    " & L_Match);
+                                 end if;
+                              end;
+                           end loop;
+                           --  No declared variant matched: the extracted
+                           --  value is the wild variant's canonical value
+                           --  V (§6.8.7) -- the stored .Value of the
+                           --  `#wild#(V)` declaration, not the implicit
+                           --  auto-assigned value used by bare `#wild#`
+                           --  construction.
+                           Lower_Imm
+                             (F, Target_Reg,
+                              Kurt.Layout.Variant_Value
+                                (Ename, Kurt.Layout.Wild_Variant_Name
+                                          (Ename)),
+                              True);
+                           IO.Put_Line (F, L_Match & ":");
+                        end;
+                     end if;
+                  end;
                end;
             else
                Eff_Sz     := Sizeof (Src_T);

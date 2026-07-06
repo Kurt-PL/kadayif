@@ -24,6 +24,10 @@ separate (Kurt.Layout)
                for I in T.Elems.First_Index .. T.Elems.Last_Index loop
                   A := Natural'Max (A, Align_Of (T.Elems.Element (I)));
                end loop;
+               --  §4.2: a type whose size is zero has alignment zero.
+               if Size_Of (T) = 0 then
+                  return 0;
+               end if;
                return A;
             end;
          when T_Named =>
@@ -43,6 +47,11 @@ separate (Kurt.Layout)
                      return A;
                   end;
                elsif Find_Struct (N, D) then
+                  --  §4.2: a type whose size is zero has alignment zero
+                  --  (e.g. `struct empty {}`).
+                  if Size_Of (T) = 0 then
+                     return 0;
+                  end if;
                   declare
                      A : Natural := 1;
                   begin
@@ -59,6 +68,11 @@ separate (Kurt.Layout)
                      return Natural'Max (A, D.Align_N);
                   end;
                elsif Is_Enum (N) then
+                  --  §4.2: zero size (e.g. a single empty variant with a
+                  --  void discriminant) means alignment zero.
+                  if Enum_Size (N) = 0 then
+                     return 0;
+                  end if;
                   return Enum_Align (N);
                else
                   return Size_Of (T);  --  numeric: align == size

@@ -13,6 +13,27 @@ separate (Kurt.Sema.Check.Infer)
                      Error ("use of '" & Name & "' after it was "
                             & "transferred (moved) (spec 8.8.2)");
                   end if;
+                  --  §5.2: a read (value use, field-access root, method
+                  --  receiver, argument, or reference-creation place --
+                  --  all of which recurse through Infer down to this
+                  --  E_Path) of a deferred-init binding not yet proven
+                  --  initialized on every live path is a proof failure.
+                  --  Suppressed only while inferring an assignment's own
+                  --  LHS place (that occurrence is a write, not a read).
+                  if not Suppress_Init_Read then
+                     declare
+                        Idx : Natural;
+                     begin
+                        if Init_Lookup (Name, Idx)
+                          and then Init_States.Element (Idx).State
+                                     /= St_Init
+                        then
+                           Error ("use of '" & Name & "' which is not "
+                                  & "definitely initialized on every path "
+                                  & "reaching this point (spec 5.2)");
+                        end if;
+                     end;
+                  end if;
                   if T = null then
                      --  §5.3: a const name is replaced by its
                      --  translation-time value at each use site.
@@ -69,12 +90,37 @@ separate (Kurt.Sema.Check.Infer)
                               FP.Fn_Ret      := FS.Ret;
                               FP.Fn_Variadic := FS.Is_Variadic;
                               FP.Fn_Never    := FS.Is_Never;
+                              --  §5.1.2/§4.10: a non-native invocation
+                              --  interface makes this a distinct fn type.
+                              FP.Fn_Extern   := FS.Extern_Iface;
                               E.P_Is_Fn_Ptr  := True;
                               E.Sem_Ty       := FP;
                               return FP;
                            end;
                         end if;
                      end;
+                     --  §5.6: a fieldless (unit) struct's bare name in
+                     --  expression position denotes its unique value —
+                     --  `let v = empty_t;` is equivalent to
+                     --  `let v = empty_t {};`. A struct with fields is
+                     --  not covered: its bare name remains an error. `E`
+                     --  is a constrained E_Path node (its discriminant was
+                     --  fixed at allocation), so the substitute literal is
+                     --  a separate node hung off P_Assoc_Val — the same
+                     --  mechanism used above for const-name substitution.
+                     if Kurt.Layout.Is_Struct (Name)
+                       and then Kurt.Layout.Struct_Field_Count (Name) = 0
+                     then
+                        declare
+                           SL : constant Expr_Access :=
+                             new Expr_Node (Kind => E_Struct_Lit);
+                        begin
+                           SL.SL_Name := SU.To_Unbounded_String (Name);
+                           E.P_Assoc_Val := SL;
+                           E.Sem_Ty := Infer (SL, Expected);
+                           return E.Sem_Ty;
+                        end;
+                     end if;
                      Error ("unknown identifier '" & Name & "'");
                   end if;
                   E.Sem_Ty := T;
@@ -108,7 +154,8 @@ separate (Kurt.Sema.Check.Infer)
                   --  Concrete type: inline the impl's value expression.
                   declare
                      CV : constant Expr_Access :=
-                       Find_Impl_Const (EN, VN);
+                       Find_Impl_Const
+                         (EN, VN, SU.To_String (E.Path_Trait));
                   begin
                      if CV /= null then
                         E.P_Assoc_Val := CV;

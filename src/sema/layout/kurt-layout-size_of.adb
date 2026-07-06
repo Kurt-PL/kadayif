@@ -36,11 +36,14 @@ separate (Kurt.Layout)
             --  fat-pair size so a stray query is harmless.
             return 16;
          when T_Fn =>
-            --  §4.10: a subroutine pointer equals `(&raw void)@size`.
-            --  NB §9.9.2 specifies an invocable type as the two-word
-            --  `.{ &raw void, &raw void }` (16 B). The bootstrap still
-            --  represents it one word (a bare callable pointer); switching
-            --  to the two-word form is a coordinated change (see HANDOFF).
+            --  §4.10: a bare subroutine pointer equals `(&raw void)@size`
+            --  (one word). §9.9.2: an INVOCABLE type (`/.T/ -> U` / `xfer
+            --  /.T/ -> U`) is the two-word tuple `.{ &raw void, &raw void
+            --  }` -- field .0 the callable descriptor, field .1 the state
+            --  pointer.
+            if T.Fn_Invocable then
+               return 2 * Kurt.Address_Cells;
+            end if;
             return Kurt.Address_Cells;
          when T_Tuple =>
             --  §4.7 / §4.11: positional fields, KSA-packed.
@@ -63,7 +66,7 @@ separate (Kurt.Layout)
                N : constant String := SU.To_String (T.Name);
                D : Struct_Decl;
             begin
-               --  §4.2.2: uiN/siN occupy N cells (N * cellbits bits).
+               --  §4.3.2: uiN/siN occupy N cells (N * cellbits bits).
                if N = "ui1" or else N = "si1" then return 1;
                elsif N = "ui2" or else N = "si2" then return 2;
                elsif N = "ui4" or else N = "si4" then return 4;

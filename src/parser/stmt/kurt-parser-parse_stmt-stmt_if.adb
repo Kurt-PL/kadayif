@@ -7,11 +7,17 @@ separate (Kurt.Parser.Parse_Stmt)
             --  Disambiguate after the condition: '{' => statement.
             Advance (C);
 
-            --  §6.10 `if xlatime { } [else { }]` / `if !xlatime ...`. The
-            --  condition is statically `false` in execution-time code, so the
-            --  selected branch (else for `xlatime`, then for `!xlatime`) is
-            --  kept; the discarded branch is parsed (must be well-formed) but
-            --  never type-checked or lowered.
+            --  §6.10 `if xlatime { } [else { }]` / `if !xlatime ...`. Outside
+            --  any translation-time-evaluated region `xlatime` is statically
+            --  `false`, so the selected branch (else for `xlatime`, then for
+            --  `!xlatime`) is kept; inside one (the body of an enclosing
+            --  `xlatime { ... }` block, or a `const`/`static` initializer,
+            --  §6.10.2) `xlatime` is `true` and the selection flips. Either
+            --  way the discarded branch is parsed (must be well-formed) but
+            --  never type-checked or lowered. C.Xlatime_Depth (a parser
+            --  counter, mirroring the existing Module_Depth pattern) tracks
+            --  which case applies; a plain fn body has depth 0 (execution
+            --  time), matching the pre-fix behaviour exactly.
             if C.Cur.Kind = Kw_Xlatime
               or else (C.Cur.Kind = Op_Bang
                        and then Peek_Tok (C).Kind = Kw_Xlatime)
@@ -20,6 +26,8 @@ separate (Kurt.Parser.Parse_Stmt)
                   Negated   : Boolean := False;
                   Then_Blk  : Stmt_Vectors.Vector;
                   Else_Blk  : Stmt_Vectors.Vector;
+                  Xlat_True : Boolean;
+                  Cond_Val  : Boolean;
                begin
                   if C.Cur.Kind = Op_Bang then
                      Negated := True;
@@ -34,9 +42,12 @@ separate (Kurt.Parser.Parse_Stmt)
                   S := new Stmt_Node (Kind => S_If);
                   S.SI_Cond := new Expr_Node (Kind => E_Bool_Lit);
                   S.SI_Cond.Bool_V := True;
-                  --  Execution time: `xlatime` is false. `if xlatime` keeps
-                  --  the else branch; `if !xlatime` keeps the then branch.
-                  if Negated then
+                  Xlat_True := C.Xlatime_Depth > 0;
+                  Cond_Val  := (if Negated then not Xlat_True else Xlat_True);
+                  --  Cond_Val true => the branch immediately after
+                  --  `[!]xlatime` (Then_Blk) is kept; false => the `else`
+                  --  (Else_Blk) is kept.
+                  if Cond_Val then
                      S.SI_Then := Then_Blk;
                   else
                      S.SI_Then := Else_Blk;

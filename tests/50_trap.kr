@@ -4,10 +4,14 @@
 }
 
 // §7.10.1 a single @trap handler replaces the default termination.
-// It shall itself diverge; here it exits with a fixed code.
+// It shall itself diverge; here it exits with a fixed code. `posix::exit`
+// is an opaque `@dyn` signature (not declared `-> never`), so a trailing
+// `@trap;` supplies the static divergence witness -- it is never actually
+// reached, since `exit` really does terminate the process.
 @trap {
     airside { posix::printf("trapped\n\0".ptr); }
     airside { posix::exit(7); }
+    @trap;
 }
 
 // §4.10/§7.11 a `-> never` subroutine diverges; its body is `@trap;`.

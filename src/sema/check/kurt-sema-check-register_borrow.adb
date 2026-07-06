@@ -1,18 +1,41 @@
 separate (Kurt.Sema.Check)
    procedure Register_Borrow (Name : String; Init : Expr_Access) is
+      --  §8.3: the canonical dotted path of a place expression -- a bare
+      --  root binding ("p"), or a field-projection chain rooted at one
+      --  ("p.a", "p.a.b", ...). Returns "" for any other place shape (a
+      --  deref, an indexed/computed place, etc.) -- out of scope here (no
+      --  reborrow trees, no cast tracking); the caller bails on "".
+      function Canonical_Place (E : Expr_Access) return String is
+      begin
+         if E = null then
+            return "";
+         elsif E.Kind = E_Path and then Natural (E.Segments.Length) = 1 then
+            return SU.To_String (E.Segments.Last_Element);
+         elsif E.Kind = E_Field then
+            declare
+               Base : constant String := Canonical_Place (E.F_Recv);
+            begin
+               if Base = "" then
+                  return "";
+               end if;
+               return Base & "." & SU.To_String (E.F_Name);
+            end;
+         else
+            return "";
+         end if;
+      end Canonical_Place;
    begin
-      if Init = null or else Init.Kind /= E_Ref
-        or else Init.Rf_Place.Kind /= E_Path
-        or else Natural (Init.Rf_Place.Segments.Length) /= 1
-      then
+      if Init = null or else Init.Kind /= E_Ref then
          return;
       end if;
       declare
-         Place : constant String :=
-           SU.To_String (Init.Rf_Place.Segments.Last_Element);
+         Place : constant String := Canonical_Place (Init.Rf_Place);
          St    : Kurt.Borrow.Perm_State;
          Tr    : Boolean;
       begin
+         if Place = "" then
+            return;
+         end if;
          Borrow_State (Init.Rf_Sigil, Init.Rf_Store, St, Tr);
          if not Tr then
             return;

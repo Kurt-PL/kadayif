@@ -126,6 +126,40 @@ separate (Kurt.Parser)
          Is_Generic := True;
       end if;
       Ty_Name := Take_Ident (C, "impl type name");
+      --  §5.8/§9.4.2: unlike an ordinary type reference, the impl target
+      --  is read here as a raw identifier rather than through Parse_Type,
+      --  so it never receives Parse_Type's alias substitution -- `impl
+      --  Byte as Display` would otherwise keep Ty_Name = "Byte" even
+      --  though `type Byte = ui1;` makes it the very same `impl ui1 as
+      --  Display`. Resolve it against the alias table the same way
+      --  Parse_Type does, so the duplicate-impl check (and everything
+      --  else keyed on Ty_Name) sees the underlying concrete name. Only
+      --  a non-generic alias whose target is itself a plain name applies
+      --  here -- an impl target is always a bare type name, never a
+      --  tuple/ref/array, so a generic alias (needing `.<Args>`, which
+      --  the impl-target position does not accept before the trailing
+      --  generic clause below) or a non-named target cannot match.
+      for I in C.Aliases.First_Index .. C.Aliases.Last_Index loop
+         if C.Aliases.Element (I).Params.Is_Empty
+           and then SU."=" (C.Aliases.Element (I).Name, Ty_Name)
+           and then C.Aliases.Element (I).Target /= null
+           and then C.Aliases.Element (I).Target.Kind = T_Named
+         then
+            Ty_Name := C.Aliases.Element (I).Target.Name;
+         end if;
+      end loop;
+      --  §9.1: an identifier declared in the `impl(...)` parameter list
+      --  shall not share its name with a type declaration visible in the
+      --  enclosing scope — in particular not with the type being
+      --  implemented (`impl(T) T { ... }`).
+      for P of Impl_Params loop
+         if SU.To_String (P.Name) = SU.To_String (Ty_Name) then
+            raise Syntax_Error with
+              "impl generic parameter '" & SU.To_String (P.Name)
+              & "' shares the name of the type being implemented "
+              & "(spec 9.1) at line" & Positive'Image (C.Cur.Line);
+         end if;
+      end loop;
       TI.Ty_Name := Ty_Name;
       --  The target's own generic clause `Owner.<P...>` binds the impl
       --  parameters to the owner; the names are recorded in Impl_Params,
@@ -173,7 +207,11 @@ separate (Kurt.Parser)
             Expect (C, Punct_Colon, "':' in associated const");
             AC.Ty := Parse_Type (C);
             Expect (C, Punct_Eq, "'=' in associated const definition");
+            --  §6.10.2/§9.3.2: an associated const's value is a
+            --  translation-time binding exactly like a top-level `const`.
+            C.Xlatime_Depth := C.Xlatime_Depth + 1;
             AC.Val := Parse_Expr (C);
+            C.Xlatime_Depth := C.Xlatime_Depth - 1;
             AC.Has_Val := True;
             Expect (C, Punct_Semi, "';' after associated const");
             TI.Consts.Append (AC);

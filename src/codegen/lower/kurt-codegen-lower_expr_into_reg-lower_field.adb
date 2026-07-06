@@ -67,7 +67,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                      return;
                   end if;
                   if Is_Slice_Ref (B.Ty) then
-                     --  §4.6.1 materialised slice view: load `.ptr` from
+                     --  §8.1.4 materialised slice view: load `.ptr` from
                      --  the fat reference's first field, `.len` from the
                      --  second.
                      if FName = "ptr" then
@@ -83,7 +83,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                      return;
                   end if;
                   if B.Ty /= null and then B.Ty.Kind = T_Array then
-                     --  §4.6.1 array views: `.ptr` is the first element's
+                     --  §8.1.4 array views: `.ptr` is the first element's
                      --  address, `.len` the (static) element count.
                      if FName = "ptr" then
                         IO.Put_Line (F, "    add     " & Xreg & ", x29, #"

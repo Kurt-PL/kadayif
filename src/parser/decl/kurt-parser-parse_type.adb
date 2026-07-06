@@ -165,24 +165,37 @@ separate (Kurt.Parser)
          Node.Elem := Parse_Type (C);
          if C.Cur.Kind = Punct_Semi then
             Advance (C);
-            if C.Cur.Kind /= Tok_Int_Lit or else C.Cur.Int_V <= 0 then
-               raise Syntax_Error with
-                 "array length must be a positive integer literal at line"
-                 & Positive'Image (C.Cur.Line);
+            --  §4.7: `N` need not be a bare integer literal -- any
+            --  xlatime-evaluable expression is permitted (a `const`,
+            --  arithmetic over literals/consts, ...). The common case (a
+            --  plain literal) is still folded immediately here, exactly
+            --  as before; anything else is recorded in Len_Expr and
+            --  resolved later, by Kurt.Mono.Monomorphize.Visit_Type
+            --  (Kurt.Parser.Fold_Int_Expr), ahead of any
+            --  Kurt.Layout.Size_Of query -- see the note on Len_Expr in
+            --  kurt-parser.ads.
+            if C.Cur.Kind = Tok_Int_Lit then
+               if C.Cur.Int_V <= 0 then
+                  raise Syntax_Error with
+                    "array length must be a positive integer literal at "
+                    & "line" & Positive'Image (C.Cur.Line);
+               end if;
+               --  §4.7: an array length that overflows the layout engine's
+               --  representable range is a translation failure, not a
+               --  wraparound or an uncaught crash. (Kadayif represents
+               --  lengths/sizes in `Natural`, narrower than the spec's
+               --  64-bit `uaddr`; a length that does not fit here is
+               --  rejected cleanly rather than silently truncated.)
+               if C.Cur.Int_V > Long_Long_Integer (Natural'Last) then
+                  raise Syntax_Error with
+                    "array length exceeds the representable range at line"
+                    & Positive'Image (C.Cur.Line);
+               end if;
+               Node.Len := Natural (C.Cur.Int_V);
+               Advance (C);
+            else
+               Node.Len_Expr := Parse_Expr (C);
             end if;
-            --  §4.7: an array length that overflows the layout engine's
-            --  representable range is a translation failure, not a
-            --  wraparound or an uncaught crash. (Kadayif represents
-            --  lengths/sizes in `Natural`, narrower than the spec's
-            --  64-bit `uaddr`; a length that does not fit here is
-            --  rejected cleanly rather than silently truncated.)
-            if C.Cur.Int_V > Long_Long_Integer (Natural'Last) then
-               raise Syntax_Error with
-                 "array length exceeds the representable range at line"
-                 & Positive'Image (C.Cur.Line);
-            end if;
-            Node.Len := Natural (C.Cur.Int_V);
-            Advance (C);
          else
             Node.Len := 0;   --  unsized slice `[T]`
          end if;

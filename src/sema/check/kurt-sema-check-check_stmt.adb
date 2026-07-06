@@ -7,6 +7,13 @@ separate (Kurt.Sema.Check)
    begin
       case S.Kind is
          when S_Return =>
+            --  §7.6: a `-> never` subroutine's body shall not contain a
+            --  `return` statement at all -- it can never produce control
+            --  back to a caller.
+            if Cur_Is_Never then
+               Error ("`return` shall not appear in the body of a "
+                      & "'-> never' subroutine (spec 7.6)");
+            end if;
             if S.R_Val = null then
                --  §5.1 bare `return;` is well-formed only in a subroutine
                --  whose return type is `void`.
@@ -20,6 +27,8 @@ separate (Kurt.Sema.Check)
             declare
                RT : constant Type_Access := Infer (S.R_Val, Cur_Ret);
             begin
+               --  §8.9: `return *r;` copies out through the dereference.
+               Check_No_Destruct_Load (S.R_Val);
                if not Assignable (Cur_Ret, RT) then
                   Error ("return type mismatch: subroutine returns '"
                          & Image (Cur_Ret) & "' but expression is '"
@@ -56,85 +65,14 @@ separate (Kurt.Sema.Check)
          when S_If =>
             Check_If;
          when S_Airside_Block =>
-            In_Airside := In_Airside + 1;
+            --  §6.9: `airside { ... }` is a block expression even in
+            --  statement position (its value is simply discarded), so it
+            --  is a legal target for a bare `express` (§7.8).
+            In_Airside    := In_Airside + 1;
+            In_Expr_Block := In_Expr_Block + 1;
             Check_Block (S.A_Stmts);
-            In_Airside := In_Airside - 1;
-
-         when S_Extract =>
-            --  §7: `let v <- e else err { ... }`. e is a contract value;
-            --  v binds the success payload for the rest of the block,
-            --  err binds the failure payload inside the else block.
-            declare
-               ET : constant Type_Access := Infer (S.X_Expr, null);
-               EN : constant String :=
-                 (if ET /= null and then ET.Kind = T_Named
-                  then SU.To_String (ET.Name) else "");
-               Saved : Natural;
-            begin
-               if EN = "" or else not Kurt.Layout.Is_Contract_Enum (EN)
-               then
-                  Error ("`<-` requires a contract value; got '"
-                         & Image (ET) & "'");
-                  Check_Block (S.X_Else);
-               else
-                  Saved := Natural (Scope.Length);
-                  if SU.Length (S.X_Err) > 0 then
-                     Scope.Append
-                       ((Name => S.X_Err,
-                         Ty   => Kurt.Layout.Variant_Field_Type
-                                   (ET,
-                                    Kurt.Layout.Contract_Fail_Variant (EN),
-                                    1), others => <>));
-                  end if;
-                  Check_Block (S.X_Else);
-                  while Natural (Scope.Length) > Saved loop
-                     Scope.Delete_Last;
-                  end loop;
-                  --  §7.2.3: the `else` block shall either diverge or
-                  --  yield a fallback value via `express`; otherwise
-                  --  the extracted binding would continue uninitialized
-                  --  on the failure path.
-                  if not Stmts_Diverge (S.X_Else) then
-                     Error ("the `else` of `<-` must diverge (return/"
-                            & "break/continue/@trap) or yield a value "
-                            & "via `express` (spec 7.2.3)");
-                  end if;
-                  declare
-                     Succ_Ty : constant Type_Access :=
-                       Kurt.Layout.Variant_Field_Type
-                         (ET, Kurt.Layout.Contract_Success_Variant (EN), 1);
-                  begin
-                     if S.X_Is_Place then
-                        --  §7.2.3 copy the success payload into the place,
-                        --  which shall be an existing `mut` binding.
-                        declare
-                           PN : constant String := SU.To_String (S.X_Bind);
-                           PT : constant Type_Access := Lookup_Scope (PN);
-                           Is_Local : Boolean;
-                           Mutable  : constant Boolean :=
-                             Lookup_Scope_Mut (PN, Is_Local);
-                        begin
-                           if PT = null then
-                              Error ("extract-assignment target '" & PN
-                                     & "' is not a binding");
-                           elsif not Mutable then
-                              Error ("extract-assignment target '" & PN
-                                     & "' must be `mut` (spec 7.2.3)");
-                           elsif not Assignable (PT, Succ_Ty) then
-                              Error ("extract-assignment type mismatch: "
-                                     & "place is '" & Image (PT)
-                                     & "' but success payload is '"
-                                     & Image (Succ_Ty) & "'");
-                           end if;
-                        end;
-                     else
-                        --  Success binding stays in scope for the rest.
-                        Scope.Append
-                          ((Name => S.X_Bind, Ty => Succ_Ty, others => <>));
-                     end if;
-                  end;
-               end if;
-            end;
+            In_Expr_Block := In_Expr_Block - 1;
+            In_Airside    := In_Airside - 1;
 
          when S_Break =>
             --  §7.7/§7.9: break may carry a value and/or a target label.
@@ -156,6 +94,46 @@ separate (Kurt.Sema.Check)
             end if;
             Check_Loop_Label (S.Cont_Label);
          when S_Express =>
+            if SU.Length (S.Xp_Label) > 0 then
+               --  §7.9: `express 'l` shall name an enclosing labelled
+               --  BLOCK. A label naming a loop, or naming nothing in
+               --  scope, shall not appear. Innermost-first: an inner
+               --  label shadows an outer one of the same name.
+               declare
+                  Resolved : Boolean := False;
+               begin
+                  for I in reverse Label_Stack.First_Index ..
+                           Label_Stack.Last_Index
+                  loop
+                     if SU.To_String (Label_Stack.Element (I).Name)
+                          = SU.To_String (S.Xp_Label)
+                     then
+                        if not Label_Stack.Element (I).Is_Block then
+                           Error ("`express` names ''"
+                                  & SU.To_String (S.Xp_Label)
+                                  & "' which labels a loop; `express` "
+                                  & "shall name a labelled block "
+                                  & "(spec 7.9)");
+                        end if;
+                        Resolved := True;
+                        exit;
+                     end if;
+                  end loop;
+                  if not Resolved then
+                     Error ("`express` names label ''"
+                            & SU.To_String (S.Xp_Label)
+                            & "' which names no enclosing labelled "
+                            & "block (spec 7.8/7.9)");
+                  end if;
+               end;
+            elsif In_Expr_Block = 0 then
+               --  §7.8: a bare `express` appearing in a subroutine body
+               --  outside any block expression shall not appear — there
+               --  is no block for it to target.
+               Error ("`express` shall appear only inside a block "
+                      & "expression; in a subroutine body use `return` "
+                      & "(spec 7.8)");
+            end if;
             --  §7.8: the expressed value is typed against the innermost
             --  enclosing block expression's expected type (steering
             --  literals like a `let` annotation); outside a block

@@ -114,9 +114,25 @@ separate (Kurt.Codegen)
          end loop;
       end;
 
-      --  Body
+      --  Body. §7.11: mirrors Lower_Stmt.Lower_Scoped's inter-statement
+      --  implicit-`@trap` insertion (see Is_Never_Expr) — the top-level
+      --  function body is not itself run through Lower_Scoped (its
+      --  scope-exit drops differ, see below), so the same check is
+      --  repeated here for the statement list directly.
       for I in Fn.Body_Stmts.First_Index .. Fn.Body_Stmts.Last_Index loop
          Lower_Stmt (F, Fn.Body_Stmts.Element (I), ST);
+         if I /= Fn.Body_Stmts.Last_Index
+           and then (Fn.Body_Stmts.Element (I).Kind in
+                       S_Return | S_Break | S_Continue | S_Express | S_Trap
+                     or else (Fn.Body_Stmts.Element (I).Kind = S_Expr
+                              and then Is_Never_Expr
+                                         (Fn.Body_Stmts.Element (I).E_Val)))
+         then
+            if Unit_Has_Trap_Handler then
+               IO.Put_Line (F, "    bl      _kurt_trap_handler");
+            end if;
+            IO.Put_Line (F, "    udf     #0         // implicit @trap (§7.11)");
+         end if;
       end loop;
 
       --  §7.11: a `-> never` body diverges, so reaching here is impossible.

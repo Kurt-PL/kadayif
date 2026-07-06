@@ -15,6 +15,10 @@ separate (Kurt.Parser)
          Name     : SU.Unbounded_String;
          Snap     : Rename_From;
          MN_Start : Natural;   --  U.Module_Names length at open
+         --  §10.6 `pub module` -- whether THIS module's own namespace
+         --  identifier is visible to importers of the source unit (item-
+         --  level `pub` inside the body is independent and unaffected).
+         Is_Pub   : Boolean := False;
       end record;
       package Module_Stacks is new Ada.Containers.Vectors
         (Index_Type => Positive, Element_Type => Module_Frame);
@@ -28,6 +32,7 @@ separate (Kurt.Parser)
          Extra : Path_Segments.Vector;
       begin
          Modules.Delete_Last;
+         C.Module_Depth := C.Module_Depth - 1;
          --  Heads of the sub-modules closed inside this body — their
          --  mangled declarations (`b$f`) must pick up this prefix too.
          for I in Fr.MN_Start + 1 .. Natural (U.Module_Names.Length) loop
@@ -53,27 +58,88 @@ separate (Kurt.Parser)
            (U, Nm, From => Fr.Snap, Extra_Names => Extra,
             Super_Word => "super");
          --  Sub-module prefixes gain this module's prefix; then this
-         --  module itself becomes an alias.
+         --  module itself becomes an alias. Nested Module_Pubs entries
+         --  keep their own flag unchanged -- only the NAME gains a prefix
+         --  segment; pub-ness is per-module, not inherited from a parent.
          for I in Fr.MN_Start + 1 .. Natural (U.Module_Names.Length) loop
             U.Module_Names.Replace_Element
               (I, SU.To_Unbounded_String
                     (Nm & "$" & SU.To_String (U.Module_Names.Element (I))));
          end loop;
          U.Module_Names.Append (Fr.Name);
+         U.Module_Pubs.Append (Fr.Is_Pub);
       end Close_Module;
 
       --  Open a module: record its frame (after `module name {` is read).
       --  The name also joins the cursor's namespace-alias set so a
       --  composite literal `name::Type { ... }` parses as a qualified
       --  struct literal rather than `Enum::Variant { ... }`.
-      procedure Open_Module (Nm : SU.Unbounded_String) is
+      procedure Open_Module
+        (Nm : SU.Unbounded_String; Pub : Boolean := False) is
       begin
          Modules.Append
            ((Name     => Nm,
              Snap     => Snapshot (U),
-             MN_Start => Natural (U.Module_Names.Length)));
+             MN_Start => Natural (U.Module_Names.Length),
+             Is_Pub   => Pub));
          C.Add_Aliases.Append (Nm);
+         C.Module_Depth := C.Module_Depth + 1;
       end Open_Module;
+
+      --  §5.12.2 `use_path = path | path::'{' use_item, ... '}'`,
+      --  `use_item = identifier | use_path` -- parsed recursively: Prefix
+      --  is the path accumulated so far. A plain trailing identifier (no
+      --  further `::`) terminates the path and registers it (U.Use_Names/
+      --  Use_Paths); a `::` continues the chain, either into a further
+      --  single identifier or into a braced group, each entry of which is
+      --  itself a (possibly further-nested) use_path sharing this prefix.
+      --  Resolution against the alias/module/`pub` machinery, and the
+      --  actual name-substitution rewrite, happen later in
+      --  Kurt.Parser.Resolve_Aliases (this pass only records the syntax).
+      procedure Parse_Use_Path (Prefix : Path_Segments.Vector) is
+         --  §10.6 `module_path` permits a leading `super`/`srcroot` on a
+         --  `use` path declared inside a `module` body; resolving one
+         --  against the enclosing module's (not-yet-mangled, not-yet-
+         --  known-prefix) scope is not modelled by this bootstrap's
+         --  single deferred resolution pass (Kurt.Parser.Resolve_Aliases)
+         --  -- rejected here, at parse time, with a clear diagnostic
+         --  rather than left to fail later as a confusing "does not
+         --  resolve" error. A top-level `use` (this bootstrap's normal
+         --  case, and the one in the spec's own §5.12.2 examples) is
+         --  unaffected.
+         Seg  : SU.Unbounded_String;
+         Full : Path_Segments.Vector := Prefix;
+      begin
+         if Prefix.Is_Empty
+           and then (C.Cur.Kind = Kw_Super or else C.Cur.Kind = Kw_Srcroot)
+         then
+            raise Syntax_Error with
+              "a `use` path headed by '" & SU.To_String (C.Cur.Lexeme)
+              & "' is not supported by this bootstrap (spec 5.12.2/10.6) "
+              & "at line" & Positive'Image (C.Cur.Line);
+         end if;
+         Seg := Take_Ident (C, "use path segment");
+         Full.Append (Seg);
+         if C.Cur.Kind = Punct_ColonColon then
+            Advance (C);
+            if C.Cur.Kind = Punct_LBrace then
+               Advance (C);
+               loop
+                  Parse_Use_Path (Full);
+                  exit when C.Cur.Kind /= Punct_Comma;
+                  Advance (C);
+                  exit when C.Cur.Kind = Punct_RBrace;
+               end loop;
+               Expect (C, Punct_RBrace, "'}' to close `use` group "
+                       & "(spec 5.12.2)");
+            else
+               Parse_Use_Path (Full);
+            end if;
+         else
+            U.Use_Names.Append (Seg);
+            U.Use_Paths.Append (Full);
+         end if;
+      end Parse_Use_Path;
    begin
       Advance (C);
       while C.Cur.Kind /= Tok_EOF loop
@@ -123,7 +189,7 @@ separate (Kurt.Parser)
                        Take_Ident (C, "module name");
                   begin
                      Expect (C, Punct_LBrace, "'{' to open module body");
-                     Open_Module (Nm);
+                     Open_Module (Nm, Pub => True);
                   end;
                elsif Peek_Tok (C).Kind = Kw_Static then
                   Advance (C);
@@ -147,11 +213,14 @@ separate (Kurt.Parser)
                --  the `as ident` namespace name is mandatory and is how each
                --  import's `pub` declarations are accessed (`ident::item`).
                --  A block simply groups several path entries under one
-               --  prefix — no semantic distinction. (`@add pub` re-export
-               --  chaining is not modelled.)
+               --  prefix — no semantic distinction. §10.3 `@add pub`: the
+               --  namespace identifier itself is re-exported to importers
+               --  of this source unit (Kurt.Parser.Resolve_Aliases /
+               --  main-translate.adb's Load implement the propagation).
                Advance (C);
                declare
-                  Prefix : SU.Unbounded_String;
+                  Prefix     : SU.Unbounded_String;
+                  Add_Is_Pub : Boolean := False;
 
                   --  Parse one `"path" as ident` entry (prefix pre-read).
                   procedure Parse_Entry is
@@ -170,12 +239,14 @@ separate (Kurt.Parser)
                           Take_Ident (C, "@add namespace name");
                      begin
                         U.Add_Names.Append (Ns);
+                        U.Add_Pubs.Append (Add_Is_Pub);
                         C.Add_Aliases.Append (Ns);
                      end;
                   end Parse_Entry;
                begin
                   if C.Cur.Kind = Kw_Pub then
-                     Advance (C);   --  `pub` re-export (not modelled)
+                     Add_Is_Pub := True;
+                     Advance (C);
                   end if;
                   if C.Cur.Kind = Tok_Ident
                     and then Peek_Tok (C).Kind = Punct_ColonColon
@@ -294,17 +365,15 @@ separate (Kurt.Parser)
                   Open_Module (Nm);
                end;
             when Kw_Use =>
-               --  §5.12.2 `use path;` — unqualified name introduction. In the
-               --  single-unit bootstrap every declaration is already in one
-               --  flat scope, so a `use` is consumed and has no effect (it
-               --  becomes meaningful only with the module model, §10).
+               --  §5.12.2 `use path::name;` — unqualified name
+               --  introduction. Parsed here (recursively, to cover the
+               --  braced multi-import and nested-group forms); resolved
+               --  against the alias/module/`pub` machinery, and the
+               --  actual substitution applied, by Kurt.Parser.
+               --  Resolve_Aliases once this whole source unit is known.
                Advance (C);
-               while C.Cur.Kind /= Punct_Semi
-                 and then C.Cur.Kind /= Tok_EOF
-               loop
-                  Advance (C);
-               end loop;
-               Expect (C, Punct_Semi, "';' after `use`");
+               Parse_Use_Path (Path_Segments.Empty_Vector);
+               Expect (C, Punct_Semi, "';' after `use` (spec 5.12.2)");
             when Kw_Type =>
                --  §5.8 `type NAME = type ;` — alias declaration. The
                --  substitution happens at later use sites (Parse_Type),
@@ -396,6 +465,33 @@ separate (Kurt.Parser)
                           & SU.To_String (A.Params.Element (I))
                           & "' does not appear in the aliased type of '"
                           & SU.To_String (A.Name) & "' (spec 5.8)";
+                     end if;
+                  end loop;
+                  --  §5.17 a declared name shall not be redeclared in the
+                  --  same scope: reject a second `type` alias with the
+                  --  same name (and a clash with an existing struct/enum
+                  --  name, cheaply checked here too).
+                  for I in C.Aliases.First_Index .. C.Aliases.Last_Index loop
+                     if SU."=" (C.Aliases.Element (I).Name, A.Name) then
+                        raise Syntax_Error with
+                          "type alias '" & SU.To_String (A.Name)
+                          & "' is already declared (spec 5.17)";
+                     end if;
+                  end loop;
+                  for I in U.Structs.First_Index .. U.Structs.Last_Index loop
+                     if SU."=" (U.Structs.Element (I).Name, A.Name) then
+                        raise Syntax_Error with
+                          "type alias '" & SU.To_String (A.Name)
+                          & "' clashes with a struct of the same name "
+                          & "(spec 5.17)";
+                     end if;
+                  end loop;
+                  for I in U.Enums.First_Index .. U.Enums.Last_Index loop
+                     if SU."=" (U.Enums.Element (I).Name, A.Name) then
+                        raise Syntax_Error with
+                          "type alias '" & SU.To_String (A.Name)
+                          & "' clashes with an enum of the same name "
+                          & "(spec 5.17)";
                      end if;
                   end loop;
                   C.Aliases.Append (A);

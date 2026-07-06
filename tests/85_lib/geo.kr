@@ -1,5 +1,8 @@
 // §10.2/§10.3 imported helper unit (not globbed by run.sh — lives in a
 // subdir). Only `pub` declarations are reachable through the importer's
 // chosen namespace (`geo::point`, `geo::area`) — see 85_multiunit.kr.
-pub struct point { x: si4, y: si4 }
+// §5.5.1/§6.2.2: fields named in a cross-unit composite literal (or read
+// from outside this unit) must themselves be `pub`, independent of the
+// struct's own `pub`.
+pub struct point { pub x: si4, pub y: si4 }
 pub fn area(p: point) -> si4 { return p.x * p.y; }

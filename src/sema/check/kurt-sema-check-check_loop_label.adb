@@ -4,10 +4,17 @@ separate (Kurt.Sema.Check)
       if SU.Length (Label) = 0 then
          return;
       end if;
-      for I in Label_Stack.First_Index .. Label_Stack.Last_Index loop
-         if SU.To_String (Label_Stack.Element (I))
+      --  §7.9 innermost-first: an inner label shadows an outer one of
+      --  the same name, so the nearest match decides.
+      for I in reverse Label_Stack.First_Index .. Label_Stack.Last_Index loop
+         if SU.To_String (Label_Stack.Element (I).Name)
               = SU.To_String (Label)
          then
+            if Label_Stack.Element (I).Is_Block then
+               Error ("`break`/`continue` names ''" & SU.To_String (Label)
+                      & "' which labels a block; `break`/`continue` shall "
+                      & "name a labelled loop (spec 7.9)");
+            end if;
             return;
          end if;
       end loop;

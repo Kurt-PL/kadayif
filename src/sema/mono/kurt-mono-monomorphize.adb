@@ -208,13 +208,6 @@ separate (Kurt.Mono)
                      end loop;
                      Scan_Stmts (S.SI_Then, Used, Bound);
                      Scan_Stmts (S.SI_Else, Used, Bound);
-                  when S_Extract =>
-                     Scan_Expr (S.X_Expr, Used, Bound);
-                     Add_Once (Bound, S.X_Bind);
-                     if SU.Length (S.X_Err) > 0 then
-                        Add_Once (Bound, S.X_Err);
-                     end if;
-                     Scan_Stmts (S.X_Else, Used, Bound);
                   when S_Break     => Scan_Expr (S.Brk_Val, Used, Bound);
                   when S_Continue | S_Fence | S_Trap | S_Asm => null;
                end case;
@@ -352,6 +345,12 @@ separate (Kurt.Mono)
                Keep_S.Append (U.Structs.Element (I));
             else
                Gen_Structs.Append (U.Structs.Element (I));
+               --  §9.1/§9.4: also kept on U itself (unlike the purely
+               --  local Gen_Structs above, which does not survive past
+               --  this procedure) so Kurt.Sema.Check can resolve a field
+               --  access on `self` while template-checking a
+               --  never-instantiated impl(...) method (spec 5.9.2).
+               U.Gen_Structs.Append (U.Structs.Element (I));
             end if;
          end loop;
          U.Structs := Keep_S;
@@ -361,6 +360,7 @@ separate (Kurt.Mono)
                Keep_E.Append (U.Enums.Element (I));
             else
                Gen_Enums.Append (U.Enums.Element (I));
+               U.Gen_Enums.Append (U.Enums.Element (I));
             end if;
          end loop;
          U.Enums := Keep_E;

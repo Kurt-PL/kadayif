@@ -1,6 +1,13 @@
 separate (Kurt.Sema.Check)
    procedure Validate_Enums is
+      --  §8.4.3: a lifetime name shall be unique within its `with
+      --  lifetime` clause (checked across all its chains together, for
+      --  both struct and enum declarations — there is no other pass
+      --  that walks U.Structs/U.Enums specifically for this, so it is
+      --  hung off Validate_Enums, which Check already calls).
+      procedure Validate_Lifetime_Chains is separate;
    begin
+      Validate_Lifetime_Chains;
       for I in U.Enums.First_Index .. U.Enums.Last_Index loop
          declare
             D  : constant Kurt.Parser.Enum_Decl := U.Enums.Element (I);
@@ -80,6 +87,81 @@ separate (Kurt.Sema.Check)
                          & "(spec 5.7)");
                end if;
             end;
+
+            --  §7.2: a `with [!]contract` enum shall have exactly two
+            --  branches (one explicit variant, one `#wild#`).
+            if D.Is_Contract
+              and then Natural (D.Variants.Length) /= 2
+            then
+               Error ("enum '" & EN & "' declares `with "
+                      & (if D.Contract_Inv then "!" else "") & "contract` "
+                      & "but has" & D.Variants.Length'Image
+                      & " variants; a contract enum shall have exactly "
+                      & "two (spec 7.2)");
+            end if;
+
+            --  §7.2 inverted-pair symmetry: if A declares `-> B`, B shall
+            --  declare `-> A` back, and the truthy/falsey payload types
+            --  shall cross-match (A's success = B's failure, and vice
+            --  versa).
+            if D.Is_Contract and then D.Inv_Type /= null
+              and then D.Inv_Type.Kind = T_Named
+            then
+               declare
+                  BN : constant String := SU.To_String (D.Inv_Type.Name);
+               begin
+                  if not Kurt.Layout.Is_Enum (BN) then
+                     Error ("enum '" & EN & "' declares an inverted pair "
+                            & "'" & BN & "', which is not a known enum "
+                            & "(spec 7.2)");
+                  elsif not Kurt.Layout.Is_Contract_Enum (BN) then
+                     Error ("enum '" & EN & "' declares an inverted pair "
+                            & "'" & BN & "', which does not itself "
+                            & "declare `with [!]contract` (spec 7.2)");
+                  elsif Kurt.Layout.Contract_Inv_Type_Name (BN) /= EN then
+                     Error ("enum '" & EN & "' declares `-> " & BN
+                            & "`, but '" & BN & "' does not declare a "
+                            & "symmetric `-> " & EN & "` back (spec 7.2)");
+                  else
+                     --  Payload cross-match: A's success = B's failure,
+                     --  A's failure = B's success (spec 7.2).
+                     declare
+                        A_SV : constant String :=
+                          Kurt.Layout.Contract_Success_Variant (EN);
+                        A_FV : constant String :=
+                          Kurt.Layout.Contract_Fail_Variant (EN);
+                        B_SV : constant String :=
+                          Kurt.Layout.Contract_Success_Variant (BN);
+                        B_FV : constant String :=
+                          Kurt.Layout.Contract_Fail_Variant (BN);
+                        A_SC : constant Natural :=
+                          Kurt.Layout.Variant_Field_Count (EN, A_SV);
+                        A_FC : constant Natural :=
+                          Kurt.Layout.Variant_Field_Count (EN, A_FV);
+                        B_SC : constant Natural :=
+                          Kurt.Layout.Variant_Field_Count (BN, B_SV);
+                        B_FC : constant Natural :=
+                          Kurt.Layout.Variant_Field_Count (BN, B_FV);
+                     begin
+                        if A_SC /= B_FC or else A_FC /= B_SC
+                          or else (A_SC > 0 and then A_SC = B_FC
+                            and then not Same_Type
+                              (Kurt.Layout.Variant_Field_Type (EN, A_SV, 1),
+                               Kurt.Layout.Variant_Field_Type (BN, B_FV, 1)))
+                          or else (A_FC > 0 and then A_FC = B_SC
+                            and then not Same_Type
+                              (Kurt.Layout.Variant_Field_Type (EN, A_FV, 1),
+                               Kurt.Layout.Variant_Field_Type (BN, B_SV, 1)))
+                        then
+                           Error ("enum '" & EN & "' and its inverted "
+                                  & "pair '" & BN & "' have mismatched "
+                                  & "success/failure payload types "
+                                  & "(spec 7.2)");
+                        end if;
+                     end;
+                  end if;
+               end;
+            end if;
          end;
       end loop;
 
