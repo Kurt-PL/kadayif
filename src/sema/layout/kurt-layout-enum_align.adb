@@ -1,8 +1,8 @@
 separate (Kurt.Layout)
-   function Enum_Align (Name : String) return Natural is
+   function Enum_Align (Name : String) return Cell_Count is
       D : Enum_Decl;
       --  A void discriminant (width 0) contributes no alignment.
-      A : Natural := Natural'Max (1, Enum_Disc_Size (Name));
+      A : Cell_Count := Cell_Count'Max (1, Enum_Disc_Size (Name));
    begin
       if Find_Enum (Name, D) then
          --  §4.11/§4.11.3: `with repr(packed)` forces the payload region's
@@ -15,7 +15,7 @@ separate (Kurt.Layout)
                     D.Variants.Element (I).Payload;
                begin
                   for J in P.First_Index .. P.Last_Index loop
-                     A := Natural'Max (A, Align_Of (P.Element (J).Ty));
+                     A := Cell_Count'Max (A, Align_Of (P.Element (J).Ty));
                   end loop;
                end;
             end loop;

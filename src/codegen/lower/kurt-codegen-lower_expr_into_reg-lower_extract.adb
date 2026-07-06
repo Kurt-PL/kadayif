@@ -15,8 +15,8 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
          EN   : constant String := SU.To_String (IT.Name);
          Succ_V : constant String := Kurt.Layout.Contract_Success_Variant (EN);
          Fail_V : constant String := Kurt.Layout.Contract_Fail_Variant (EN);
-         DSz    : constant Natural := Kurt.Layout.Enum_Disc_Size (EN);
-         Whole_Sz : constant Natural := Sizeof (IT);
+         DSz    : constant Cell_Count := Kurt.Layout.Enum_Disc_Size (EN);
+         Whole_Sz : constant Cell_Count := Sizeof (IT);
       begin
          if Whole_Sz > 8 then
             raise Codegen_Error with
@@ -29,7 +29,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
          --  stack temp, so its discriminant and payload can be addressed
          --  by offset exactly like any other frame-resident enum value.
          declare
-            Off : constant Natural := ST.Next_Offset;
+            Off : constant Cell_Count := ST.Next_Offset;
             Loc : constant String := ", [x29, #" & Img (Off) & "]";
          begin
             ST.Next_Offset := ST.Next_Offset + 8;
@@ -52,8 +52,8 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             declare
                Succ_Ty : constant Type_Access :=
                  Kurt.Layout.Variant_Field_Type (IT, Succ_V, 1);
-               Sz      : constant Natural := Sizeof (Succ_Ty);
-               POff    : constant Natural :=
+               Sz      : constant Cell_Count := Sizeof (Succ_Ty);
+               POff    : constant Cell_Count :=
                  Off + Kurt.Layout.Variant_Field_Offset (IT, Succ_V, 1);
             begin
                if Sz >= 8 then

@@ -119,7 +119,7 @@ separate (Kurt.Parser)
                        "expected positive integer in align(N) at line"
                        & Positive'Image (C.Cur.Line);
                   end if;
-                  D.Align_N := Natural (C.Cur.Int_V);
+                  D.Align_N := Cell_Count (C.Cur.Int_V);
                   Advance (C);
                   Expect (C, Punct_RParen, "')'");
                elsif Item = "discrim" then

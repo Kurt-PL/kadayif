@@ -1,11 +1,11 @@
 separate (Kurt.Codegen)
    procedure Emit_Mem_Copy
      (F        : IO.File_Type;
-      Src_Base : String; Src_Off : Natural;
-      Dst_Base : String; Dst_Off : Natural;
-      Sz       : Natural)
+      Src_Base : String; Src_Off : Cell_Count;
+      Dst_Base : String; Dst_Off : Cell_Count;
+      Sz       : Cell_Count)
    is
-      Done : Natural := 0;
+      Done : Cell_Count := 0;
    begin
       while Sz - Done >= 8 loop
          IO.Put_Line (F, "    ldr     x9, [" & Src_Base & ", #"

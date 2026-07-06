@@ -5,7 +5,7 @@ separate (Kurt.Sema.Check.Infer)
             --  xlatime-evaluable expression (a bare integer literal is
             --  the common case, already resolved by
             --  Kurt.Parser.Fold_Int_Expr's E_Int_Lit base case). Resolve
-            --  it to a positive Natural once, up front, so the rest of
+            --  it to a positive count once, up front, so the rest of
             --  this function (and every later reader of E.AL_Repeat) sees
             --  the same plain literal-count shape as before this fix.
             if E.AL_Repeat_Expr /= null then
@@ -20,12 +20,8 @@ separate (Kurt.Sema.Check.Infer)
                      Error ("repeat literal count must be a positive "
                             & "integer, got" & N'Image & " (spec 6.1.6)");
                      N := 1;
-                  elsif N > Long_Long_Integer (Natural'Last) then
-                     Error ("repeat literal count exceeds the "
-                            & "representable range (spec 6.1.6)");
-                     N := 1;
                   end if;
-                  E.AL_Repeat := Natural (N);
+                  E.AL_Repeat := Cell_Count (N);
                end;
             end if;
             --  §6.1.6: element list or repeat form. The element type is
@@ -93,7 +89,7 @@ separate (Kurt.Sema.Check.Infer)
                Arr.Elem := ET;
                Arr.Len  :=
                  (if E.AL_Repeat > 0 then E.AL_Repeat
-                  else Natural (E.AL_Elems.Length));
+                  else Cell_Count (E.AL_Elems.Length));
                if Expected /= null and then Expected.Kind = T_Array
                  and then Expected.Len /= Arr.Len
                then

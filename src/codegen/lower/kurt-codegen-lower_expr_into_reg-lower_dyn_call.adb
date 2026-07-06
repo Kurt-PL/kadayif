@@ -22,7 +22,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
            "codegen: method not found in trait '" & Trait & "'";
       end if;
       declare
-         Off : constant Natural := ST.Bindings.Element (Bi).Offset;
+         Off : constant Cell_Count := ST.Bindings.Element (Bi).Offset;
       begin
          --  Evaluate the explicit (non-self) arguments into scratch slots.
          if Total > 0 then

@@ -61,7 +61,8 @@ package body Kurt.Sema is
    --  Integer type holding a discriminant of the given cell width and
    --  signedness (§4.11.3 auto-sizing; signed when any declared value
    --  is negative or `discrim(T)` names a signed type).
-   function Disc_Ty_Name (Sz : Natural; Signed : Boolean) return String is
+   function Disc_Ty_Name (Sz : Cell_Count; Signed : Boolean)
+     return String is
      (case Sz is
          when 1      => (if Signed then "si1" else "ui1"),
          when 2      => (if Signed then "si2" else "ui2"),
@@ -267,8 +268,8 @@ package body Kurt.Sema is
 
    --  §6.5: the unsigned integer type of a given size in cells — the
    --  contextual type of an unsuffixed shift-count literal.
-   function Unsigned_Of_Size (Size : Natural) return Type_Access is
-      S : constant String := Natural'Image (Size);
+   function Unsigned_Of_Size (Size : Cell_Count) return Type_Access is
+      S : constant String := Cell_Count'Image (Size);
    begin
       return new AST_Type'
         (Kind => T_Named,

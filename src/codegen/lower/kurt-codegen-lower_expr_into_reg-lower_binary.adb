@@ -105,7 +105,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             if Is_Ref (Lhs_Ty) then
                --  Pointer arithmetic: scale rhs by the referent's size.
                declare
-                  Scale : constant Natural := Sizeof (Lhs_Ty.Target);
+                  Scale : constant Cell_Count := Sizeof (Lhs_Ty.Target);
                begin
                   case Scale is
                      when 1 => null;
@@ -137,7 +137,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                --  §8.6.4: scale the follow operand by the referent's size
                --  (mirrors B_Add reference arithmetic).
                declare
-                  Scale : constant Natural := Sizeof (Lhs_Ty.Target);
+                  Scale : constant Cell_Count := Sizeof (Lhs_Ty.Target);
                begin
                   case Scale is
                      when 1 => null;
@@ -179,7 +179,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             --  a % b = a - (a / b) * b (msub) also yields x % 0 == x and
             --  MIN % -1 == 0 without further correction.
             declare
-               W      : constant Natural := Sizeof (Lhs_Ty);
+               W      : constant Cell_Count := Sizeof (Lhs_Ty);
                Signed : constant Boolean := Is_Signed_Int (Lhs_Ty);
                Dv     : constant String  :=
                  (if Signed then "sdiv" else "udiv");
@@ -260,7 +260,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             --  for signed `>>`). The hardware masks the count, so the
             --  cmp uses the original count value and overrides via csel.
             declare
-               W_Bits : constant Natural := 8 * Sizeof (Lhs_Ty);
+               W_Bits : constant Cell_Count := 8 * Sizeof (Lhs_Ty);
                Signed : constant Boolean := Is_Signed_Int (Lhs_Ty);
                T  : constant String := (if Use_64 then Xt else Wt);
                R  : constant String := (if Use_64 then Xr else Wr);

@@ -12,7 +12,7 @@ separate (Kurt.Codegen)
          begin
             if Idx /= 0 then
                declare
-                  FOff : constant Integer :=
+                  FOff : constant Long_Long_Integer :=
                     Flag_Off_Of (ST, ST.Bindings.Element (Idx).Offset);
                begin
                   if FOff >= 0 then

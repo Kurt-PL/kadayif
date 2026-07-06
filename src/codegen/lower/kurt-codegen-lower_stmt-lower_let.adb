@@ -35,7 +35,8 @@ separate (Kurt.Codegen.Lower_Stmt)
                   EN   : constant String := SU.To_String (B.Ty.Name);
                   VN   : constant String :=
                     SU.To_String (S.L_Refut_Pat.Path.Last_Element);
-                  DSz  : constant Natural := Kurt.Layout.Enum_Disc_Size (EN);
+                  DSz  : constant Cell_Count :=
+                    Kurt.Layout.Enum_Disc_Size (EN);
                   Loc  : constant String :=
                     ", [x29, #" & Img (B.Offset) & "]";
                begin
@@ -102,12 +103,12 @@ separate (Kurt.Codegen.Lower_Stmt)
                --  rounded to a uniform 8-byte slot. This keeps a `&raw`
                --  cursor's arithmetic across adjacent locals well-defined
                --  while preserving natural alignment for aarch64 loads/stores.
-               Slot : constant Natural :=
-                 (if Is_Fat then 16 else Natural'Max (Sizeof (Ty), 1));
-               Aln  : constant Natural :=
+               Slot : constant Cell_Count :=
+                 (if Is_Fat then 16 else Cell_Count'Max (Sizeof (Ty), 1));
+               Aln  : constant Cell_Count :=
                  (if Is_Fat then 8
-                  else Natural'Max (Kurt.Layout.Align_Of (Ty), 1));
-               Off  : constant Natural :=
+                  else Cell_Count'Max (Kurt.Layout.Align_Of (Ty), 1));
+               Off  : constant Cell_Count :=
                  ((ST.Next_Offset + Aln - 1) / Aln) * Aln;
             begin
                ST.Next_Offset := Off + Slot;
@@ -205,7 +206,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                               FN  : constant String := SU.To_String (FI.Name);
                               FT  : constant Type_Access :=
                                 Kurt.Layout.Field_Type (SN, FN);
-                              FOf : constant Natural :=
+                              FOf : constant Cell_Count :=
                                 Off + Kurt.Layout.Field_Offset (SN, FN);
                               BI  : constant Natural :=
                                 (if FI.Val.Kind = E_Path
@@ -277,7 +278,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                               CN  : constant String := SU.To_String (C.Name);
                               FT  : constant Type_Access :=
                                 Kurt.Layout.Field_Type (SN, CN);
-                              FOf : constant Natural :=
+                              FOf : constant Cell_Count :=
                                 Off + Kurt.Layout.Field_Offset (SN, CN);
                               P   : constant Expr_Access :=
                                 new Expr_Node (Kind => E_Path);
@@ -390,7 +391,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                               --  the type when available (handles verdict and,
                               --  via delegation, every declared enum too).
                               ST_T : constant Type_Access := S.L_Init.Sem_Ty;
-                              FO : constant Integer :=
+                              FO : constant Long_Long_Integer :=
                                 (if ST_T /= null
                                  then Kurt.Layout.Variant_Field_Offset_By_Name
                                         (ST_T, VN, FN)
@@ -404,7 +405,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                                         (EN, VN, FN));
                            begin
                               Lower_Expr_Into_Reg (F, FI.Val, 9, ST);
-                              Store_Sized (Off + Natural (FO), Sizeof (FT));
+                              Store_Sized (Off + Cell_Count (FO), Sizeof (FT));
                               --  §8.8.2 a transferred payload source is not
                               --  dropped at its own scope exit.
                               Note_Move (F, ST, FI.Val);
@@ -417,7 +418,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                      --  §6.1.6 array / repeat literal, element-wise into
                      --  the slot at the element stride.
                      declare
-                        ESz   : constant Natural := Sizeof (Ty.Elem);
+                        ESz   : constant Cell_Count := Sizeof (Ty.Elem);
                         Is_FP : constant Boolean := Is_Float (Ty.Elem);
                         --  §9.5: an array of `&dyn Trait` (or `&[T]`) holds
                         --  16-byte fat references; each element coerces via
@@ -425,7 +426,8 @@ separate (Kurt.Codegen.Lower_Stmt)
                         Is_Fat_E : constant Boolean :=
                           Is_Dyn_Ref (Ty.Elem) or else Is_Slice_Ref (Ty.Elem);
 
-                        procedure Store_Fat (EO : Natural; Elem : Expr_Access)
+                        procedure Store_Fat
+                          (EO : Cell_Count; Elem : Expr_Access)
                         is
                         begin
                            if Elem.Kind = E_Dyn_Cast then
@@ -459,7 +461,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                            end if;
                         end Store_Fat;
 
-                        procedure Store_Elem_At (EO : Natural) is
+                        procedure Store_Elem_At (EO : Cell_Count) is
                         begin
                            if Is_FP then
                               IO.Put_Line
@@ -478,8 +480,10 @@ separate (Kurt.Codegen.Lower_Stmt)
                                     S.L_Init.AL_Elems.Last_Index
                            loop
                               Store_Fat
-                                (Off + (I - S.L_Init.AL_Elems.First_Index)
-                                       * ESz,
+                                (Off
+                                 + Cell_Count
+                                     (I - S.L_Init.AL_Elems.First_Index)
+                                   * ESz,
                                  S.L_Init.AL_Elems.Element (I));
                            end loop;
                            goto Fat_Done;
@@ -509,7 +513,8 @@ separate (Kurt.Codegen.Lower_Stmt)
                               end if;
                               Store_Elem_At
                                 (Off
-                                 + (I - S.L_Init.AL_Elems.First_Index)
+                                 + Cell_Count
+                                     (I - S.L_Init.AL_Elems.First_Index)
                                    * ESz);
                               --  §8.8.2 a destruct-typed element supplied by a
                               --  binding is transferred: clear the source's
@@ -563,7 +568,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                            IO.Put_Line (F, "    str     x1, [x29, #"
                                            & Img (Off + 8) & "]");
                         when Indirect =>
-                           ST.Pending_Sret := Integer (Off);
+                           ST.Pending_Sret := Long_Long_Integer (Off);
                            Lower_Expr_Into_Reg (F, S.L_Init, 0, ST);
                         when Not_Agg =>
                            raise Program_Error with
@@ -602,7 +607,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                              (ST, SU.To_String
                                     (S.L_Init.F_Recv.Segments.Last_Element)));
                         FN : constant String := SU.To_String (S.L_Init.F_Name);
-                        FOff : Natural;
+                        FOff : Cell_Count;
                      begin
                         if B.Ty /= null and then B.Ty.Kind = T_Tuple then
                            FOff := Kurt.Layout.Tuple_Field_Offset
@@ -671,7 +676,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                                                      (Ty.Elem.Name))))
                   then
                      declare
-                        Flag : constant Natural := ST.Next_Offset;
+                        Flag : constant Cell_Count := ST.Next_Offset;
                      begin
                         ST.Next_Offset := ST.Next_Offset + 8;
                         --  §5.2: a deferred (genuinely omitted) initializer

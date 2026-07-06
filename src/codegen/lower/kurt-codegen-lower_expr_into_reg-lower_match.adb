@@ -9,18 +9,18 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
       --  discriminant sits at the binding's slot start and payload fields
       --  are bound as slot+offset aliases (no copy).
       Enum_Binding : Boolean := False;
-      Base         : Natural := 0;
+      Base         : Cell_Count := 0;
       EN           : SU.Unbounded_String;
       --  §7.4.2 a `[T;N]` array binding matched by slice patterns in place.
       Array_Binding : Boolean := False;
-      Arr_Base      : Natural := 0;
+      Arr_Base      : Cell_Count := 0;
       --  item(e)/§5.10.2 a struct binding matched by a struct pattern
       --  (`point { x, y }`) in place: field bindings alias the scrutinee's
       --  slot + field offset (no copy). Only engaged when some arm
       --  actually uses the struct-pattern shape -- otherwise the scrutinee
       --  falls through to the existing scalar/whole-value path unchanged.
       Struct_Binding : Boolean := False;
-      SBase          : Natural := 0;
+      SBase          : Cell_Count := 0;
       SN             : SU.Unbounded_String;
 
       function Is_Struct_Pat (P : Pattern) return Boolean is
@@ -34,7 +34,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
       --  sub-test within one arm (spec 7.4, sema counterpart: Bind_Nested
       --  in Kurt.Sema.Check.Infer.Infer_Match).
       procedure Bind_Nested_CG
-        (P : Pattern; Ty : Type_Access; Base : Natural; L_Next : String)
+        (P : Pattern; Ty : Type_Access; Base : Cell_Count; L_Next : String)
       is
       begin
          case P.Kind is
@@ -63,7 +63,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                               elsif SU.Length (P.Bindings.Element (K)) > 0
                               then SU.To_String (P.Bindings.Element (K))
                               else Kurt.Layout.Struct_Field_Name (Snm, K));
-                           FOff : constant Natural :=
+                           FOff : constant Cell_Count :=
                              Base + Kurt.Layout.Field_Offset (Snm, FName);
                            FT   : constant Type_Access :=
                              Kurt.Layout.Field_Type (Snm, FName);
@@ -91,7 +91,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                      EN2  : constant String := SU.To_String (Ty.Name);
                      VN2  : constant String :=
                        SU.To_String (P.Path.Last_Element);
-                     DS2  : constant Natural :=
+                     DS2  : constant Cell_Count :=
                        Kurt.Layout.Enum_Disc_Size (EN2);
                   begin
                      if DS2 > 0 then
@@ -104,7 +104,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                      end if;
                      for K in 1 .. Natural (P.Bindings.Length) loop
                         declare
-                           FOff : constant Natural :=
+                           FOff : constant Cell_Count :=
                              Base + Pat_Field_Off (P, Ty, VN2, K);
                            FT   : constant Type_Access :=
                              Pat_Field_Ty (P, Ty, VN2, K);
@@ -196,7 +196,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
       if Enum_Binding then
          declare
             Ename     : constant String  := SU.To_String (EN);
-            Disc_Size : constant Natural :=
+            Disc_Size : constant Cell_Count :=
               Kurt.Layout.Enum_Disc_Size (Ename);
          begin
             for I in E.M_Arms.First_Index .. E.M_Arms.Last_Index loop
@@ -270,7 +270,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                            for K in 1 .. Natural (Arm.Pat.Bindings.Length)
                            loop
                               declare
-                                 FOff : constant Natural :=
+                                 FOff : constant Cell_Count :=
                                    Base
                                      + Pat_Field_Off (Arm.Pat, Scrut_T, VN, K);
                                  FT   : constant Type_Access :=
@@ -319,8 +319,8 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
          --  length test is resolved at compile time; element positions are
          --  fixed offsets (front before `...`, back after).
          declare
-            N     : constant Natural := Scrut_T.Len;
-            ESize : constant Natural := Sizeof (Scrut_T.Elem);
+            N     : constant Cell_Count := Scrut_T.Len;
+            ESize : constant Cell_Count := Sizeof (Scrut_T.Elem);
             Wide  : constant Boolean := ESize > 4;
             SR    : constant String := (if Wide then "x9" else "w9");
             CR    : constant String := (if Wide then "x10" else "w10");
@@ -339,7 +339,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                         SE       : Slice_Elem_Vectors.Vector renames
                           Arm.Pat.Slice_Elems;
                         Rest_At  : Integer := -1;
-                        K        : Natural := 0;   --  non-rest element count
+                        K        : Cell_Count := 0;  --  non-rest elem count
                      begin
                         for J in SE.First_Index .. SE.Last_Index loop
                            if SE.Element (J).Kind = SE_Rest then
@@ -355,14 +355,15 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                            declare
                               Saved   : constant Natural :=
                                 Natural (ST.Bindings.Length);
-                              Front   : Natural := 0;  --  index before rest
-                              Back    : Natural := 0;  --  count after rest
+                              Front   : Cell_Count := 0;  -- idx before rest
+                              Back    : Cell_Count := 0;  -- count after rest
                               Has_Cmp : Boolean := False;
 
                               --  Element J's array index, given its position.
-                              function Arr_Idx (Pos : Natural; After : Boolean;
-                                                Back_Pos : Natural)
-                                return Natural is
+                              function Arr_Idx
+                                (Pos : Cell_Count; After : Boolean;
+                                 Back_Pos : Cell_Count)
+                                return Cell_Count is
                                 (if After then N - Back + Back_Pos else Pos);
 
                               Seen_Rest : Boolean := False;
@@ -377,20 +378,20 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                                  declare
                                     El  : constant Slice_Elem :=
                                       SE.Element (J);
-                                    AIdx : Natural;
+                                    AIdx : Cell_Count;
                                  begin
                                     if El.Kind = SE_Rest then
                                        Seen_Rest := True;
                                     else
                                        if Seen_Rest then
                                           AIdx := Arr_Idx (0, True,
-                                            (J - Rest_At) - 1);
+                                            Cell_Count ((J - Rest_At) - 1));
                                        else
                                           AIdx := Front;
                                           Front := Front + 1;
                                        end if;
                                        declare
-                                          Off : constant Natural :=
+                                          Off : constant Cell_Count :=
                                             Arr_Base + AIdx * ESize;
                                        begin
                                           if El.Kind = SE_Int then
@@ -477,7 +478,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                                  then SU.To_String
                                    (Arm.Pat.Bindings.Element (K))
                                  else Kurt.Layout.Struct_Field_Name (Snm, K));
-                              FOff : constant Natural :=
+                              FOff : constant Cell_Count :=
                                 SBase + Kurt.Layout.Field_Offset (Snm, FName);
                               FT   : constant Type_Access :=
                                 Kurt.Layout.Field_Type (Snm, FName);
@@ -553,7 +554,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             Wide   : constant Boolean := Sizeof (Scrut_T) > 4;
             SR     : constant String := (if Wide then "x9" else "w9");
             CR     : constant String := (if Wide then "x10" else "w10");
-            Slot   : constant Natural := ST.Next_Offset;
+            Slot   : constant Cell_Count := ST.Next_Offset;
             --  §6.6/§5.10: a `lo..hi` range pattern over an unsigned
             --  scrutinee must fall through on the unsigned (carry-based)
             --  conditions, not the signed (overflow-based) ones.

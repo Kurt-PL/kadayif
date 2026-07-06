@@ -1,6 +1,6 @@
 separate (Kurt.Codegen)
    procedure Emit_Drop_At
-     (F : IO.File_Type; Self_Off, Off : Natural;
+     (F : IO.File_Type; Self_Off, Off : Cell_Count;
       T : Kurt.Parser.Type_Access)
    is
    begin

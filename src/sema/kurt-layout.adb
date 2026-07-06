@@ -41,7 +41,7 @@ package body Kurt.Layout is
    end Same_Source_Unit;
 
    --  ceil(X, A): round X up to the nearest multiple of A (A = 0 => X).
-   function Ceil (X, A : Natural) return Natural is
+   function Ceil (X, A : Cell_Count) return Cell_Count is
    begin
       if A = 0 then
          return X;
@@ -122,7 +122,7 @@ package body Kurt.Layout is
    --  a void discriminant (0 cells); otherwise the smallest unsigned —
    --  or, when any declared value is negative, signed — integer type
    --  holding every value is selected.
-   function Enum_Disc_Size (Name : String) return Natural is separate;
+   function Enum_Disc_Size (Name : String) return Cell_Count is separate;
 
    --  §4.11.3: whether the discriminant type is signed (an explicit
    --  signed `discrim(T)`, or any negative declared value).
@@ -341,18 +341,19 @@ package body Kurt.Layout is
    --  suppresses inter-field padding and forces align 1.
    function Group_Size
      (Fields : Kurt.Parser.Struct_Field_Vectors.Vector;
-      Packed : Boolean := False) return Natural
+      Packed : Boolean := False) return Cell_Count
    is separate;
 
    --  Enum alignment: max of discriminant size and every payload field's
    --  alignment.
-   function Enum_Align (Name : String) return Natural is separate;
+   function Enum_Align (Name : String) return Cell_Count is separate;
 
    --  Offset at which the payload region begins (after the discriminant).
-   function Payload_Region_Offset (Name : String) return Natural is separate;
+   function Payload_Region_Offset (Name : String) return Cell_Count
+   is separate;
 
    --  Total enum size: discriminant + largest payload, rounded to align.
-   function Enum_Size (Name : String) return Natural is separate;
+   function Enum_Size (Name : String) return Cell_Count is separate;
 
    function Variant_Field_Count
      (Enum_Name, Variant : String) return Natural
@@ -380,7 +381,7 @@ package body Kurt.Layout is
    end Variant_Field_Name;
 
    function Variant_Field_Offset
-     (Enum_Name, Variant : String; Field_No : Positive) return Natural
+     (Enum_Name, Variant : String; Field_No : Positive) return Cell_Count
    is separate;
 
    function Variant_Field_Is_Airside
@@ -410,7 +411,7 @@ package body Kurt.Layout is
    end Variant_Field_Type;
 
    function Variant_Field_Offset_By_Name
-     (Enum_Name, Variant, Field : String) return Integer
+     (Enum_Name, Variant, Field : String) return Long_Long_Integer
    is
       V : Enum_Variant;
    begin
@@ -461,7 +462,8 @@ package body Kurt.Layout is
       else Variant_Field_Type (SU.To_String (T.Name), Variant, Field_No));
 
    function Variant_Field_Offset
-     (T : Type_Access; Variant : String; Field_No : Positive) return Natural is
+     (T : Type_Access; Variant : String; Field_No : Positive)
+      return Cell_Count is
      (if Is_Verdict (SU.To_String (T.Name)) then Ceil (1, Align_Of (T))
       else Variant_Field_Offset (SU.To_String (T.Name), Variant, Field_No));
 
@@ -472,8 +474,9 @@ package body Kurt.Layout is
       else Variant_Field_Type_By_Name (SU.To_String (T.Name), Variant, Field));
 
    function Variant_Field_Offset_By_Name
-     (T : Type_Access; Variant, Field : String) return Integer is
-     (if Is_Verdict (SU.To_String (T.Name)) then Integer (Ceil (1, Align_Of (T)))
+     (T : Type_Access; Variant, Field : String) return Long_Long_Integer is
+     (if Is_Verdict (SU.To_String (T.Name))
+      then Long_Long_Integer (Ceil (1, Align_Of (T)))
       else Variant_Field_Offset_By_Name
              (SU.To_String (T.Name), Variant, Field));
 
@@ -502,9 +505,11 @@ package body Kurt.Layout is
 
    --  §4.11.1: numeric types have align == size; references are pointer
    --  width; structs take the max field alignment.
-   function Align_Of (T : Kurt.Parser.Type_Access) return Natural is separate;
+   function Align_Of (T : Kurt.Parser.Type_Access) return Cell_Count
+   is separate;
 
-   function Size_Of (T : Kurt.Parser.Type_Access) return Natural is separate;
+   function Size_Of (T : Kurt.Parser.Type_Access) return Cell_Count
+   is separate;
 
    ----------------------------------------------------------------------
    --  Field queries
@@ -517,9 +522,9 @@ package body Kurt.Layout is
    end Tuple_Field_Type;
 
    function Tuple_Field_Offset
-     (T : Kurt.Parser.Type_Access; Index : Natural) return Natural
+     (T : Kurt.Parser.Type_Access; Index : Natural) return Cell_Count
    is
-      Off : Natural := 0;
+      Off : Cell_Count := 0;
    begin
       for I in 0 .. Index loop
          declare
@@ -541,9 +546,9 @@ package body Kurt.Layout is
            "(§4.7: size overflow is a translation failure)";
    end Tuple_Field_Offset;
 
-   function Field_Offset (Struct_Name, Field : String) return Natural is
+   function Field_Offset (Struct_Name, Field : String) return Cell_Count is
       D   : Struct_Decl;
-      Off : Natural := 0;
+      Off : Cell_Count := 0;
    begin
       if not Find_Struct (Struct_Name, D) then
          raise Layout_Error with "unknown struct '" & Struct_Name & "'";

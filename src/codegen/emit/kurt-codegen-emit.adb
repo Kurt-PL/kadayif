@@ -470,7 +470,7 @@ separate (Kurt.Codegen)
                  (Float, Interfaces.Unsigned_32);
 
                D    : constant Static_Decl := U.Statics.Element (I);
-               Sz   : constant Natural := Sizeof (D.Ty);
+               Sz   : constant Cell_Count := Sizeof (D.Ty);
                Neg  : constant Boolean :=
                  D.Init.Kind = E_Unary;
                Lit  : constant Expr_Access :=
@@ -508,7 +508,7 @@ separate (Kurt.Codegen)
                   Bits := Interfaces."and"
                     (Bits,
                      Interfaces.Unsigned_64'Mod
-                       (Long_Long_Integer (2) ** (8 * Sz) - 1));
+                       (Long_Long_Integer (2) ** Natural (8 * Sz) - 1));
                end if;
                IO.Put_Line (F, ".p2align "
                  & (case Sz is

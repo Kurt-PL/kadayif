@@ -16,7 +16,7 @@ separate (Kurt.Sema.Check.Infer)
                   if Src_Is_Enum then
                      declare
                         EN : constant String := SU.To_String (Src.Name);
-                        DS : constant Natural :=
+                        DS : constant Cell_Count :=
                           Kurt.Layout.Enum_Disc_Size (EN);
                      begin
                         if DS = 0 then

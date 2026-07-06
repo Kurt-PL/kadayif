@@ -1,10 +1,10 @@
 separate (Kurt.Layout)
    function Variant_Field_Offset
-     (Enum_Name, Variant : String; Field_No : Positive) return Natural
+     (Enum_Name, Variant : String; Field_No : Positive) return Cell_Count
    is
       D      : Enum_Decl;
       V      : Enum_Variant;
-      Off    : Natural := 0;
+      Off    : Cell_Count := 0;
       Packed : Boolean := False;
    begin
       if not Find_Variant (Enum_Name, Variant, V) then

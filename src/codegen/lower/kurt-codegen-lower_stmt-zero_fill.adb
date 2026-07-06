@@ -1,7 +1,7 @@
 separate (Kurt.Codegen.Lower_Stmt)
-   procedure Zero_Fill (Off : Natural; Sz : Natural) is
-      Curr : Natural := Off;
-      Rem_Sz : Natural := Sz;
+   procedure Zero_Fill (Off : Cell_Count; Sz : Cell_Count) is
+      Curr : Cell_Count := Off;
+      Rem_Sz : Cell_Count := Sz;
    begin
       while Rem_Sz >= 8 loop
          IO.Put_Line (F, "    str     xzr, [x29, #" & Img (Curr) & "]");

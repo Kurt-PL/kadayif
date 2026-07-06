@@ -1,6 +1,6 @@
 separate (Kurt.Codegen.Lower_Expr_Into_Reg)
    procedure Emit_Int_Conv
-     (Src_Sz : Natural; Src_Signed : Boolean; Tgt_Sz : Natural) is
+     (Src_Sz : Cell_Count; Src_Signed : Boolean; Tgt_Sz : Cell_Count) is
    begin
       if Tgt_Sz = Src_Sz then
          return;  --  identity / reinterpret

@@ -35,7 +35,7 @@ separate (Kurt.Sema.Check)
                else
                   declare
                      Sz  : constant Natural :=
-                       Kurt.Layout.Size_Of (D.Discrim_Ty);
+                       Natural (Kurt.Layout.Size_Of (D.Discrim_Ty));
                      Sgn : constant Boolean :=
                        Kurt.Layout.Enum_Disc_Signed (EN);
                      Lo  : Long_Long_Integer := 0;

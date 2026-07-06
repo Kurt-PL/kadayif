@@ -9,7 +9,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             Tgt_Ty : constant Type_Access := Type_Of_Expr (E.CAS_Tgt, ST);
             Ref_T  : constant Type_Access :=
               (if Is_Ref (Tgt_Ty) then Tgt_Ty.Target else null);
-            Sz     : constant Natural := Sizeof (Ref_T);
+            Sz     : constant Cell_Count := Sizeof (Ref_T);
             EN     : constant String :=
               (if E.Sem_Ty /= null then SU.To_String (E.Sem_Ty.Name)
                else "");
@@ -77,7 +77,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             --  Pack the aggregate: payload (w13) at its field offset,
             --  discriminant (w12) at offset 0.
             declare
-               PO : constant Natural := Kurt.Layout.Variant_Field_Offset
+               PO : constant Cell_Count := Kurt.Layout.Variant_Field_Offset
                  (E.Sem_Ty, Kurt.Layout.Contract_Success_Variant (EN), 1);
             begin
                IO.Put_Line (F, "    lsl     " & Xreg & ", x13, #"

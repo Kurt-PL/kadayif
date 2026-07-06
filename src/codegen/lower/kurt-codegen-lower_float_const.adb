@@ -1,6 +1,7 @@
 separate (Kurt.Codegen)
    procedure Lower_Float_Const
-     (F : IO.File_Type; D_Reg : Natural; Value : Long_Float; Bytes : Natural)
+     (F : IO.File_Type; D_Reg : Natural; Value : Long_Float;
+      Bytes : Cell_Count)
    is
       use Interfaces;
       function To_U64 is new Ada.Unchecked_Conversion (Long_Float, Unsigned_64);

@@ -1,10 +1,10 @@
 separate (Kurt.Layout)
    function Group_Size
      (Fields : Kurt.Parser.Struct_Field_Vectors.Vector;
-      Packed : Boolean := False) return Natural
+      Packed : Boolean := False) return Cell_Count
    is
-      Off : Natural := 0;
-      Aln : Natural := 1;
+      Off : Cell_Count := 0;
+      Aln : Cell_Count := 1;
    begin
       for I in Fields.First_Index .. Fields.Last_Index loop
          declare
@@ -17,7 +17,7 @@ separate (Kurt.Layout)
             end if;
             Off := Off + Size_Of (FT);
             if not Packed then
-               Aln := Natural'Max (Aln, Align_Of (FT));
+               Aln := Cell_Count'Max (Aln, Align_Of (FT));
             end if;
          end;
       end loop;

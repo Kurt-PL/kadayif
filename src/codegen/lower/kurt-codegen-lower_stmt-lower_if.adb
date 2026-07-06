@@ -32,7 +32,8 @@ separate (Kurt.Codegen.Lower_Stmt)
                      EN   : constant String := SU.To_String (B.Ty.Name);
                      VN   : constant String :=
                        SU.To_String (S.SI_Let_Pat.Path.Last_Element);
-                     DSz  : constant Natural := Kurt.Layout.Enum_Disc_Size (EN);
+                     DSz  : constant Cell_Count :=
+                       Kurt.Layout.Enum_Disc_Size (EN);
                      Loc  : constant String :=
                        ", [x29, #" & Img (B.Offset) & "]";
                      Saved : Natural;
@@ -108,7 +109,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                        Kurt.Layout.Contract_Success_Variant (EN);
                      Fail_V : constant String :=
                        Kurt.Layout.Contract_Fail_Variant (EN);
-                     DSz    : constant Natural :=
+                     DSz    : constant Cell_Count :=
                        Kurt.Layout.Enum_Disc_Size (EN);
                      Loc    : constant String :=
                        ", [x29, #" & Img (B.Offset) & "]";

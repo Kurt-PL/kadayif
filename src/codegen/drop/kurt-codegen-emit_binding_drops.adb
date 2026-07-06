@@ -35,7 +35,7 @@ separate (Kurt.Codegen)
       end if;
       for B of To_Drop loop
          declare
-            FOff : constant Integer := Flag_Off_Of (ST, B.Offset);
+            FOff : constant Long_Long_Integer := Flag_Off_Of (ST, B.Offset);
 
             --  Emit the destructor call(s) for one binding: a single call for
             --  a `T_Named`, or one per element (index order, §8.11.1) for an
@@ -44,7 +44,7 @@ separate (Kurt.Codegen)
             begin
                if B.Ty.Kind = T_Array then
                   declare
-                     ES : constant Natural :=
+                     ES : constant Cell_Count :=
                        Kurt.Layout.Size_Of (B.Ty.Elem);
                      DN : constant String := SU.To_String (B.Ty.Elem.Name);
                   begin

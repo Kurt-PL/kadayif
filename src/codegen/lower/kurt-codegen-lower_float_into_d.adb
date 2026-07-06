@@ -88,7 +88,7 @@ begin
                  (Find_Binding
                     (ST, SU.To_String (E.F_Recv.Segments.Last_Element)));
                FN  : constant String := SU.To_String (E.F_Name);
-               Off : Natural;
+               Off : Cell_Count;
             begin
                if B.Ty /= null and then B.Ty.Kind = T_Tuple then
                   Off := B.Offset + Kurt.Layout.Tuple_Field_Offset

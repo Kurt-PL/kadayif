@@ -1,11 +1,11 @@
 separate (Kurt.Layout)
-   function Enum_Size (Name : String) return Natural is
+   function Enum_Size (Name : String) return Cell_Count is
       D      : Enum_Decl;
-      Max_PL : Natural := 0;
+      Max_PL : Cell_Count := 0;
    begin
       if Find_Enum (Name, D) then
          for I in D.Variants.First_Index .. D.Variants.Last_Index loop
-            Max_PL := Natural'Max
+            Max_PL := Cell_Count'Max
               (Max_PL, Group_Size
                  (D.Variants.Element (I).Payload, D.Repr_Packed));
          end loop;

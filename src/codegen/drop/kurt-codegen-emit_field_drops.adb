@@ -1,6 +1,6 @@
 separate (Kurt.Codegen)
    procedure Emit_Field_Drops
-     (F : IO.File_Type; Tn : String; Self_Off : Natural)
+     (F : IO.File_Type; Tn : String; Self_Off : Cell_Count)
    is
    begin
       if Kurt.Layout.Is_Struct (Tn) then
@@ -21,7 +21,8 @@ separate (Kurt.Codegen)
          end loop;
       elsif Kurt.Layout.Is_Enum (Tn) then
          declare
-            Disc_Size : constant Natural := Kurt.Layout.Enum_Disc_Size (Tn);
+            Disc_Size : constant Cell_Count :=
+              Kurt.Layout.Enum_Disc_Size (Tn);
             End_Lbl   : constant String  := "L" & Tn & "$drop_end";
          begin
             if Disc_Size = 0 then

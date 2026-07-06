@@ -16,7 +16,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                begin
                   if Idx /= 0 then
                      declare
-                        FOff : constant Integer :=
+                        FOff : constant Long_Long_Integer :=
                           Flag_Off_Of (ST, ST.Bindings.Element (Idx).Offset);
                      begin
                         if FOff >= 0 then
@@ -52,7 +52,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                           & Name & "'";
                      end if;
                      declare
-                        Sz  : constant Natural :=
+                        Sz  : constant Cell_Count :=
                           Sizeof (Unit_Statics.Element (SI).Ty);
                         Lbl : constant String := "_Kst_" & Name;
                      begin
@@ -76,7 +76,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                end if;
                declare
                   B  : constant Binding := ST.Bindings.Element (Idx);
-                  Sz : constant Natural := Sizeof (B.Ty);
+                  Sz : constant Cell_Count := Sizeof (B.Ty);
                begin
                   Lower_Expr_Into_Reg (F, S.Asn_Rhs, 9, ST);
                   if Is_Ref (B.Ty) or else Sz > 4 then
@@ -94,7 +94,8 @@ separate (Kurt.Codegen.Lower_Stmt)
                   --  binding's initialization, which Lower_Let leaves
                   --  disarmed until now.
                   declare
-                     FOff : constant Integer := Flag_Off_Of (ST, B.Offset);
+                     FOff : constant Long_Long_Integer :=
+                       Flag_Off_Of (ST, B.Offset);
                   begin
                      if FOff >= 0 then
                         IO.Put_Line (F, "    mov     w9, #1");
@@ -108,7 +109,7 @@ separate (Kurt.Codegen.Lower_Stmt)
             declare
                Inner_Ty : constant Type_Access :=
                  Type_Of_Expr (S.Asn_Lhs.D_Inner, ST);
-               Sz       : Natural := 8;
+               Sz       : Cell_Count := 8;
                Is_Atom  : Boolean := False;   --  &atomic / &guard target
                Acq      : Boolean := False;   --  &guard (fully ordered)
             begin
@@ -196,8 +197,9 @@ separate (Kurt.Codegen.Lower_Stmt)
                   begin
                      if Needs_Drop then
                         declare
-                           Addr_Slot : constant Natural := ST.Next_Offset;
-                           Rhs_Slot  : constant Natural := ST.Next_Offset + 8;
+                           Addr_Slot : constant Cell_Count := ST.Next_Offset;
+                           Rhs_Slot  : constant Cell_Count :=
+                             ST.Next_Offset + 8;
                         begin
                            ST.Next_Offset := ST.Next_Offset + 16;
                            Lower_Expr_Into_Reg (F, S.Asn_Lhs.D_Inner, 10, ST);
@@ -320,11 +322,11 @@ separate (Kurt.Codegen.Lower_Stmt)
                     (if Via_Ref then SU.To_String (B.Ty.Target.Name)
                      else SU.To_String (B.Ty.Name));
                   FName : constant String  := SU.To_String (S.Asn_Lhs.F_Name);
-                  FOff  : constant Natural :=
+                  FOff  : constant Cell_Count :=
                     Kurt.Layout.Field_Offset (SName, FName);
                   FT    : constant Type_Access :=
                     Kurt.Layout.Field_Type (SName, FName);
-                  Sz    : constant Natural := Sizeof (FT);
+                  Sz    : constant Cell_Count := Sizeof (FT);
                   Loc   : constant String :=
                     (if Via_Ref then ", [x10, #" & Img (FOff) & "]"
                      else ", [x29, #" & Img (B.Offset + FOff) & "]");

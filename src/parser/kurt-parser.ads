@@ -69,7 +69,7 @@ package Kurt.Parser is
             --  `T_Array (Len = 0)` outside a T_Ref target is rejected by
             --  sema (params/returns/fields/payloads/bindings).
             Elem : Type_Access;
-            Len  : Natural := 0;
+            Len  : Cell_Count := 0;
             --  §4.7/§6.1.6: N need not be a bare literal (`const`/arithmetic
             --  permitted); Kurt.Mono.Monomorphize.Visit_Type folds it into
             --  Len ahead of any Kurt.Layout.Size_Of query.
@@ -411,7 +411,7 @@ package Kurt.Parser is
             --  v). N need not be a bare literal -- Infer_Array_Lit
             --  resolves it via Kurt.Parser.Fold_Int_Expr into AL_Repeat.
             AL_Elems       : Expr_Vectors.Vector;
-            AL_Repeat      : Natural := 0;
+            AL_Repeat      : Cell_Count := 0;
             AL_Repeat_Expr : Expr_Access := null;
          when E_Dyn_Cast =>
             --  §9.5 implicit `&T → &dyn Trait` coercion. Materialises the
@@ -425,7 +425,7 @@ package Kurt.Parser is
             --  §4.6 implicit `&[T; N] → &[T]` coercion. Materialises the
             --  fat reference { ptr = inner (array address), len = N }.
             SC_Inner : Expr_Access;
-            SC_Len   : Natural := 0;
+            SC_Len   : Cell_Count := 0;
          when E_Type_Intrinsic =>
             --  §6.12 layout intrinsics. Implicitly xlatime: sema/codegen
             --  fold them to `uaddr` constants. Bootstrap subset: the
@@ -719,7 +719,7 @@ package Kurt.Parser is
       Generic_Params : Generic_Param_Vectors.Vector;
       Fields         : Struct_Field_Vectors.Vector;
       Repr_Packed    : Boolean := False;   --  §4.11.4 `with repr(packed)`
-      Align_N        : Natural := 0;       --  §4.11.5 `with align(N)`; 0=none
+      Align_N        : Cell_Count := 0;    --  §4.11.5 `with align(N)`; 0=none
       --  §8.11 `with destruct [block]`: an uncopyable type with transfer
       --  semantics. Destruct_Block is the optional destructor body (its
       --  `self` is `$selftype`); empty when omitted.

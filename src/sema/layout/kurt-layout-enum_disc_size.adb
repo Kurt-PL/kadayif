@@ -1,5 +1,5 @@
 separate (Kurt.Layout)
-   function Enum_Disc_Size (Name : String) return Natural is
+   function Enum_Disc_Size (Name : String) return Cell_Count is
       D   : Enum_Decl;
       Min : Long_Long_Integer := 0;
       Max : Long_Long_Integer := 0;

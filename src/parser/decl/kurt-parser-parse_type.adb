@@ -180,18 +180,11 @@ separate (Kurt.Parser)
                     "array length must be a positive integer literal at "
                     & "line" & Positive'Image (C.Cur.Line);
                end if;
-               --  §4.7: an array length that overflows the layout engine's
-               --  representable range is a translation failure, not a
-               --  wraparound or an uncaught crash. (Kadayif represents
-               --  lengths/sizes in `Natural`, narrower than the spec's
-               --  64-bit `uaddr`; a length that does not fit here is
-               --  rejected cleanly rather than silently truncated.)
-               if C.Cur.Int_V > Long_Long_Integer (Natural'Last) then
-                  raise Syntax_Error with
-                    "array length exceeds the representable range at line"
-                    & Positive'Image (C.Cur.Line);
-               end if;
-               Node.Len := Natural (C.Cur.Int_V);
+               --  §4.7: lengths/sizes are Cell_Count (64-bit, the spec's
+               --  `uaddr` width on this target); a size computation that
+               --  overflows it is reported by the layout engine as the
+               --  §4.7 translation failure.
+               Node.Len := Cell_Count (C.Cur.Int_V);
                Advance (C);
             else
                Node.Len_Expr := Parse_Expr (C);

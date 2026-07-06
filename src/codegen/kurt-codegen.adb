@@ -58,7 +58,7 @@ package body Kurt.Codegen is
 
    type Binding is record
       Name   : SU.Unbounded_String;
-      Offset : Natural;
+      Offset : Cell_Count;
       Ty     : Type_Access;
    end record;
 
@@ -69,8 +69,8 @@ package body Kurt.Codegen is
    --  control-flow paths is destroyed exactly once (conditional-move drop
    --  flags). Bind_Off identifies the binding by its frame slot.
    type Drop_Flag is record
-      Bind_Off : Natural;
-      Flag_Off : Natural;
+      Bind_Off : Cell_Count;
+      Flag_Off : Cell_Count;
    end record;
 
    package Flag_Vec is new Ada.Containers.Vectors
@@ -137,7 +137,7 @@ package body Kurt.Codegen is
    --  tuple members are destroyed in turn (they have no synthesised drop of
    --  their own). Only destruct-satisfying parts emit anything.
    procedure Emit_Drop_At
-     (F : IO.File_Type; Self_Off, Off : Natural;
+     (F : IO.File_Type; Self_Off, Off : Cell_Count;
       T : Kurt.Parser.Type_Access)
    is separate;
 
@@ -145,7 +145,7 @@ package body Kurt.Codegen is
    --  Struct: destroy each destruct-satisfying field in declaration order.
    --  Enum: load the discriminant and destroy the active variant's payload.
    procedure Emit_Field_Drops
-     (F : IO.File_Type; Tn : String; Self_Off : Natural)
+     (F : IO.File_Type; Tn : String; Self_Off : Cell_Count)
    is separate;
 
    --  Index of Name in Unit_Statics, or 0.
@@ -176,7 +176,7 @@ package body Kurt.Codegen is
       --  §7.7 frame offset of the loop-expression's result slot; a `break
       --  expr` targeting this loop stores its value here. -1 for a statement
       --  loop (the break value, if any, is discarded).
-      Result_Off : Integer := -1;
+      Result_Off : Long_Long_Integer := -1;
    end record;
 
    package Loop_Stack_Pkg is new Ada.Containers.Vectors
@@ -188,7 +188,7 @@ package body Kurt.Codegen is
    --  branches to End_Lbl — an early exit from the block expression.
    type Express_Target is record
       End_Lbl    : SU.Unbounded_String;
-      Result_Off : Natural := 0;
+      Result_Off : Cell_Count := 0;
       Body_Entry : Natural := 0;
       Name       : SU.Unbounded_String;   --  §7.9 block label; empty = none
    end record;
@@ -215,7 +215,7 @@ package body Kurt.Codegen is
       Fn_Name      : SU.Unbounded_String;  --  for per-function label uniqueness
       Epilogue_Lbl : SU.Unbounded_String;
       Bindings     : Binding_Pkg.Vector;
-      Next_Offset  : Natural := 16;  --  16 bytes reserved for x29/x30
+      Next_Offset  : Cell_Count := 16;  --  16 bytes reserved for x29/x30
       If_Idx       : Natural := 0;
       Loop_Idx     : Natural := 0;
       Dyn_Syms     : Dyn_Sym_Pkg.Vector;
@@ -228,8 +228,8 @@ package body Kurt.Codegen is
       --  Pending_Sret is set by a let-binding right before lowering an
       --  E_Call initialiser whose result must land in that frame slot.
       Ret_Ty       : Type_Access := null;
-      Sret_Off     : Integer := -1;
-      Pending_Sret : Integer := -1;
+      Sret_Off     : Long_Long_Integer := -1;
+      Pending_Sret : Long_Long_Integer := -1;
       Fn_Rets      : Fn_Ret_Pkg.Vector;
       --  §8.8.2/§8.11 runtime drop flags for this body's destruct bindings,
       --  and a counter for the unique skip labels of guarded drops.
@@ -237,15 +237,16 @@ package body Kurt.Codegen is
       Flag_Lbl     : Natural := 0;
       --  §8.11 16-byte frame slot for saving the return value (x0/x1) across
       --  scope-exit destructor calls (set in Emit_Fn's prologue).
-      Ret_Scratch  : Natural := 0;
+      Ret_Scratch  : Cell_Count := 0;
    end record;
 
    --  Frame offset of the drop flag for the binding at Bind_Off, or -1.
-   function Flag_Off_Of (ST : Lower_State; Bind_Off : Natural) return Integer is
+   function Flag_Off_Of
+     (ST : Lower_State; Bind_Off : Cell_Count) return Long_Long_Integer is
    begin
       for E of ST.Drop_Flags loop
          if E.Bind_Off = Bind_Off then
-            return Integer (E.Flag_Off);
+            return Long_Long_Integer (E.Flag_Off);
          end if;
       end loop;
       return -1;
@@ -327,7 +328,7 @@ package body Kurt.Codegen is
    ----------------------------------------------------------------------
    --  Layout queries (single-sourced in Kurt.Layout, §4.11)
    ----------------------------------------------------------------------
-   function Sizeof (T : Type_Access) return Natural is
+   function Sizeof (T : Type_Access) return Cell_Count is
      (Kurt.Layout.Size_Of (T));
 
    --  §7.4 the payload-region offset / type of a variant pattern's K-th
@@ -335,13 +336,15 @@ package body Kurt.Codegen is
    --  else by position K.
    function Pat_Field_Off
      (Pat : Kurt.Parser.Pattern; T : Type_Access; VN : String; K : Positive)
-      return Natural is
+      return Cell_Count is
    begin
       if K <= Natural (Pat.Bind_Fields.Length)
         and then SU.Length (Pat.Bind_Fields.Element (K)) > 0
       then
-         return Natural (Integer'Max (0, Kurt.Layout.Variant_Field_Offset_By_Name
-           (T, VN, SU.To_String (Pat.Bind_Fields.Element (K)))));
+         return Cell_Count
+           (Long_Long_Integer'Max
+              (0, Kurt.Layout.Variant_Field_Offset_By_Name
+                    (T, VN, SU.To_String (Pat.Bind_Fields.Element (K)))));
       end if;
       return Kurt.Layout.Variant_Field_Offset (T, VN, K);
    end Pat_Field_Off;
@@ -503,7 +506,8 @@ package body Kurt.Codegen is
    --  d<D_Reg> (f64) or s<D_Reg> (f32 when Bytes = 4), via the IEEE-754
    --  bit pattern loaded through a scratch integer register (x12/w12).
    procedure Lower_Float_Const
-     (F : IO.File_Type; D_Reg : Natural; Value : Long_Float; Bytes : Natural)
+     (F : IO.File_Type; D_Reg : Natural; Value : Long_Float;
+      Bytes : Cell_Count)
    is separate;
 
    --  The type of an expression is whatever Kurt.Sema attached. Falls
@@ -543,9 +547,9 @@ package body Kurt.Codegen is
    --  overrun a source that is not 8-byte padded, e.g. a payload alias).
    procedure Emit_Mem_Copy
      (F        : IO.File_Type;
-      Src_Base : String; Src_Off : Natural;
-      Dst_Base : String; Dst_Off : Natural;
-      Sz       : Natural)
+      Src_Base : String; Src_Off : Cell_Count;
+      Dst_Base : String; Dst_Off : Cell_Count;
+      Sz       : Cell_Count)
    is separate;
 
    function Path_Symbol (E : Expr_Access) return String is
@@ -603,7 +607,7 @@ package body Kurt.Codegen is
    function Materialize_Composite
      (F : IO.File_Type; ST : in out Lower_State;
       Ty : Type_Access; Init : Expr_Access)
-      return Natural;
+      return Cell_Count;
 
    --  Completions as separate subunits.
    procedure Lower_Float_Into_D
@@ -626,7 +630,7 @@ package body Kurt.Codegen is
    function Materialize_Composite
      (F : IO.File_Type; ST : in out Lower_State;
       Ty : Type_Access; Init : Expr_Access)
-      return Natural
+      return Cell_Count
    is separate;
 
    ----------------------------------------------------------------------
@@ -636,7 +640,7 @@ package body Kurt.Codegen is
    --  16-byte aligned, generous enough for the bootstrap. Scalars take
    --  8 bytes; aggregates and arrays their rounded size. Overflow is
    --  detected after lowering (Next_Offset is checked against this).
-   Frame_Bytes : constant Integer := 512;
+   Frame_Bytes : constant Cell_Count := 512;
 
    procedure Emit_Fn
      (F        : IO.File_Type;

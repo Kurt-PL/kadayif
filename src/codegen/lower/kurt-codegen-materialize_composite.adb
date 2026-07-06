@@ -2,16 +2,17 @@ separate (Kurt.Codegen)
    function Materialize_Composite
      (F : IO.File_Type; ST : in out Lower_State;
       Ty : Type_Access; Init : Expr_Access)
-      return Natural
+      return Cell_Count
    is
-      Aln : constant Natural := Natural'Max (Kurt.Layout.Align_Of (Ty), 1);
-      Off : constant Natural :=
+      Aln : constant Cell_Count :=
+        Cell_Count'Max (Kurt.Layout.Align_Of (Ty), 1);
+      Off : constant Cell_Count :=
         ((ST.Next_Offset + Aln - 1) / Aln) * Aln;
-      Sz  : constant Natural := Natural'Max (Sizeof (Ty), 1);
+      Sz  : constant Cell_Count := Cell_Count'Max (Sizeof (Ty), 1);
 
-      procedure Zero_Fill (At_Off, At_Sz : Natural) is
-         Curr   : Natural := At_Off;
-         Rem_Sz : Natural := At_Sz;
+      procedure Zero_Fill (At_Off, At_Sz : Cell_Count) is
+         Curr   : Cell_Count := At_Off;
+         Rem_Sz : Cell_Count := At_Sz;
       begin
          while Rem_Sz >= 8 loop
             IO.Put_Line (F, "    str     xzr, [x29, #" & Img (Curr) & "]");
@@ -35,7 +36,7 @@ separate (Kurt.Codegen)
 
       --  Store the value currently in x9/w9 into [x29, #At_Off] using the
       --  width implied by At_Sz cells (mirrors Lower_Stmt's Store_Sized).
-      procedure Store_Sized (At_Off, At_Sz : Natural) is
+      procedure Store_Sized (At_Off, At_Sz : Cell_Count) is
          Loc : constant String := ", [x29, #" & Img (At_Off) & "]";
       begin
          if At_Sz >= 8 then
@@ -68,7 +69,7 @@ separate (Kurt.Codegen)
                      FN  : constant String := SU.To_String (FI.Name);
                      FT  : constant Type_Access :=
                        Kurt.Layout.Field_Type (SN, FN);
-                     FOf : constant Natural :=
+                     FOf : constant Cell_Count :=
                        Off + Kurt.Layout.Field_Offset (SN, FN);
                      BI  : constant Natural :=
                        (if FI.Val.Kind = E_Path
@@ -147,7 +148,7 @@ separate (Kurt.Codegen)
                        Init.VN_Fields.Element (I);
                      FN   : constant String := SU.To_String (FI.Name);
                      ST_T : constant Type_Access := Init.Sem_Ty;
-                     FO   : constant Integer :=
+                     FO   : constant Long_Long_Integer :=
                        (if ST_T /= null
                         then Kurt.Layout.Variant_Field_Offset_By_Name
                                (ST_T, VN, FN)
@@ -161,7 +162,7 @@ separate (Kurt.Codegen)
                                (EN, VN, FN));
                   begin
                      Lower_Expr_Into_Reg (F, FI.Val, 9, ST);
-                     Store_Sized (Off + Natural (FO), Sizeof (FT));
+                     Store_Sized (Off + Cell_Count (FO), Sizeof (FT));
                      --  §8.8.2 a transferred payload source is not
                      --  dropped at its own scope exit.
                      Note_Move (F, ST, FI.Val);
@@ -187,10 +188,10 @@ separate (Kurt.Codegen)
             --  at the element stride. Fat-reference (`&dyn` / slice)
             --  elements are not covered here (bootstrap scope).
             declare
-               ESz   : constant Natural := Sizeof (Ty.Elem);
+               ESz   : constant Cell_Count := Sizeof (Ty.Elem);
                Is_FP : constant Boolean := Is_Float (Ty.Elem);
 
-               procedure Store_Elem_At (EO : Natural) is
+               procedure Store_Elem_At (EO : Cell_Count) is
                begin
                   if Is_FP then
                      IO.Put_Line
@@ -225,7 +226,9 @@ separate (Kurt.Codegen)
                           (F, Init.AL_Elems.Element (I), 9, ST);
                      end if;
                      Store_Elem_At
-                       (Off + (I - Init.AL_Elems.First_Index) * ESz);
+                       (Off
+                        + Cell_Count (I - Init.AL_Elems.First_Index)
+                          * ESz);
                      --  §8.8.2 a destruct-typed element supplied by a
                      --  binding is transferred: clear the source's drop
                      --  flag so it is not also destroyed.

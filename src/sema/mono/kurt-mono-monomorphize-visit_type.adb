@@ -29,12 +29,8 @@ separate (Kurt.Mono.Monomorphize)
                      raise Mono_Error with
                        "array length must be a positive integer, got"
                        & N'Image & " (spec 4.7)";
-                  elsif N > Long_Long_Integer (Natural'Last) then
-                     raise Mono_Error with
-                       "array length exceeds the representable range "
-                       & "(spec 4.7)";
                   end if;
-                  T.Len := Natural (N);
+                  T.Len := Cell_Count (N);
                   T.Len_Expr := null;
                end;
             end if;

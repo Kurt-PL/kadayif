@@ -1,9 +1,9 @@
 separate (Kurt.Codegen.Lower_Stmt)
    procedure Lower_Widening
-     (Off : Natural; E : Expr_Access; W_Off : Natural)
+     (Off : Cell_Count; E : Expr_Access; W_Off : Cell_Count)
    is
       T_Ty   : constant Type_Access := Type_Of_Expr (E.B_Lhs, ST);
-      W      : constant Natural := Sizeof (T_Ty);
+      W      : constant Cell_Count := Sizeof (T_Ty);
       Signed : constant Boolean := Is_Signed_Int (T_Ty);
       Add    : constant Boolean := E.B_Op = B_Wide_Add;
    begin

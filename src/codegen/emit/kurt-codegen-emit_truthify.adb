@@ -4,7 +4,7 @@ separate (Kurt.Codegen)
    is
       XR  : constant String := "x" & Img (Reg);
       WR  : constant String := "w" & Img (Reg);
-      DSz : constant Natural :=
+      DSz : constant Cell_Count :=
         (if SU.To_String (Ty.Name) = "bool" then 1
          else Kurt.Layout.Enum_Disc_Size (SU.To_String (Ty.Name)));
       Src : constant String := (if DSz < 8 then "x12" else XR);

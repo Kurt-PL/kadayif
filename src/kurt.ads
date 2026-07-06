@@ -21,4 +21,14 @@ package Kurt is
    --  hexadecimal digits.
    Hex_Escape_Digits : constant := (Cell_Bits_Exec + 3) / 4;
 
+   --  §4.7 layout quantities — sizes, alignments, offsets, and array
+   --  lengths, measured in cells (or elements). 64-bit signed, matching
+   --  the width of the spec's `uaddr` on this target, so layouts past
+   --  Natural's 2**31 - 1 cells are representable. Arithmetic that
+   --  overflows the 63-bit magnitude raises Constraint_Error, which the
+   --  layout engine reports as the §4.7 translation failure rather than
+   --  wrapping. Sentinel-returning queries (-1 = absent) use the base
+   --  Long_Long_Integer instead.
+   subtype Cell_Count is Long_Long_Integer range 0 .. Long_Long_Integer'Last;
+
 end Kurt;

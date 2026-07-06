@@ -19,7 +19,7 @@ is
 
    --  Store the value currently in x9/w9 to [x29, Off] using the width
    --  implied by Sz cells.
-   procedure Store_Sized (Off : Natural; Sz : Natural) is
+   procedure Store_Sized (Off : Cell_Count; Sz : Cell_Count) is
       Loc : constant String := ", [x29, #" & Img (Off) & "]";
    begin
       if Sz >= 8 then
@@ -33,17 +33,17 @@ is
       end if;  --  Sz = 0 (void): nothing to store
    end Store_Sized;
 
-   procedure Zero_Fill (Off : Natural; Sz : Natural) is separate;
+   procedure Zero_Fill (Off : Cell_Count; Sz : Cell_Count) is separate;
 
    --  §6.4.3 widening `a +@ b` / `a *@ b`: materialise the .{low, high}
    --  tuple at Off+0 (low) and Off+W (high). Operand type T is W bytes.
    procedure Lower_Widening
-     (Off : Natural; E : Expr_Access; W_Off : Natural)
+     (Off : Cell_Count; E : Expr_Access; W_Off : Cell_Count)
    is separate;
 
    --  Materialise a tuple-typed initialiser into the frame slot at Off.
    procedure Store_Tuple_Init
-     (Off : Natural; Tup : Type_Access; Init : Expr_Access)
+     (Off : Cell_Count; Tup : Type_Access; Init : Expr_Access)
    is separate;
 
    --  §8.4 lower a brace-delimited statement list as a lexical scope: the
@@ -114,7 +114,7 @@ begin
                                      & Img (B.Offset + 8) & "]");
                   else
                      IO.Put_Line (F, "    ldr     x10, [x29, #"
-                                     & Img (Natural (ST.Sret_Off)) & "]");
+                                     & Img (ST.Sret_Off) & "]");
                      Emit_Mem_Copy (F, "x29", B.Offset, "x10", 0,
                                     Sizeof (ST.Ret_Ty));
                   end if;
@@ -162,12 +162,12 @@ begin
             --  value has no destination and is evaluated only for effect.
             Lower_Expr_Into_Reg (F, S.Brk_Val, 9, ST);
             declare
-               R_Off : constant Integer :=
+               R_Off : constant Long_Long_Integer :=
                  Target_Loop (ST, S.Brk_Label).Result_Off;
             begin
                if R_Off >= 0 then
                   IO.Put_Line (F, "    str     x9, [x29, #"
-                                  & Img (Natural (R_Off)) & "]");
+                                  & Img (R_Off) & "]");
                end if;
             end;
          end if;
@@ -295,7 +295,7 @@ begin
             --  §6.11 frame temps for saving the `clobber(...)` registers
             --  across the body (one per declared register).
             Clob_Slots : array
-              (1 .. Natural (S.Asm_Clobbers.Length)) of Natural;
+              (1 .. Natural (S.Asm_Clobbers.Length)) of Cell_Count;
 
             --  Whether a register appears in the `clobber(...)` list.
             function Clobbered (Reg : String) return Boolean is
@@ -598,7 +598,7 @@ begin
             --  (nor a `clobber(...)`-listed one — none are live at this point).
             declare
                N     : constant Natural := Natural (S.Asm_In_Regs.Length);
-               Slots : array (1 .. N) of Natural;
+               Slots : array (1 .. N) of Cell_Count;
             begin
                for I in 1 .. N loop
                   Slots (I) := ST.Next_Offset;

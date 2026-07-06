@@ -486,7 +486,7 @@ separate (Kurt.Sema.Check.Infer)
                                     then
                                        Has_Wild := True;
                                     elsif Rests = 0 and then not Has_Lit
-                                      and then Natural
+                                      and then Cell_Count
                                                  (Arm.Pat.Slice_Elems.Length)
                                            = Scrut_Ty.Len
                                     then

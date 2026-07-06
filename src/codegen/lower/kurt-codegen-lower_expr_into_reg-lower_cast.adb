@@ -64,7 +64,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             Src_Is_Enum : constant Boolean :=
               Src_T /= null and then Src_T.Kind = T_Named
               and then Kurt.Layout.Is_Enum (SU.To_String (Src_T.Name));
-            Eff_Sz     : Natural;
+            Eff_Sz     : Cell_Count;
             Eff_Signed : Boolean;
          begin
             if Src_Is_Enum then
@@ -72,7 +72,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                --  payload carried in the high bytes. Signedness follows
                --  the chosen discriminant type (§4.11.3).
                declare
-                  DS : constant Natural :=
+                  DS : constant Cell_Count :=
                     Kurt.Layout.Enum_Disc_Size (SU.To_String (Src_T.Name));
                begin
                   Emit_Int_Conv (8, False, DS);

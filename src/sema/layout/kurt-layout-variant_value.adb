@@ -15,14 +15,14 @@ separate (Kurt.Layout)
             --  discriminant width with zero-extended loads, so negative
             --  values are masked here once (§4.11.3).
             declare
-               DS : constant Natural := Enum_Disc_Size (Enum_Name);
+               DS : constant Cell_Count := Enum_Disc_Size (Enum_Name);
                V  : constant Long_Long_Integer :=
                  D.Variants.Element (I).Value;
             begin
                case DS is
                   when 0      => return 0;
                   when 1 | 2 | 4 =>
-                     return V mod (2 ** (8 * DS));
+                     return V mod (2 ** Natural (8 * DS));
                   when others => return V;
                end case;
             end;

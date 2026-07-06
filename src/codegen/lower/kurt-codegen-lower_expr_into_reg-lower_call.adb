@@ -20,22 +20,22 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
       Fixed     : constant Natural :=
         (if Is_Var then Natural'Min (Info.Fixed_Args, N) else N);
       Var_Count : constant Natural := N - Fixed;
-      Var_Bytes : constant Natural := Var_Count * 8;
+      Var_Bytes : constant Cell_Count := Cell_Count (Var_Count) * 8;
 
       --  Consume the pending sret slot immediately so nested calls inside
       --  the arguments cannot steal it; only this (outermost) call uses it.
-      Sret_Slot : constant Integer := ST.Pending_Sret;
+      Sret_Slot : constant Long_Long_Integer := ST.Pending_Sret;
 
       --  AAPCS64 per-argument classification of the fixed args.
       Max_Args : constant Natural := 16;
-      type Off_Arr is array (0 .. Max_Args) of Natural;
+      type Off_Arr is array (0 .. Max_Args) of Cell_Count;
       type Cls_Arr is array (0 .. Max_Args) of Agg_Class;
       Slot_Off : Off_Arr := (others => 0);   --  fixed-arg scratch slot
       Copy_Off : Off_Arr := (others => 0);   --  >16B copy area
       Cls      : Cls_Arr := (others => Not_Agg);
-      Fix_Bytes  : Natural := 0;
-      Copy_Bytes : Natural := 0;
-      Total      : Natural;
+      Fix_Bytes  : Cell_Count := 0;
+      Copy_Bytes : Cell_Count := 0;
+      Total      : Cell_Count;
    begin
       if N > Max_Args then
          raise Program_Error with
@@ -68,7 +68,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
       for K in 0 .. Fixed - 1 loop
          if Cls (K) = Indirect then
             declare
-               Sz : constant Natural := Sizeof (Type_Of_Expr
+               Sz : constant Cell_Count := Sizeof (Type_Of_Expr
                  (E.C_Args.Element (E.C_Args.First_Index + K), ST));
             begin
                Copy_Off (K) := Var_Bytes + Fix_Bytes + Copy_Bytes;
@@ -87,8 +87,9 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
          declare
             Arg : constant Expr_Access :=
               E.C_Args.Element (E.C_Args.First_Index + K);
-            Off : constant Natural :=
-              (if K < Fixed then Slot_Off (K) else (K - Fixed) * 8);
+            Off : constant Cell_Count :=
+              (if K < Fixed then Slot_Off (K)
+               else Cell_Count (K - Fixed) * 8);
          begin
             if Is_Float (Type_Of_Expr (Arg, ST)) then
                --  Apple variadic ABI: a float argument is promoted to a
@@ -170,7 +171,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                      B  : constant Binding := ST.Bindings.Element
                        (Find_Binding
                           (ST, SU.To_String (Arg.Segments.Last_Element)));
-                     Sz : constant Natural := Sizeof (B.Ty);
+                     Sz : constant Cell_Count := Sizeof (B.Ty);
                   begin
                      IO.Put_Line (F, "    mov     x10, sp");
                      Emit_Mem_Copy

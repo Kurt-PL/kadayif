@@ -30,7 +30,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                declare
                   B     : constant Binding := ST.Bindings.Element (Idx);
                   FName : constant String  := SU.To_String (E.F_Name);
-                  Off   : Natural;
+                  Off   : Cell_Count;
                   FT    : Type_Access;
                begin
                   if B.Ty /= null and then B.Ty.Kind = T_Ref
@@ -44,11 +44,11 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                      declare
                         SName : constant String :=
                           SU.To_String (B.Ty.Target.Name);
-                        FOff  : constant Natural :=
+                        FOff  : constant Cell_Count :=
                           Kurt.Layout.Field_Offset (SName, FName);
                         FT2   : constant Type_Access :=
                           Kurt.Layout.Field_Type (SName, FName);
-                        Sz    : constant Natural := Sizeof (FT2);
+                        Sz    : constant Cell_Count := Sizeof (FT2);
                         Loc   : constant String :=
                           ", [x10, #" & Img (FOff) & "]";
                      begin
@@ -116,7 +116,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                      end;
                   end if;
                   declare
-                     Sz  : constant Natural := Sizeof (FT);
+                     Sz  : constant Cell_Count := Sizeof (FT);
                      Loc : constant String  :=
                        ", [x29, #" & Img (Off) & "]";
                   begin

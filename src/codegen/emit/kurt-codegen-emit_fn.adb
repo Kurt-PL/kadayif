@@ -42,7 +42,7 @@ separate (Kurt.Codegen)
       --  AAPCS64: an indirect-class (sret) return arrives as a pointer in
       --  x8. Preserve it across the body for the S_Return copy.
       if Classify_Agg (ST.Ret_Ty) = Indirect then
-         ST.Sret_Off := Integer (ST.Next_Offset);
+         ST.Sret_Off := Long_Long_Integer (ST.Next_Offset);
          IO.Put_Line (F, "    str     x8, [x29, #"
                          & Img (ST.Next_Offset) & "]");
          ST.Next_Offset := ST.Next_Offset + 8;
@@ -60,9 +60,9 @@ separate (Kurt.Codegen)
                   Fn.Header.Params.Last_Index
          loop
             declare
-               P   : constant Param     := Fn.Header.Params.Element (I);
-               Cls : constant Agg_Class := Classify_Agg (P.Ty);
-               Off : constant Natural   := ST.Next_Offset;
+               P   : constant Param      := Fn.Header.Params.Element (I);
+               Cls : constant Agg_Class  := Classify_Agg (P.Ty);
+               Off : constant Cell_Count := ST.Next_Offset;
             begin
                case Cls is
                   when Not_Agg | One_Reg =>
@@ -79,8 +79,8 @@ separate (Kurt.Codegen)
                      ST.Next_Offset := ST.Next_Offset + 16;
                   when Indirect =>
                      declare
-                        Sz   : constant Natural := Sizeof (P.Ty);
-                        Slot : constant Natural := ((Sz + 7) / 8) * 8;
+                        Sz   : constant Cell_Count := Sizeof (P.Ty);
+                        Slot : constant Cell_Count := ((Sz + 7) / 8) * 8;
                      begin
                         IO.Put_Line (F, "    mov     x10, x" & Img (NGRN));
                         Emit_Mem_Copy (F, "x10", 0, "x29", Off, Sz);
@@ -99,7 +99,7 @@ separate (Kurt.Codegen)
                     and then Type_Has_Drop (SU.To_String (P.Ty.Name))
                   then
                      declare
-                        Flag : constant Natural := ST.Next_Offset;
+                        Flag : constant Cell_Count := ST.Next_Offset;
                      begin
                         ST.Next_Offset := ST.Next_Offset + 8;
                         IO.Put_Line (F, "    mov     w9, #1");
@@ -164,7 +164,7 @@ separate (Kurt.Codegen)
          then
             declare
                Tn       : constant String := Nm (Nm'First .. Nm'Last - 5);
-               Self_Off : Integer := -1;
+               Self_Off : Long_Long_Integer := -1;
             begin
                for B of ST.Bindings loop
                   if SU.To_String (B.Name) = "self" then
@@ -172,7 +172,7 @@ separate (Kurt.Codegen)
                   end if;
                end loop;
                if Self_Off >= 0 then
-                  Emit_Field_Drops (F, Tn, Natural (Self_Off));
+                  Emit_Field_Drops (F, Tn, Cell_Count (Self_Off));
                end if;
             end;
          end if;
@@ -186,12 +186,12 @@ separate (Kurt.Codegen)
       IO.Put_Line (F, "    add     sp, sp, #" & Img (Frame_Bytes));
       IO.Put_Line (F, "    ret");
 
-      if ST.Next_Offset > Natural (Frame_Bytes) then
+      if ST.Next_Offset > Frame_Bytes then
          raise Program_Error with
            "codegen: fn '" & SU.To_String (Fn.Header.Name)
-           & "' needs" & Natural'Image (ST.Next_Offset)
+           & "' needs" & Cell_Count'Image (ST.Next_Offset)
            & " bytes of frame (fixed frame is"
-           & Integer'Image (Frame_Bytes) & ")";
+           & Cell_Count'Image (Frame_Bytes) & ")";
       end if;
 
       Str_Base := ST.Next_Str_Idx;

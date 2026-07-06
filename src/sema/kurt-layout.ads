@@ -34,10 +34,10 @@ package Kurt.Layout is
 
    --  Size in cells of a type. A cell is Kurt.Cell_Bits_Exec bits wide;
    --  on this target a cell is a host byte.
-   function Size_Of (T : Kurt.Parser.Type_Access) return Natural;
+   function Size_Of (T : Kurt.Parser.Type_Access) return Cell_Count;
 
    --  Alignment in cells.
-   function Align_Of (T : Kurt.Parser.Type_Access) return Natural;
+   function Align_Of (T : Kurt.Parser.Type_Access) return Cell_Count;
 
    --  Whether Name denotes a registered struct type.
    function Is_Struct (Name : String) return Boolean;
@@ -50,13 +50,13 @@ package Kurt.Layout is
 
    --  §4.7 tuple positional-field queries (structural; no named decl).
    function Tuple_Field_Offset
-     (T : Kurt.Parser.Type_Access; Index : Natural) return Natural;
+     (T : Kurt.Parser.Type_Access; Index : Natural) return Cell_Count;
    function Tuple_Field_Type
      (T     : Kurt.Parser.Type_Access;
       Index : Natural) return Kurt.Parser.Type_Access;
 
    --  Cell offset of Field within struct Struct_Name. Raises if unknown.
-   function Field_Offset (Struct_Name, Field : String) return Natural;
+   function Field_Offset (Struct_Name, Field : String) return Cell_Count;
 
    --  Declared type of Field within struct Struct_Name; null if unknown.
    function Field_Type
@@ -102,7 +102,7 @@ package Kurt.Layout is
 
    --  Discriminant width (cells) chosen for an enum (§4.11.3). 0 means
    --  a void discriminant (at most one variant, no #wild#(V) canonical).
-   function Enum_Disc_Size (Name : String) return Natural;
+   function Enum_Disc_Size (Name : String) return Cell_Count;
 
    --  Whether the chosen discriminant type is signed (§4.11.3: explicit
    --  signed `discrim(T)` or any negative declared value).
@@ -173,7 +173,7 @@ package Kurt.Layout is
    --  discriminant + payload-region offset). Field_No is 1-based.
    function Variant_Field_Count (Enum_Name, Variant : String) return Natural;
    function Variant_Field_Offset
-     (Enum_Name, Variant : String; Field_No : Positive) return Natural;
+     (Enum_Name, Variant : String; Field_No : Positive) return Cell_Count;
    function Variant_Field_Type
      (Enum_Name, Variant : String; Field_No : Positive)
       return Kurt.Parser.Type_Access;
@@ -187,7 +187,7 @@ package Kurt.Layout is
      (Enum_Name, Variant : String; Field_No : Positive) return Boolean;
    --  Offset of a payload field by name (or -1 if absent).
    function Variant_Field_Offset_By_Name
-     (Enum_Name, Variant, Field : String) return Integer;
+     (Enum_Name, Variant, Field : String) return Long_Long_Integer;
    function Variant_Field_Type_By_Name
      (Enum_Name, Variant, Field : String) return Kurt.Parser.Type_Access;
 
@@ -196,12 +196,13 @@ package Kurt.Layout is
    --  the by-name query. Used by the contract / variant-construction paths.
    function Variant_Field_Offset
      (T : Kurt.Parser.Type_Access; Variant : String; Field_No : Positive)
-      return Natural;
+      return Cell_Count;
    function Variant_Field_Type
      (T : Kurt.Parser.Type_Access; Variant : String; Field_No : Positive)
       return Kurt.Parser.Type_Access;
    function Variant_Field_Offset_By_Name
-     (T : Kurt.Parser.Type_Access; Variant, Field : String) return Integer;
+     (T : Kurt.Parser.Type_Access; Variant, Field : String)
+      return Long_Long_Integer;
    function Variant_Field_Type_By_Name
      (T : Kurt.Parser.Type_Access; Variant, Field : String)
       return Kurt.Parser.Type_Access;

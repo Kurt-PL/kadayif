@@ -1,6 +1,6 @@
 separate (Kurt.Codegen.Lower_Expr_Into_Reg)
    procedure Lower_Sat (Op : Binary_Op; Ty : Type_Access) is
-      W      : constant Natural := Sizeof (Ty);
+      W      : constant Cell_Count := Sizeof (Ty);
       Signed : constant Boolean := Is_Signed_Int (Ty);
       Xt : constant String := "x" & Img (Target_Reg);
       Wt : constant String := "w" & Img (Target_Reg);
@@ -56,7 +56,9 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
 
          --  Clamp to the type's range. x12 = MAX (and, signed, x13 = MIN).
          if Signed then
-            Lower_Imm (F, 12, Long_Long_Integer (2) ** (8 * W - 1) - 1, True);
+            Lower_Imm
+              (F, 12,
+               Long_Long_Integer (2) ** Natural (8 * W - 1) - 1, True);
             IO.Put_Line (F, "    neg     x13, x12");
             IO.Put_Line (F, "    sub     x13, x13, #1");      --  MIN
             IO.Put_Line (F, "    cmp     " & Xt & ", x12");
@@ -64,7 +66,8 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             IO.Put_Line (F, "    cmp     " & Xt & ", x13");
             IO.Put_Line (F, "    csel    " & Xt & ", x13, " & Xt & ", lt");
          else
-            Lower_Imm (F, 12, Long_Long_Integer (2) ** (8 * W) - 1, True);
+            Lower_Imm
+              (F, 12, Long_Long_Integer (2) ** Natural (8 * W) - 1, True);
             IO.Put_Line (F, "    cmp     " & Xt & ", x12");
             IO.Put_Line (F, "    csel    " & Xt & ", x12, " & Xt & ", hi");
          end if;

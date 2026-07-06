@@ -17,7 +17,8 @@ is
    --  signedness (sext if signed, zext otherwise — target signedness only
    --  reinterprets the same bits); narrowing keeps the low Tgt_Sz bytes.
    procedure Emit_Int_Conv
-     (Src_Sz : Natural; Src_Signed : Boolean; Tgt_Sz : Natural) is separate;
+     (Src_Sz : Cell_Count; Src_Signed : Boolean; Tgt_Sz : Cell_Count)
+   is separate;
 
    ------------------------------------------------------------------
    --  Call lowering. Arguments are evaluated to stack scratch slots in
@@ -64,7 +65,7 @@ is
    --  in x<target>. A #wild# arm always matches.
    ------------------------------------------------------------------
    --  Load a value of Sz cells from [x29, #Off] into w9 (zero-extended).
-   procedure Load_From_Frame (Off, Sz : Natural) is
+   procedure Load_From_Frame (Off, Sz : Cell_Count) is
       Loc : constant String := ", [x29, #" & Img (Off) & "]";
    begin
       if Sz >= 4 then
@@ -128,7 +129,7 @@ begin
             FN        : constant String  := SU.To_String (ST.Fn_Name);
             Idx       : constant Natural := ST.If_Idx;
             L_End     : constant String  := "Lblk_" & FN & "_" & Img (Idx);
-            Res_Off   : constant Natural := ST.Next_Offset;
+            Res_Off   : constant Cell_Count := ST.Next_Offset;
          begin
             ST.If_Idx := ST.If_Idx + 1;
             ST.Next_Offset := ST.Next_Offset + 8;   --  result slot
@@ -161,7 +162,7 @@ begin
             Idx     : constant Natural := ST.Loop_Idx;
             L_Top   : constant String  := "Lloop_" & FN & "_top_" & Img (Idx);
             L_End   : constant String  := "Lloop_" & FN & "_end_" & Img (Idx);
-            Res_Off : constant Natural := ST.Next_Offset;
+            Res_Off : constant Cell_Count := ST.Next_Offset;
             Entry_Len : constant Natural := Natural (ST.Bindings.Length);
          begin
             ST.Loop_Idx := ST.Loop_Idx + 1;
@@ -297,9 +298,9 @@ begin
                   --  no drop is owed on the temporary; this is not a
                   --  general temporary-drop mechanism.
                   declare
-                     Off : constant Natural :=
+                     Off : constant Cell_Count :=
                        Materialize_Composite (F, ST, Lit_Ty, E);
-                     Sz  : constant Natural := Sizeof (Lit_Ty);
+                     Sz  : constant Cell_Count := Sizeof (Lit_Ty);
                   begin
                      if Sz > 4 then
                         IO.Put_Line (F, "    ldr     " & Xreg & ", [x29, #"
@@ -411,7 +412,7 @@ begin
          Lower_Expr_Into_Reg (F, E.D_Inner, Target_Reg, ST);
          declare
             Inner_Ty : constant Type_Access := Type_Of_Expr (E.D_Inner, ST);
-            Sz       : Natural := 8;
+            Sz       : Cell_Count := 8;
             Guarded  : Boolean := False;
          begin
             if Is_Ref (Inner_Ty) then
@@ -496,7 +497,7 @@ begin
                   B     : constant Binding := ST.Bindings.Element (Idx);
                   FName : constant String  :=
                     SU.To_String (E.Rf_Place.F_Name);
-                  Off   : Natural;
+                  Off   : Cell_Count;
                begin
                   if B.Ty /= null and then B.Ty.Kind = T_Ref
                     and then B.Ty.Target /= null
@@ -549,7 +550,7 @@ begin
             Bi  : constant Natural := Find_Binding
               (ST, SU.To_String (Inner.Segments.Last_Element));
             B   : constant Binding := ST.Bindings.Element (Bi);
-            DS  : constant Natural := Kurt.Layout.Enum_Disc_Size (EN);
+            DS  : constant Cell_Count := Kurt.Layout.Enum_Disc_Size (EN);
             Succ_V : constant String :=
               Kurt.Layout.Contract_Success_Variant (EN);
             Succ_Disc : constant Long_Long_Integer :=
@@ -560,13 +561,13 @@ begin
               "Lq_" & FN_S & "_fail_" & Img (Idx);
             L_Done : constant String :=
               "Lq_" & FN_S & "_done_" & Img (Idx);
-            Pay_Off : constant Natural :=
+            Pay_Off : constant Cell_Count :=
               B.Offset + Kurt.Layout.Variant_Field_Offset
                            (Inner_Ty, Succ_V, 1);
             Pay_Ty  : constant Type_Access :=
               Kurt.Layout.Variant_Field_Type (Inner_Ty, Succ_V, 1);
-            Pay_Sz  : constant Natural := Sizeof (Pay_Ty);
-            Whole_Sz : constant Natural := Sizeof (Inner_Ty);
+            Pay_Sz  : constant Cell_Count := Sizeof (Pay_Ty);
+            Whole_Sz : constant Cell_Count := Sizeof (Inner_Ty);
             Loc_P : constant String :=
               ", [x29, #" & Img (Pay_Off) & "]";
             Loc_W : constant String :=
@@ -646,7 +647,7 @@ begin
                   Has_Pay : constant Boolean :=
                     not Is_Bool and then Kurt.Layout.Enum_Has_Payload
                       (SU.To_String (OT.Name));
-                  DSz : constant Natural :=
+                  DSz : constant Cell_Count :=
                     (if Is_Bool then 1
                      else Kurt.Layout.Enum_Disc_Size
                        (SU.To_String (OT.Name)));

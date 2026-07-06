@@ -1,5 +1,5 @@
 separate (Kurt.Layout)
-   function Size_Of (T : Kurt.Parser.Type_Access) return Natural is
+   function Size_Of (T : Kurt.Parser.Type_Access) return Cell_Count is
    begin
       if T = null then
          return 8;
@@ -9,10 +9,10 @@ separate (Kurt.Layout)
          --  the greatest value representable by `uaddr` ... shall not
          --  appear" — overflow in a size/offset computation is a
          --  translation failure at the point of declaration, not a
-         --  silent wraparound. `Natural` here is checked (not modular),
-         --  so an overflow raises Constraint_Error; the handler below
-         --  converts it to the proper diagnostic instead of letting it
-         --  escape as an uncaught "internal error".
+         --  silent wraparound. `Cell_Count` here is checked (not
+         --  modular), so an overflow raises Constraint_Error; the
+         --  handler below converts it to the proper diagnostic instead
+         --  of letting it escape as an uncaught "internal error".
          when T_Ref =>
             --  §9.5 / §4.6: a fat reference is two pointers — a reference
             --  to a trait object (ptr + dtable) or to a slice `[T]`
@@ -48,15 +48,15 @@ separate (Kurt.Layout)
          when T_Tuple =>
             --  §4.7 / §4.11: positional fields, KSA-packed.
             declare
-               Off : Natural := 0;
-               Aln : Natural := 1;
+               Off : Cell_Count := 0;
+               Aln : Cell_Count := 1;
             begin
                for I in T.Elems.First_Index .. T.Elems.Last_Index loop
                   declare
                      FT : constant Type_Access := T.Elems.Element (I);
                   begin
                      Off := Ceil (Off, Align_Of (FT)) + Size_Of (FT);
-                     Aln := Natural'Max (Aln, Align_Of (FT));
+                     Aln := Cell_Count'Max (Aln, Align_Of (FT));
                   end;
                end loop;
                return Ceil (Off, Aln);
@@ -87,12 +87,13 @@ separate (Kurt.Layout)
                   --  §4.5 verdict.<Ok, Err>: ui1 discriminant + the larger
                   --  payload, from the type arguments.
                   declare
-                     A   : constant Natural := Align_Of (T);
-                     POf : constant Natural := Ceil (1, A);
-                     PSz : Natural := 0;
+                     A   : constant Cell_Count := Align_Of (T);
+                     POf : constant Cell_Count := Ceil (1, A);
+                     PSz : Cell_Count := 0;
                   begin
                      for I in T.Args.First_Index .. T.Args.Last_Index loop
-                        PSz := Natural'Max (PSz, Size_Of (T.Args.Element (I)));
+                        PSz := Cell_Count'Max
+                          (PSz, Size_Of (T.Args.Element (I)));
                      end loop;
                      if PSz = 0 then
                         return Ceil (1, A);   --  e.g. verdict.<void, void>
@@ -106,8 +107,8 @@ separate (Kurt.Layout)
                   --  inter-field padding; §4.11.5 align(N) raises the
                   --  minimum alignment, which rounds the total size).
                   declare
-                     Off : Natural := 0;
-                     Aln : Natural := 1;
+                     Off : Cell_Count := 0;
+                     Aln : Cell_Count := 1;
                   begin
                      for I in D.Fields.First_Index .. D.Fields.Last_Index
                      loop
@@ -117,7 +118,7 @@ separate (Kurt.Layout)
                         begin
                            if not D.Repr_Packed then
                               Off := Ceil (Off, Align_Of (FT));
-                              Aln := Natural'Max (Aln, Align_Of (FT));
+                              Aln := Cell_Count'Max (Aln, Align_Of (FT));
                            end if;
                            Off := Off + Size_Of (FT);
                         end;
@@ -125,7 +126,7 @@ separate (Kurt.Layout)
                      if D.Repr_Packed then
                         Aln := 1;
                      end if;
-                     Aln := Natural'Max (Aln, D.Align_N);
+                     Aln := Cell_Count'Max (Aln, D.Align_N);
                      return Ceil (Off, Aln);
                   end;
                else

@@ -40,7 +40,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                           "codegen: unknown binding '" & Name & "'";
                      end if;
                      declare
-                        Sz  : constant Natural :=
+                        Sz  : constant Cell_Count :=
                           Sizeof (Unit_Statics.Element (SI).Ty);
                         Lbl : constant String := "_Kst_" & Name;
                      begin
@@ -67,7 +67,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                end if;
                declare
                   B   : constant Binding := ST.Bindings.Element (Idx);
-                  Sz  : constant Natural := Sizeof (B.Ty);
+                  Sz  : constant Cell_Count := Sizeof (B.Ty);
                   Loc : constant String :=
                     ", [x29, #" & Img (B.Offset) & "]";
                begin

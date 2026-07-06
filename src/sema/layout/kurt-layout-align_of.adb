@@ -1,5 +1,5 @@
 separate (Kurt.Layout)
-   function Align_Of (T : Kurt.Parser.Type_Access) return Natural is
+   function Align_Of (T : Kurt.Parser.Type_Access) return Cell_Count is
    begin
       if T = null then
          return 8;
@@ -19,10 +19,10 @@ separate (Kurt.Layout)
             return 8;
          when T_Tuple =>
             declare
-               A : Natural := 1;
+               A : Cell_Count := 1;
             begin
                for I in T.Elems.First_Index .. T.Elems.Last_Index loop
-                  A := Natural'Max (A, Align_Of (T.Elems.Element (I)));
+                  A := Cell_Count'Max (A, Align_Of (T.Elems.Element (I)));
                end loop;
                --  §4.2: a type whose size is zero has alignment zero.
                if Size_Of (T) = 0 then
@@ -39,10 +39,11 @@ separate (Kurt.Layout)
                   --  §4.5: max of the discriminant (1) and the alignments of
                   --  the payload element types.
                   declare
-                     A : Natural := 1;
+                     A : Cell_Count := 1;
                   begin
                      for I in T.Args.First_Index .. T.Args.Last_Index loop
-                        A := Natural'Max (A, Align_Of (T.Args.Element (I)));
+                        A := Cell_Count'Max
+                          (A, Align_Of (T.Args.Element (I)));
                      end loop;
                      return A;
                   end;
@@ -53,19 +54,19 @@ separate (Kurt.Layout)
                      return 0;
                   end if;
                   declare
-                     A : Natural := 1;
+                     A : Cell_Count := 1;
                   begin
                      --  §4.11.4: a packed struct has alignment 1.
                      if not D.Repr_Packed then
                         for I in D.Fields.First_Index ..
                                  D.Fields.Last_Index
                         loop
-                           A := Natural'Max
+                           A := Cell_Count'Max
                              (A, Align_Of (D.Fields.Element (I).Ty));
                         end loop;
                      end if;
                      --  §4.11.5: align(N) raises the minimum alignment.
-                     return Natural'Max (A, D.Align_N);
+                     return Cell_Count'Max (A, D.Align_N);
                   end;
                elsif Is_Enum (N) then
                   --  §4.2: zero size (e.g. a single empty variant with a

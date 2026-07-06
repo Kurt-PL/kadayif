@@ -1,6 +1,6 @@
 separate (Kurt.Codegen.Lower_Stmt)
    procedure Store_Tuple_Init
-     (Off : Natural; Tup : Type_Access; Init : Expr_Access)
+     (Off : Cell_Count; Tup : Type_Access; Init : Expr_Access)
    is
    begin
       if Init.Kind = E_Tuple_Lit then

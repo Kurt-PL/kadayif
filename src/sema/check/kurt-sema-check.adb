@@ -608,14 +608,14 @@ separate (Kurt.Sema)
       for I in U.Structs.First_Index .. U.Structs.Last_Index loop
          declare
             D : constant Kurt.Parser.Struct_Decl := U.Structs.Element (I);
-            M : Natural := D.Align_N;
+            M : Cell_Count := D.Align_N;
          begin
             while M > 1 and then M mod 2 = 0 loop
                M := M / 2;
             end loop;
             if D.Align_N > 0 and then M /= 1 then
                Error ("struct '" & SU.To_String (D.Name)
-                      & "': align(" & Natural'Image (D.Align_N)
+                      & "': align(" & Cell_Count'Image (D.Align_N)
                       & " ) shall be a power of two (spec 4.11.5)");
             end if;
 

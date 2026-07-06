@@ -1,0 +1,17 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §4.7: layouts past 2**31 cells are representable (uaddr is 64-bit).
+struct wide {
+    pad:  [ui1; 3_000_000_000],
+    tail: ui4,
+}
+
+type big = [ui4; 2_000_000_000];   // 8_000_000_000 cells
+
+fn main() -> ui1 {
+    airside {
+        posix::printf("ws=%lu off=%lu bs=%lu\n\0".ptr,
+                      wide@size, wide@offset(tail), big@size);
+    }
+    return 0;
+}
