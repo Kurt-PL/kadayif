@@ -10,6 +10,8 @@ separate (Kurt.Parser)
       end if;
       Expect (C, Kw_Trait, "'trait'");
       D.Name := Take_Ident (C, "trait name");
+      --  §9.3 generic trait `trait Foo.<T, ...> { ... }`.
+      Parse_Opt_Generic_Params_Bounded (C, D.Generic_Params);
       --  §9.3.3 supertrait bounds: `with { selftype: Bar + Baz }`.
       if C.Cur.Kind = Kw_With then
          Advance (C);

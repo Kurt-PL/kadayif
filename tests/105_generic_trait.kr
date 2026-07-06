@@ -1,0 +1,39 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.3 generic traits: one template, distinct concrete instances per
+// argument list; usable as an impl target and as a generic bound.
+
+trait Emit.<T> {
+    fn give(&self) -> T;
+}
+
+struct a4 { v: si4 }
+struct b1 { v: ui1 }
+struct c4 { w: si4 }
+
+impl a4 as Emit.<si4> {
+    fn give(&self) -> si4 { return self.v * 2; }
+}
+impl b1 as Emit.<ui1> {
+    fn give(&self) -> ui1 { return self.v + 1; }
+}
+impl c4 as Emit.<si4> {
+    fn give(&self) -> si4 { return self.w + 100; }
+}
+
+// a concrete generic-trait instance as a bound; method resolved via it.
+fn total.<U: Emit.<si4>>(x: &U) -> si4 {
+    return x.give();
+}
+
+fn main() -> ui1 {
+    let a = a4 { v = 21 };
+    let b = b1 { v = 8 };
+    let c = c4 { w = 5 };
+    airside {
+        posix::printf("%d %u %d\n\0".ptr,
+                      total.<a4>(&a), b.give(), total.<c4>(&c));
+        // 42 9 105
+    }
+    return 0;
+}

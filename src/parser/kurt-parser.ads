@@ -627,9 +627,19 @@ package Kurt.Parser is
    --  §5.9 generic parameter with optional builtin bounds, e.g.
    --  `.<T: numeric, U>`. An empty Bounds vector is an unconstrained
    --  parameter — an opaque layout under the type-erasure semantics.
+   --  Per-bound generic arguments (`U: Pair.<si4>`): one (possibly
+   --  empty) type-argument list per entry of Bounds. Rewritten by
+   --  Kurt.Mono to the mangled concrete trait name + an empty list.
+   package Type_List_Vectors is new Ada.Containers.Vectors
+     (Index_Type   => Positive,
+      Element_Type => Type_Vectors.Vector,
+      "="          => Type_Vectors."=");
+
    type Generic_Param is record
       Name   : SU.Unbounded_String;
       Bounds : Path_Segments.Vector;
+      --  Parallel to Bounds; a missing/short entry means no arguments.
+      Bound_Args : Type_List_Vectors.Vector;
    end record;
 
    package Generic_Param_Vectors is new Ada.Containers.Vectors
@@ -841,6 +851,10 @@ package Kurt.Parser is
    type Trait_Decl is record
       Name        : SU.Unbounded_String;
       Is_Pub      : Boolean := False;   --  §10.3
+      --  §9.3 generic trait `trait Foo.<T> { ... }`. A nonempty list makes
+      --  this a template: Kurt.Mono lifts it and instantiates one concrete
+      --  Trait_Decl per distinct argument list (mangled `Foo$si4`).
+      Generic_Params : Generic_Param_Vectors.Vector;
 
       Methods     : Trait_Method_Vectors.Vector;
       Consts      : Assoc_Const_Vectors.Vector;
@@ -859,6 +873,10 @@ package Kurt.Parser is
    type Trait_Impl is record
       Ty_Name    : SU.Unbounded_String;
       Trait_Name : SU.Unbounded_String;
+      --  §9.4 generic-trait target `impl X as Foo.<si4>`: the written
+      --  type arguments. Kurt.Mono rewrites Trait_Name to the mangled
+      --  instance and clears this.
+      Trait_Args : Type_Vectors.Vector;
       Methods    : Path_Segments.Vector;  --  method names provided
       Consts     : Assoc_Const_Vectors.Vector;  --  associated-const values
       Assoc_Types : Assoc_Type_Vectors.Vector;  --  §9.3.1 `type Item = C;`
@@ -945,6 +963,9 @@ package Kurt.Parser is
       --  concrete/generated declarations stay in Structs/Enums.
       Gen_Structs : Struct_Vectors.Vector;
       Gen_Enums   : Enum_Vectors.Vector;
+      --  §9.3 generic trait templates, lifted out of Traits by Kurt.Mono
+      --  exactly like Gen_Structs/Gen_Enums.
+      Gen_Traits : Trait_Vectors.Vector;
       --  §9.8.5 deferred destruct-family bound obligations (see
       --  Bound_Check above); appended by Kurt.Mono, validated by
       --  Kurt.Sema.

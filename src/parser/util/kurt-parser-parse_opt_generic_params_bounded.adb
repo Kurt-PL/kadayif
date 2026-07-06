@@ -41,8 +41,16 @@ separate (Kurt.Parser)
                            end if;
                            P.Bounds.Append
                              (SU.To_Unbounded_String ("!destruct"));
+                           P.Bound_Args.Append (Type_Vectors.Empty_Vector);
                         else
                            P.Bounds.Append (Take_Word (C, "bound name"));
+                           --  §9.3 generic-trait bound `U: Pair.<si4>`.
+                           declare
+                              BA : Type_Vectors.Vector;
+                           begin
+                              Parse_Opt_Type_Args (C, BA);
+                              P.Bound_Args.Append (BA);
+                           end;
                         end if;
                         exit when C.Cur.Kind /= Op_Plus;
                         Advance (C);

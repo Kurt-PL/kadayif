@@ -42,6 +42,21 @@ separate (Kurt.Mono)
          return False;
       end Find_Gen_Enum;
 
+      --  §9.3 generic trait templates (lifted below, like Gen_Structs).
+      Gen_Traits : Trait_Vectors.Vector;
+
+      function Find_Gen_Trait (Name : String; D : out Trait_Decl)
+         return Boolean is
+      begin
+         for I in Gen_Traits.First_Index .. Gen_Traits.Last_Index loop
+            if SU.To_String (Gen_Traits.Element (I).Name) = Name then
+               D := Gen_Traits.Element (I);
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Find_Gen_Trait;
+
       --  §5.9 fn templates live in U.Gen_Fns (lifted below); the sema
       --  pass checks them once under type erasure.
       function Find_Gen_Fn (Name : String; D : out Fn_Decl)
@@ -135,6 +150,211 @@ separate (Kurt.Mono)
       --  Visit a type: generate instances for any generic application and
       --  rewrite the node in place to the mangled concrete name.
       procedure Visit_Type (T : Type_Access) is separate;
+
+      --  §9.3 generate the concrete trait declaration for one instance of
+      --  a generic trait (`Pair.<si4>` -> trait `Pair$si4`), substituting
+      --  the type arguments through method signatures, default bodies,
+      --  associated consts/types. Returns the mangled name.
+      function Ensure_Trait_Instance
+        (Orig : String; Args : Type_Vectors.Vector) return String
+      is
+         Key : constant Type_Access := new AST_Type (Kind => T_Named);
+         TD  : Trait_Decl;
+      begin
+         Key.Name := SU.To_Unbounded_String (Orig);
+         Key.Args := Args;
+         declare
+            Mangled : constant String := Mangle (Key);
+         begin
+            if Already_Generated (Mangled) then
+               return Mangled;
+            end if;
+            if not Find_Gen_Trait (Orig, TD) then
+               raise Mono_Error with
+                 "instantiation of unknown generic trait '" & Orig & "'";
+            end if;
+            if Natural (TD.Generic_Params.Length) /= Natural (Args.Length)
+            then
+               raise Mono_Error with
+                 "wrong number of type arguments for trait '" & Orig & "'";
+            end if;
+            Generated.Append (SU.To_Unbounded_String (Mangled));
+            Record_Bound_Checks (TD.Generic_Params, Args, Orig);
+            declare
+               PNames : Path_Segments.Vector;
+               New_D  : Trait_Decl;
+            begin
+               for I in TD.Generic_Params.First_Index ..
+                        TD.Generic_Params.Last_Index
+               loop
+                  PNames.Append (TD.Generic_Params.Element (I).Name);
+               end loop;
+               New_D.Name        := SU.To_Unbounded_String (Mangled);
+               New_D.Is_Pub      := TD.Is_Pub;
+               New_D.Supertraits := TD.Supertraits;
+               for I in TD.Methods.First_Index .. TD.Methods.Last_Index
+               loop
+                  declare
+                     M  : constant Trait_Method := TD.Methods.Element (I);
+                     NM : Trait_Method;
+                  begin
+                     NM.Sig := M.Sig;
+                     NM.Sig.Params.Clear;
+                     for K in M.Sig.Params.First_Index ..
+                              M.Sig.Params.Last_Index
+                     loop
+                        NM.Sig.Params.Append
+                          ((Name => M.Sig.Params.Element (K).Name,
+                            Ty   => Subst (M.Sig.Params.Element (K).Ty,
+                                           PNames, Args),
+                            Is_Mut => M.Sig.Params.Element (K).Is_Mut));
+                     end loop;
+                     NM.Sig.Return_Type :=
+                       Subst (M.Sig.Return_Type, PNames, Args);
+                     NM.Has_Body := M.Has_Body;
+                     if M.Has_Body then
+                        NM.Body_Stmts :=
+                          Copy_Block (M.Body_Stmts, PNames, Args);
+                     end if;
+                     New_D.Methods.Append (NM);
+                  end;
+               end loop;
+               for I in TD.Consts.First_Index .. TD.Consts.Last_Index loop
+                  New_D.Consts.Append
+                    ((Name    => TD.Consts.Element (I).Name,
+                      Ty      => Subst (TD.Consts.Element (I).Ty,
+                                        PNames, Args),
+                      Val     => Copy_Expr (TD.Consts.Element (I).Val,
+                                            PNames, Args),
+                      Has_Val => TD.Consts.Element (I).Has_Val));
+               end loop;
+               for I in TD.Assoc_Types.First_Index ..
+                        TD.Assoc_Types.Last_Index
+               loop
+                  New_D.Assoc_Types.Append
+                    ((Name => TD.Assoc_Types.Element (I).Name,
+                      Ty   => Subst (TD.Assoc_Types.Element (I).Ty,
+                                     PNames, Args)));
+               end loop;
+               U.Traits.Append (New_D);
+            end;
+            return Mangled;
+         end;
+      end Ensure_Trait_Instance;
+
+      --  Rewrite one written generic-trait reference (name + argument
+      --  list) to its mangled concrete instance, instantiating it on
+      --  first sight. No-op when Args is empty (a plain trait name).
+      procedure Rewrite_Trait_Ref
+        (Name : in out SU.Unbounded_String;
+         Args : in out Type_Vectors.Vector)
+      is
+      begin
+         if Args.Is_Empty then
+            return;
+         end if;
+         for I in Args.First_Index .. Args.Last_Index loop
+            Visit_Type (Args.Element (I));
+         end loop;
+         Name := SU.To_Unbounded_String
+           (Ensure_Trait_Instance (SU.To_String (Name), Args));
+         Args.Clear;
+      end Rewrite_Trait_Ref;
+
+      --  Whether type T mentions any of the names in Params (a generic
+      --  parameter of the enclosing template) — such a bound argument
+      --  cannot be resolved to a concrete trait instance here.
+      function Mentions_Param
+        (T : Type_Access; Params : Generic_Param_Vectors.Vector)
+         return Boolean
+      is
+      begin
+         if T = null then
+            return False;
+         end if;
+         case T.Kind is
+            when T_Named =>
+               for P of Params loop
+                  if SU.To_String (P.Name) = SU.To_String (T.Name) then
+                     return True;
+                  end if;
+               end loop;
+               for A of T.Args loop
+                  if Mentions_Param (A, Params) then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            when T_Ref =>
+               return Mentions_Param (T.Target, Params);
+            when T_Array =>
+               return Mentions_Param (T.Elem, Params);
+            when T_Tuple =>
+               for A of T.Elems loop
+                  if Mentions_Param (A, Params) then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            when T_Dyn =>
+               return False;
+            when T_Fn =>
+               for A of T.Fn_Params loop
+                  if Mentions_Param (A, Params) then
+                     return True;
+                  end if;
+               end loop;
+               return Mentions_Param (T.Fn_Ret, Params);
+         end case;
+      end Mentions_Param;
+
+      --  §9.3 rewrite every generic-trait bound (`U: Pair.<si4>`) in a
+      --  generic parameter list to its concrete instance. Bound arguments
+      --  that mention a parameter of the same list (`U: Pair.<A>`) are a
+      --  documented bootstrap cut.
+      procedure Rewrite_Param_Bounds
+        (Params : in out Generic_Param_Vectors.Vector; Ctx : String)
+      is
+      begin
+         for K in Params.First_Index .. Params.Last_Index loop
+            declare
+               P : Generic_Param := Params.Element (K);
+               Changed : Boolean := False;
+            begin
+               for J in P.Bound_Args.First_Index ..
+                        P.Bound_Args.Last_Index
+               loop
+                  if not P.Bound_Args.Element (J).Is_Empty then
+                     declare
+                        BA : Type_Vectors.Vector :=
+                          P.Bound_Args.Element (J);
+                        BN : SU.Unbounded_String :=
+                          P.Bounds.Element (J);
+                     begin
+                        for A of BA loop
+                           if Mentions_Param (A, Params) then
+                              raise Mono_Error with
+                                "not yet supported: a generic-trait bound "
+                                & "whose arguments mention a generic "
+                                & "parameter (`"
+                                & SU.To_String (P.Name) & ": "
+                                & SU.To_String (BN) & ".<...>` of '"
+                                & Ctx & "')";
+                           end if;
+                        end loop;
+                        Rewrite_Trait_Ref (BN, BA);
+                        P.Bounds.Replace_Element (J, BN);
+                        P.Bound_Args.Replace_Element (J, BA);
+                        Changed := True;
+                     end;
+                  end if;
+               end loop;
+               if Changed then
+                  Params.Replace_Element (K, P);
+               end if;
+            end;
+         end loop;
+      end Rewrite_Param_Bounds;
 
       procedure Visit_Stmt (S : Stmt_Access);
       procedure Visit_Expr (E : Expr_Access);
@@ -367,6 +587,21 @@ separate (Kurt.Mono)
          end;
       end loop;
 
+      --  §9.3 lift generic trait templates; concrete traits stay.
+      declare
+         Keep_T : Trait_Vectors.Vector;
+      begin
+         for I in U.Traits.First_Index .. U.Traits.Last_Index loop
+            if U.Traits.Element (I).Generic_Params.Is_Empty then
+               Keep_T.Append (U.Traits.Element (I));
+            else
+               Gen_Traits.Append (U.Traits.Element (I));
+               U.Gen_Traits.Append (U.Traits.Element (I));
+            end if;
+         end loop;
+         U.Traits := Keep_T;
+      end;
+
       --  Lift generic templates out of U; keep only concrete declarations.
       declare
          Keep_S : Struct_Vectors.Vector;
@@ -416,6 +651,113 @@ separate (Kurt.Mono)
          end loop;
          U.Fns := Keep_F;
       end;
+
+      --  §9.3 resolve written generic-trait references to concrete trait
+      --  instances: impl targets first (also renaming the impl's lowered
+      --  `Type$Trait$method` symbols), then the bounds on every lifted
+      --  template's generic parameter list.
+      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+         declare
+            TI : Trait_Impl := U.Trait_Impls.Element (I);
+         begin
+            if not TI.Trait_Args.Is_Empty then
+               declare
+                  Old : constant String := SU.To_String (TI.Trait_Name);
+               begin
+                  Rewrite_Trait_Ref (TI.Trait_Name, TI.Trait_Args);
+                  declare
+                     Pre_Old : constant String :=
+                       SU.To_String (TI.Ty_Name) & "$" & Old & "$";
+                     Pre_New : constant String :=
+                       SU.To_String (TI.Ty_Name) & "$"
+                       & SU.To_String (TI.Trait_Name) & "$";
+                  begin
+                     for F in U.Fns.First_Index .. U.Fns.Last_Index loop
+                        declare
+                           Nm : constant String :=
+                             SU.To_String (U.Fns.Element (F).Header.Name);
+                        begin
+                           if Nm'Length > Pre_Old'Length
+                             and then Nm (Nm'First ..
+                                          Nm'First + Pre_Old'Length - 1)
+                                        = Pre_Old
+                           then
+                              declare
+                                 Fn : Fn_Decl := U.Fns.Element (F);
+                              begin
+                                 Fn.Header.Name := SU.To_Unbounded_String
+                                   (Pre_New
+                                    & Nm (Nm'First + Pre_Old'Length ..
+                                          Nm'Last));
+                                 U.Fns.Replace_Element (F, Fn);
+                              end;
+                           end if;
+                        end;
+                     end loop;
+                     for G in U.Gen_Methods.First_Index ..
+                              U.Gen_Methods.Last_Index
+                     loop
+                        declare
+                           GM : Gen_Method := U.Gen_Methods.Element (G);
+                        begin
+                           if SU.To_String (GM.Owner)
+                                = SU.To_String (TI.Ty_Name)
+                             and then SU.To_String (GM.Trait_Name) = Old
+                           then
+                              GM.Trait_Name := TI.Trait_Name;
+                              U.Gen_Methods.Replace_Element (G, GM);
+                           end if;
+                        end;
+                     end loop;
+                  end;
+                  U.Trait_Impls.Replace_Element (I, TI);
+               end;
+            end if;
+         end;
+      end loop;
+
+      for I in U.Gen_Fns.First_Index .. U.Gen_Fns.Last_Index loop
+         declare
+            Fn : Fn_Decl := U.Gen_Fns.Element (I);
+         begin
+            if not Fn.Header.Generic_Params.Is_Empty then
+               Rewrite_Param_Bounds
+                 (Fn.Header.Generic_Params,
+                  SU.To_String (Fn.Header.Name));
+               U.Gen_Fns.Replace_Element (I, Fn);
+            end if;
+         end;
+      end loop;
+      for I in Gen_Structs.First_Index .. Gen_Structs.Last_Index loop
+         declare
+            D : Struct_Decl := Gen_Structs.Element (I);
+         begin
+            Rewrite_Param_Bounds
+              (D.Generic_Params, SU.To_String (D.Name));
+            Gen_Structs.Replace_Element (I, D);
+         end;
+      end loop;
+      U.Gen_Structs := Gen_Structs;
+      for I in Gen_Enums.First_Index .. Gen_Enums.Last_Index loop
+         declare
+            D : Enum_Decl := Gen_Enums.Element (I);
+         begin
+            Rewrite_Param_Bounds
+              (D.Generic_Params, SU.To_String (D.Name));
+            Gen_Enums.Replace_Element (I, D);
+         end;
+      end loop;
+      U.Gen_Enums := Gen_Enums;
+      for I in U.Gen_Methods.First_Index .. U.Gen_Methods.Last_Index loop
+         declare
+            GM : Gen_Method := U.Gen_Methods.Element (I);
+         begin
+            Rewrite_Param_Bounds
+              (GM.Gen_Params,
+               "impl of '" & SU.To_String (GM.Owner) & "'");
+            U.Gen_Methods.Replace_Element (I, GM);
+         end;
+      end loop;
 
       --  Walk every type annotation in the unit and instantiate.
       for I in U.Fns.First_Index .. U.Fns.Last_Index loop

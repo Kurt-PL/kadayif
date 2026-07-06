@@ -123,8 +123,15 @@ separate (Kurt.Parser)
                         end if;
                         P.Bounds.Append
                           (SU.To_Unbounded_String ("!destruct"));
+                        P.Bound_Args.Append (Type_Vectors.Empty_Vector);
                      else
                         P.Bounds.Append (Take_Ident (C, "bound name"));
+                        declare
+                           BA : Type_Vectors.Vector;
+                        begin
+                           Parse_Opt_Type_Args (C, BA);
+                           P.Bound_Args.Append (BA);
+                        end;
                      end if;
                      exit when C.Cur.Kind /= Op_Plus;
                      Advance (C);
@@ -187,6 +194,8 @@ separate (Kurt.Parser)
       if C.Cur.Kind = Kw_As then
          Advance (C);
          TI.Trait_Name := Take_Ident (C, "trait name");
+         --  §9.4 generic-trait target `impl X as Foo.<si4>`.
+         Parse_Opt_Type_Args (C, TI.Trait_Args);
          --  A trait may carry its own generic clause `as Trait.<...>`.
          declare
             Dummy : Generic_Param_Vectors.Vector;

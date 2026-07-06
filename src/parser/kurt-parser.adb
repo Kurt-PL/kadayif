@@ -252,6 +252,33 @@ package body Kurt.Parser is
 
    function Parse_Type (C : in out Cursor) return Type_Access is separate;
 
+   --  Optional `.< T, ... >` type-argument list (e.g. after a generic
+   --  trait name in an impl target or a bound). Leaves Args unchanged
+   --  when no `.<` follows.
+   procedure Parse_Opt_Type_Args
+     (C : in out Cursor; Args : in out Type_Vectors.Vector)
+   is
+   begin
+      if C.Cur.Kind /= Punct_Dot
+        or else Peek_Tok (C).Kind /= Op_Lt
+      then
+         return;
+      end if;
+      Advance (C);   --  '.'
+      Advance (C);   --  '<'
+      Split_Shr_If_Present (C);
+      if C.Cur.Kind /= Op_Gt then
+         loop
+            Args.Append (Parse_Type (C));
+            exit when C.Cur.Kind /= Punct_Comma;
+            Advance (C);
+            Split_Shr_If_Present (C);
+            exit when C.Cur.Kind = Op_Gt;
+         end loop;
+      end if;
+      Expect (C, Op_Gt, "'>' to close generic arguments");
+   end Parse_Opt_Type_Args;
+
    --  Optional generic parameter clause on a subroutine (§5.9):
    --  `.< T [: bound { '+' bound }], ... >`. Bounds are builtin bound
    --  names (§9.8) recorded for the type-erasure check in Kurt.Sema.
