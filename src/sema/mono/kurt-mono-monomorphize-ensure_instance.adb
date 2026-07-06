@@ -15,6 +15,7 @@ separate (Kurt.Mono.Monomorphize)
             raise Mono_Error with
               "wrong number of type arguments for '" & Orig & "'";
          end if;
+         Record_Bound_Checks (SD.Generic_Params, Inst.Args, Orig);
          declare
             New_D  : Struct_Decl;
             --  §5.9: Subst/Copy_Expr substitute by name; strip the
@@ -49,6 +50,7 @@ separate (Kurt.Mono.Monomorphize)
             raise Mono_Error with
               "wrong number of type arguments for '" & Orig & "'";
          end if;
+         Record_Bound_Checks (ED.Generic_Params, Inst.Args, Orig);
          declare
             New_D  : Enum_Decl;
             --  §5.9: see the analogous PNames extraction for structs above.

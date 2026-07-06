@@ -97,6 +97,38 @@ separate (Kurt.Mono)
          end case;
       end Subst_Self_Name;
 
+      --  §9.8.5 destruct-family bounds cannot be validated here (the
+      --  layout model that answers Satisfies_Destruct is registered only
+      --  after monomorphisation), so each obligation is recorded on the
+      --  unit for Kurt.Sema to validate.
+      procedure Record_Bound_Checks
+        (Params : Generic_Param_Vectors.Vector;
+         Args   : Type_Vectors.Vector;
+         Ctx    : String)
+      is
+      begin
+         for I in Params.First_Index .. Params.Last_Index loop
+            for J in Params.Element (I).Bounds.First_Index ..
+                     Params.Element (I).Bounds.Last_Index
+            loop
+               declare
+                  B : constant String :=
+                    SU.To_String (Params.Element (I).Bounds.Element (J));
+               begin
+                  if B = "destruct" or else B = "!destruct" then
+                     U.Bound_Checks.Append
+                       ((Bound => SU.To_Unbounded_String (B),
+                         Ty    => Args.Element
+                                    (Args.First_Index
+                                     + (I - Params.First_Index)),
+                         Param => Params.Element (I).Name,
+                         Ctx   => SU.To_Unbounded_String (Ctx)));
+                  end if;
+               end;
+            end loop;
+         end loop;
+      end Record_Bound_Checks;
+
       --  Generate the concrete declaration for one instance, if needed.
       procedure Ensure_Instance (Inst : Type_Access; Mangled : String) is separate;
 

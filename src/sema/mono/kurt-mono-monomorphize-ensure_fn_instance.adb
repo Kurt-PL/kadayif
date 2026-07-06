@@ -24,6 +24,8 @@ separate (Kurt.Mono.Monomorphize)
             raise Mono_Error with
               "wrong number of type arguments for '" & Orig & "'";
          end if;
+         Record_Bound_Checks
+           (TD.Header.Generic_Params, Type_Args, Orig);
          --  Mark first: a recursive generic fn instantiates itself.
          Generated.Append (SU.To_Unbounded_String (Mangled));
 

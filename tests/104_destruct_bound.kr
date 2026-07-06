@@ -1,0 +1,26 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §9.8.5 destruct-family bounds: `T: !destruct` admits only copyable
+// types; `T: destruct` admits only destruct-satisfying ones (and the
+// template body may then transfer/destruct the value).
+
+struct res { id: si4 } with destruct { };
+
+fn twice.<T: !destruct>(v: T) -> .{T, T} {
+    return .{ v, v };   // T is copyable here
+}
+
+fn consume.<T: destruct>(v: T) -> si4 {
+    destruct(v);        // T satisfies destruct here
+    return 1;
+}
+
+fn main() -> ui1 {
+    let d: .{si4, si4} = twice.<si4>(21);
+    let g = res { id = 7 };
+    let b = consume.<res>(g);
+    airside {
+        posix::printf("%d %d %d\n\0".ptr, d.0, d.1, b);   // 21 21 1
+    }
+    return 0;
+}

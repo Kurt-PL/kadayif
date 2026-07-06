@@ -111,7 +111,21 @@ separate (Kurt.Parser)
                if C.Cur.Kind = Punct_Colon then
                   Advance (C);
                   loop
-                     P.Bounds.Append (Take_Ident (C, "bound name"));
+                     if C.Cur.Kind = Op_Bang then
+                        Advance (C);
+                        if SU.To_String
+                             (Take_Ident (C, "bound name")) /= "destruct"
+                        then
+                           raise Syntax_Error with
+                             "only `destruct` has a negative bound form "
+                             & "(`!destruct`, spec 9.8.5) at line"
+                             & Positive'Image (C.Cur.Line);
+                        end if;
+                        P.Bounds.Append
+                          (SU.To_Unbounded_String ("!destruct"));
+                     else
+                        P.Bounds.Append (Take_Ident (C, "bound name"));
+                     end if;
                      exit when C.Cur.Kind /= Op_Plus;
                      Advance (C);
                   end loop;

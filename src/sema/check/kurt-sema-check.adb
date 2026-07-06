@@ -173,8 +173,29 @@ separate (Kurt.Sema)
 
       --  §8.11.1 destruct-satisfaction (declared + propagation) is computed
       --  once in Kurt.Layout, which holds the unit's struct/enum decls.
-      function Satisfies_Destruct (T : Type_Access) return Boolean
-        renames Kurt.Layout.Satisfies_Destruct;
+      --  §9.8.5 type-erasure view of `destruct`: inside a generic
+      --  template a parameter satisfies `destruct` exactly when its
+      --  bounds say so (`T: destruct`); `T: !destruct` and unbounded
+      --  parameters are treated as copyable. A concrete type defers to
+      --  the layout model.
+      function Satisfies_Destruct (T : Type_Access) return Boolean is
+      begin
+         if T /= null and then T.Kind = T_Named
+           and then T.Args.Is_Empty
+         then
+            for G of Cur_Generics loop
+               if SU.To_String (G.Name) = SU.To_String (T.Name) then
+                  for B of G.Bounds loop
+                     if SU.To_String (B) = "destruct" then
+                        return True;
+                     end if;
+                  end loop;
+                  return False;
+               end if;
+            end loop;
+         end if;
+         return Kurt.Layout.Satisfies_Destruct (T);
+      end Satisfies_Destruct;
 
       function Is_Moved (Name : String) return Boolean is
       begin
@@ -601,6 +622,29 @@ separate (Kurt.Sema)
          end;
       end loop;
 
+      --  §9.8.5 destruct-family bound obligations deferred by Kurt.Mono:
+      --  `T: destruct` rejects a non-destruct argument, `T: !destruct`
+      --  rejects a destruct-satisfying one.
+      for BC of U.Bound_Checks loop
+         declare
+            Sat : constant Boolean :=
+              Kurt.Layout.Satisfies_Destruct (BC.Ty);
+            B   : constant String := SU.To_String (BC.Bound);
+         begin
+            if B = "destruct" and then not Sat then
+               Error ("type '" & Image (BC.Ty) & "' does not satisfy "
+                      & "`destruct`, required by parameter '"
+                      & SU.To_String (BC.Param) & "' of '"
+                      & SU.To_String (BC.Ctx) & "' (spec 9.8.5)");
+            elsif B = "!destruct" and then Sat then
+               Error ("type '" & Image (BC.Ty) & "' satisfies `destruct` "
+                      & "but parameter '" & SU.To_String (BC.Param)
+                      & "' of '" & SU.To_String (BC.Ctx)
+                      & "' requires `!destruct` (spec 9.8.5)");
+            end if;
+         end;
+      end loop;
+
       --  §4.11.3: validate enum discriminant declarations. `with
       --  discrim(T)` shall name an integer type and every declared
       --  value shall fit in T; violations are translation failures.
@@ -736,6 +780,28 @@ separate (Kurt.Sema)
       --  invocation — a bare `e.m()` with two providers is the TF, and
       --  `(e as Trait).m()` always disambiguates. Both are handled at the call
       --  site (see Resolve_Item_Symbol), so no declaration-time check here.
+
+      --  §9.4.1 orphan rule: a trait implementation is permitted only when
+      --  the trait declaration or the implementing type declaration is in
+      --  the current translation unit. Kadayif translates one unit per run
+      --  (`@add` merges into it), so the only reachable violation is an
+      --  `impl ... as Trait` naming a trait this unit never declares --
+      --  which is simultaneously a name-resolution failure. Rejecting it
+      --  here enforces both readings.
+      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+         declare
+            Tr : constant String :=
+              SU.To_String (U.Trait_Impls.Element (I).Trait_Name);
+         begin
+            if Tr'Length > 0 and then not Is_Trait_Name (Tr) then
+               Error ("`impl "
+                      & SU.To_String (U.Trait_Impls.Element (I).Ty_Name)
+                      & " as " & Tr & "`: no trait named '" & Tr
+                      & "' is declared in this translation unit "
+                      & "(spec 9.4.1)");
+            end if;
+         end;
+      end loop;
 
       --  §9.4.2 duplicate detection: a type shall implement a given trait at
       --  most once within the translation unit.

@@ -906,6 +906,21 @@ package Kurt.Parser is
    package Static_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Static_Decl);
 
+   --  §9.8.5 a deferred `destruct` / `!destruct` bound obligation: at
+   --  instantiation time Kurt.Mono cannot yet consult the layout model
+   --  (Kurt.Layout.Register runs after it), so each destruct-family bound
+   --  on a generic parameter is recorded against the concrete argument
+   --  and validated by Kurt.Sema once the unit is registered.
+   type Bound_Check is record
+      Bound : SU.Unbounded_String;   --  "destruct" or "!destruct"
+      Ty    : Type_Access;           --  the concrete type argument
+      Param : SU.Unbounded_String;   --  the generic parameter's name
+      Ctx   : SU.Unbounded_String;   --  the instantiated template's name
+   end record;
+
+   package Bound_Check_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Bound_Check);
+
    type Translation_Unit is record
       Fns        : Fn_Vectors.Vector;
       Dyns       : Dyn_Vectors.Vector;
@@ -930,6 +945,10 @@ package Kurt.Parser is
       --  concrete/generated declarations stay in Structs/Enums.
       Gen_Structs : Struct_Vectors.Vector;
       Gen_Enums   : Enum_Vectors.Vector;
+      --  §9.8.5 deferred destruct-family bound obligations (see
+      --  Bound_Check above); appended by Kurt.Mono, validated by
+      --  Kurt.Sema.
+      Bound_Checks : Bound_Check_Vectors.Vector;
       --  §7.10.1 the single `@trap { ... }` handler for this translation
       --  unit, if one is declared. At most one is permitted.
       Has_Trap_Handler : Boolean := False;

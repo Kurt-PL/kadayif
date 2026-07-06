@@ -27,8 +27,23 @@ separate (Kurt.Parser)
                         --  §9.8: built-in bound names are keywords
                         --  (`numeric`, `integer`, `primitive`, `contract`,
                         --  `destruct`, `variadic`); trait bounds are
-                        --  ordinary identifiers.
-                        P.Bounds.Append (Take_Word (C, "bound name"));
+                        --  ordinary identifiers. §9.8.5: `destruct` alone
+                        --  has a negative form, `!destruct`.
+                        if C.Cur.Kind = Op_Bang then
+                           Advance (C);
+                           if SU.To_String
+                                (Take_Word (C, "bound name")) /= "destruct"
+                           then
+                              raise Syntax_Error with
+                                "only `destruct` has a negative bound "
+                                & "form (`!destruct`, spec 9.8.5) at line"
+                                & Positive'Image (C.Cur.Line);
+                           end if;
+                           P.Bounds.Append
+                             (SU.To_Unbounded_String ("!destruct"));
+                        else
+                           P.Bounds.Append (Take_Word (C, "bound name"));
+                        end if;
                         exit when C.Cur.Kind /= Op_Plus;
                         Advance (C);
                      end loop;
