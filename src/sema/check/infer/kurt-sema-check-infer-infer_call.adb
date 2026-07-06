@@ -479,6 +479,224 @@ separate (Kurt.Sema.Check.Infer)
                   else
                      E.Sem_Ty := S.Ret;
                   end if;
+               elsif (for some GI in U.Gen_Fns.First_Index ..
+                                    U.Gen_Fns.Last_Index =>
+                        SU.To_String (U.Gen_Fns.Element (GI).Header.Name)
+                          = SU.To_String (Name))
+               then
+                  --  §5.9.2 implicit instantiation: a bare call to a
+                  --  generic template. Deduce each type parameter from the
+                  --  actuals (deferring bare numeric literals, which have
+                  --  no definitive type of their own, to a second pass
+                  --  steered by the bindings the other arguments fixed),
+                  --  write the deduced arguments into the callee's
+                  --  P_Type_Args — the explicit `f.<T>` form — and ask the
+                  --  driver for another monomorphise+check round.
+                  declare
+                     TD : Fn_Decl;
+                  begin
+                     for GI in U.Gen_Fns.First_Index ..
+                               U.Gen_Fns.Last_Index
+                     loop
+                        if SU.To_String
+                             (U.Gen_Fns.Element (GI).Header.Name)
+                             = SU.To_String (Name)
+                        then
+                           TD := U.Gen_Fns.Element (GI);
+                        end if;
+                     end loop;
+                     declare
+                        GP : Generic_Param_Vectors.Vector
+                          renames TD.Header.Generic_Params;
+                        NP     : constant Natural :=
+                          Natural (TD.Header.Params.Length);
+                        NA     : constant Natural :=
+                          Natural (E.C_Args.Length);
+                        Bind_T : Type_Vectors.Vector;
+                        PNames : Path_Segments.Vector;
+                        Failed : Boolean := False;
+
+                        function Param_Pos (N : String) return Natural is
+                        begin
+                           for K in GP.First_Index .. GP.Last_Index loop
+                              if SU.To_String (GP.Element (K).Name) = N
+                              then
+                                 return K;
+                              end if;
+                           end loop;
+                           return 0;
+                        end Param_Pos;
+
+                        procedure Unify (PT, Act : Type_Access) is
+                        begin
+                           if Failed or else PT = null or else Act = null
+                           then
+                              return;
+                           end if;
+                           case PT.Kind is
+                              when T_Named =>
+                                 if PT.Args.Is_Empty
+                                   and then Param_Pos
+                                     (SU.To_String (PT.Name)) > 0
+                                 then
+                                    declare
+                                       K : constant Positive := Param_Pos
+                                         (SU.To_String (PT.Name));
+                                    begin
+                                       if Bind_T.Element (K) = null then
+                                          Bind_T.Replace_Element (K, Act);
+                                       elsif not Same_Type
+                                         (Bind_T.Element (K), Act)
+                                       then
+                                          Failed := True;
+                                       end if;
+                                    end;
+                                 end if;
+                              when T_Ref =>
+                                 if Act.Kind = T_Ref then
+                                    Unify (PT.Target, Act.Target);
+                                 end if;
+                              when T_Array =>
+                                 if Act.Kind = T_Array then
+                                    Unify (PT.Elem, Act.Elem);
+                                 end if;
+                              when T_Tuple =>
+                                 if Act.Kind = T_Tuple
+                                   and then Natural (PT.Elems.Length)
+                                          = Natural (Act.Elems.Length)
+                                 then
+                                    for K in PT.Elems.First_Index ..
+                                             PT.Elems.Last_Index
+                                    loop
+                                       Unify (PT.Elems.Element (K),
+                                              Act.Elems.Element
+                                                (Act.Elems.First_Index
+                                                 + (K -
+                                                    PT.Elems.First_Index)));
+                                    end loop;
+                                 end if;
+                              when others =>
+                                 null;
+                           end case;
+                        end Unify;
+
+                        function Is_Bare_Lit
+                          (A : Expr_Access) return Boolean is
+                          (A.Kind = E_Int_Lit or else A.Kind = E_Float_Lit);
+                     begin
+                        for K in GP.First_Index .. GP.Last_Index loop
+                           PNames.Append (GP.Element (K).Name);
+                           Bind_T.Append (null);
+                        end loop;
+                        if NA /= NP then
+                           Error ("subroutine '" & SU.To_String (Name)
+                                  & "' expects" & Natural'Image (NP)
+                                  & " argument(s), got"
+                                  & Natural'Image (NA) & " (spec 6.2.1)");
+                        else
+                           --  Pass 1: definitive arguments.
+                           for I in E.C_Args.First_Index ..
+                                    E.C_Args.Last_Index
+                           loop
+                              if not Is_Bare_Lit (E.C_Args.Element (I))
+                              then
+                                 Unify
+                                   (TD.Header.Params.Element
+                                      (TD.Header.Params.First_Index
+                                       + (I - E.C_Args.First_Index)).Ty,
+                                    Infer (E.C_Args.Element (I), null));
+                              end if;
+                           end loop;
+                           --  Pass 2: bare literals, steered by whatever
+                           --  the definitive arguments already fixed.
+                           for I in E.C_Args.First_Index ..
+                                    E.C_Args.Last_Index
+                           loop
+                              if Is_Bare_Lit (E.C_Args.Element (I)) then
+                                 declare
+                                    PT : constant Type_Access :=
+                                      TD.Header.Params.Element
+                                        (TD.Header.Params.First_Index
+                                         + (I - E.C_Args.First_Index)).Ty;
+                                 begin
+                                    Unify
+                                      (PT,
+                                       Infer
+                                         (E.C_Args.Element (I),
+                                          Kurt.Mono.Subst
+                                            (PT, PNames, Bind_T)));
+                                 end;
+                              end if;
+                           end loop;
+                           declare
+                              Unbound : Boolean := False;
+                           begin
+                              for K in Bind_T.First_Index ..
+                                       Bind_T.Last_Index
+                              loop
+                                 if Bind_T.Element (K) = null then
+                                    Unbound := True;
+                                 end if;
+                              end loop;
+                              if Failed or else Unbound then
+                                 Error ("cannot infer the generic "
+                                   & "arguments of '"
+                                   & SU.To_String (Name)
+                                   & "' from this call ("
+                                   & (if Failed
+                                      then "contradictory constraints"
+                                      else "a parameter is not "
+                                        & "deducible from the arguments")
+                                   & ") -- explicit substitution `"
+                                   & SU.To_String (Name)
+                                   & ".<...>` is mandatory (spec 5.9.2)");
+                              else
+                                 E.C_Callee.P_Type_Args := Bind_T;
+                                 U.Needs_Mono_Rerun := True;
+                                 --  Early per-argument sanity; the full
+                                 --  check runs on the generated instance
+                                 --  in the next round.
+                                 for I in E.C_Args.First_Index ..
+                                          E.C_Args.Last_Index
+                                 loop
+                                    declare
+                                       PT : constant Type_Access :=
+                                         Kurt.Mono.Subst
+                                           (TD.Header.Params.Element
+                                              (TD.Header.Params.First_Index
+                                               + (I - E.C_Args.First_Index))
+                                              .Ty,
+                                            PNames, Bind_T);
+                                       Act : constant Type_Access :=
+                                         Infer (E.C_Args.Element (I), PT);
+                                    begin
+                                       if Act /= null
+                                         and then not Assignable (PT, Act)
+                                       then
+                                          Error ("argument"
+                                            & Integer'Image
+                                              (I - E.C_Args.First_Index + 1)
+                                            & " to '"
+                                            & SU.To_String (Name)
+                                            & "': expected '" & Image (PT)
+                                            & "' but got '" & Image (Act)
+                                            & "'");
+                                       end if;
+                                    end;
+                                 end loop;
+                              end if;
+                           end;
+                        end if;
+                        if TD.Header.Is_Never then
+                           E.Sem_Ty := Mk_Named ("never");
+                        elsif TD.Header.Return_Type = null then
+                           E.Sem_Ty := Mk_Named ("void");
+                        else
+                           E.Sem_Ty := Kurt.Mono.Subst
+                             (TD.Header.Return_Type, PNames, Bind_T);
+                        end if;
+                     end;
+                  end;
                else
                   --  §4.10: not a named subroutine — try an indirect call
                   --  through a subroutine-pointer-typed callee value.

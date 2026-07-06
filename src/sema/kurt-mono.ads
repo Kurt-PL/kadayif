@@ -18,6 +18,15 @@ package Kurt.Mono is
 
    procedure Monomorphize (U : in out Kurt.Parser.Translation_Unit);
 
+   --  Deep copy of type T with each generic parameter name (Params,
+   --  positionally matched against Args) substituted by its argument.
+   --  Exposed for Kurt.Sema's §5.9.2 call-site argument inference.
+   function Subst
+     (T      : Kurt.Parser.Type_Access;
+      Params : Kurt.Parser.Path_Segments.Vector;
+      Args   : Kurt.Parser.Type_Vectors.Vector)
+      return Kurt.Parser.Type_Access;
+
    Mono_Error : exception;
 
 end Kurt.Mono;

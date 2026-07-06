@@ -454,6 +454,26 @@ separate (Main)
       Kurt.Mono.Monomorphize (Unit);   --  section 5.9.3 specialise generics
       Kurt.Layout.Register (Unit);     --  section 4.11 KSA layout
       Kurt.Sema.Check (Unit, Errors);  --  section 10.2 stages 3-4
+      --  §5.9.2 implicit instantiation: when Kurt.Sema inferred the type
+      --  arguments of a bare generic call (writing them into the callee's
+      --  P_Type_Args), run another monomorphise + register + check round
+      --  so the new instances are generated and checked. Instantiated
+      --  bodies may themselves contain further bare generic calls, so
+      --  iterate to a fixpoint (bounded; each round only ever ADDS
+      --  instances, so it terminates unless generation itself diverges).
+      declare
+         Rounds : Natural := 0;
+      begin
+         while Errors = 0 and then Unit.Needs_Mono_Rerun
+           and then Rounds < 16
+         loop
+            Unit.Needs_Mono_Rerun := False;
+            Kurt.Mono.Monomorphize (Unit);
+            Kurt.Layout.Register (Unit);
+            Kurt.Sema.Check (Unit, Errors);
+            Rounds := Rounds + 1;
+         end loop;
+      end;
       --  §9.9.3: Kurt.Sema completes each anonymous closure-capture struct
       --  (filling field types from the creating scope); re-register so codegen
       --  sees the finalised layout.

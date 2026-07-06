@@ -500,91 +500,48 @@ separate (Kurt.Mono)
       is separate;
 
    begin
-      --  §9.3.4 default methods: for every `impl Type as Trait` that omits
-      --  a trait method carrying a default body, synthesise the concrete
-      --  `Type$method` from the default (selftype → Type). The synthesised
-      --  fns are plain concrete subroutines and follow the normal
-      --  sema/codegen path. Done before the generic lift so they can use,
-      --  and be used by, generic instantiation.
-      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+      --  Re-entrancy (§5.9.2 implicit instantiation): Kurt.Sema may
+      --  request another monomorphisation round after inferring the type
+      --  arguments of a bare generic call. Re-seed this run's state from
+      --  the unit so already-generated declarations are neither lost nor
+      --  regenerated: templates from U.Gen_*, the already-emitted set
+      --  from every concrete declaration's name, and the closure-lift
+      --  counter from the highest `$clo_N` already present.
+      Gen_Structs := U.Gen_Structs;
+      Gen_Enums   := U.Gen_Enums;
+      Gen_Traits  := U.Gen_Traits;
+      for I in U.Fns.First_Index .. U.Fns.Last_Index loop
+         Generated.Append (U.Fns.Element (I).Header.Name);
          declare
-            TI    : Trait_Impl renames U.Trait_Impls.Element (I);
-            Conc  : constant Type_Access := new AST_Type (Kind => T_Named);
-            SelfP : Path_Segments.Vector;   --  ["selftype"]
-            Args1 : Type_Vectors.Vector;    --  [Conc]
+            Nm : constant String :=
+              SU.To_String (U.Fns.Element (I).Header.Name);
          begin
-            Conc.Name := TI.Ty_Name;
-            SelfP.Append (SU.To_Unbounded_String ("selftype"));
-            Args1.Append (Conc);
-
-            for T in U.Traits.First_Index .. U.Traits.Last_Index loop
-               if SU.To_String (U.Traits.Element (T).Name)
-                    = SU.To_String (TI.Trait_Name)
-               then
-                  declare
-                     Tr : Trait_Decl renames U.Traits.Element (T);
-                  begin
-                     for M in Tr.Methods.First_Index ..
-                              Tr.Methods.Last_Index
-                     loop
-                        declare
-                           TM       : Trait_Method renames
-                             Tr.Methods.Element (M);
-                           MName    : constant String :=
-                             SU.To_String (TM.Sig.Name);
-                           Provided : Boolean := False;
-                        begin
-                           for P in TI.Methods.First_Index ..
-                                    TI.Methods.Last_Index
-                           loop
-                              if SU.To_String (TI.Methods.Element (P))
-                                   = MName
-                              then
-                                 Provided := True;
-                              end if;
-                           end loop;
-
-                           if TM.Has_Body and then not Provided then
-                              declare
-                                 New_Fn : Fn_Decl;
-                              begin
-                                 New_Fn.Header := TM.Sig;
-                                 --  §9.2.1 trait-qualified mangling: the
-                                 --  synthesised default lowers to
-                                 --  `Type$Trait$method`.
-                                 New_Fn.Header.Name :=
-                                   SU.To_Unbounded_String
-                                     (SU.To_String (TI.Ty_Name) & "$"
-                                      & SU.To_String (TI.Trait_Name) & "$"
-                                      & MName);
-                                 New_Fn.Header.Params.Clear;
-                                 for K in TM.Sig.Params.First_Index ..
-                                          TM.Sig.Params.Last_Index
-                                 loop
-                                    New_Fn.Header.Params.Append
-                                      ((Name => TM.Sig.Params.Element (K)
-                                                  .Name,
-                                        Ty   => Subst
-                                          (TM.Sig.Params.Element (K).Ty,
-                                           SelfP, Args1),
-                                        Is_Mut => TM.Sig.Params.Element (K)
-                                                    .Is_Mut));
-                                 end loop;
-                                 New_Fn.Header.Return_Type :=
-                                   Subst (TM.Sig.Return_Type,
-                                          SelfP, Args1);
-                                 New_Fn.Body_Stmts :=
-                                   Copy_Block (TM.Body_Stmts,
-                                               SelfP, Args1);
-                                 U.Fns.Append (New_Fn);
-                              end;
-                           end if;
-                        end;
-                     end loop;
-                  end;
-               end if;
-            end loop;
+            if Nm'Length > 5
+              and then Nm (Nm'First .. Nm'First + 4) = "$clo_"
+            then
+               declare
+                  N : Natural := 0;
+               begin
+                  for K in Nm'First + 5 .. Nm'Last loop
+                     exit when Nm (K) not in '0' .. '9';
+                     N := N * 10
+                       + (Character'Pos (Nm (K)) - Character'Pos ('0'));
+                  end loop;
+                  if N > Clo_Seq then
+                     Clo_Seq := N;
+                  end if;
+               end;
+            end if;
          end;
+      end loop;
+      for I in U.Structs.First_Index .. U.Structs.Last_Index loop
+         Generated.Append (U.Structs.Element (I).Name);
+      end loop;
+      for I in U.Enums.First_Index .. U.Enums.Last_Index loop
+         Generated.Append (U.Enums.Element (I).Name);
+      end loop;
+      for I in U.Traits.First_Index .. U.Traits.Last_Index loop
+         Generated.Append (U.Traits.Element (I).Name);
       end loop;
 
       --  §9.3 lift generic trait templates; concrete traits stay.
@@ -602,60 +559,10 @@ separate (Kurt.Mono)
          U.Traits := Keep_T;
       end;
 
-      --  Lift generic templates out of U; keep only concrete declarations.
-      declare
-         Keep_S : Struct_Vectors.Vector;
-         Keep_E : Enum_Vectors.Vector;
-      begin
-         for I in U.Structs.First_Index .. U.Structs.Last_Index loop
-            if U.Structs.Element (I).Generic_Params.Is_Empty then
-               Keep_S.Append (U.Structs.Element (I));
-            else
-               Gen_Structs.Append (U.Structs.Element (I));
-               --  §9.1/§9.4: also kept on U itself (unlike the purely
-               --  local Gen_Structs above, which does not survive past
-               --  this procedure) so Kurt.Sema.Check can resolve a field
-               --  access on `self` while template-checking a
-               --  never-instantiated impl(...) method (spec 5.9.2).
-               U.Gen_Structs.Append (U.Structs.Element (I));
-            end if;
-         end loop;
-         U.Structs := Keep_S;
-
-         for I in U.Enums.First_Index .. U.Enums.Last_Index loop
-            if U.Enums.Element (I).Generic_Params.Is_Empty then
-               Keep_E.Append (U.Enums.Element (I));
-            else
-               Gen_Enums.Append (U.Enums.Element (I));
-               U.Gen_Enums.Append (U.Enums.Element (I));
-            end if;
-         end loop;
-         U.Enums := Keep_E;
-      end;
-
-      --  §4.5 verdict is intrinsic (see Visit_Type / Kurt.Layout): it is
-      --  recognised by name and never monomorphised, so no template here.
-
-      --  Lift §5.9 fn templates into U.Gen_Fns. They are checked once by
-      --  Kurt.Sema under type erasure and never reach codegen; only the
-      --  instances generated below (back into U.Fns) are lowered.
-      declare
-         Keep_F : Fn_Vectors.Vector;
-      begin
-         for I in U.Fns.First_Index .. U.Fns.Last_Index loop
-            if U.Fns.Element (I).Header.Generic_Params.Is_Empty then
-               Keep_F.Append (U.Fns.Element (I));
-            else
-               U.Gen_Fns.Append (U.Fns.Element (I));
-            end if;
-         end loop;
-         U.Fns := Keep_F;
-      end;
-
-      --  §9.3 resolve written generic-trait references to concrete trait
-      --  instances: impl targets first (also renaming the impl's lowered
-      --  `Type$Trait$method` symbols), then the bounds on every lifted
-      --  template's generic parameter list.
+      --  §9.3 resolve generic-trait impl targets to concrete trait
+      --  instances (also renaming the impl's lowered `Type$Trait$method`
+      --  symbols) BEFORE default-method synthesis, so defaults of a
+      --  generic trait are synthesised from the substituted instance.
       for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
          declare
             TI : Trait_Impl := U.Trait_Impls.Element (I);
@@ -716,6 +623,151 @@ separate (Kurt.Mono)
          end;
       end loop;
 
+
+      --  §9.3.4 default methods: for every `impl Type as Trait` that omits
+      --  a trait method carrying a default body, synthesise the concrete
+      --  `Type$method` from the default (selftype → Type). The synthesised
+      --  fns are plain concrete subroutines and follow the normal
+      --  sema/codegen path. Done before the generic lift so they can use,
+      --  and be used by, generic instantiation.
+      for I in U.Trait_Impls.First_Index .. U.Trait_Impls.Last_Index loop
+         declare
+            TI    : Trait_Impl renames U.Trait_Impls.Element (I);
+            Conc  : constant Type_Access := new AST_Type (Kind => T_Named);
+            SelfP : Path_Segments.Vector;   --  ["selftype"]
+            Args1 : Type_Vectors.Vector;    --  [Conc]
+         begin
+            Conc.Name := TI.Ty_Name;
+            SelfP.Append (SU.To_Unbounded_String ("selftype"));
+            Args1.Append (Conc);
+
+            for T in U.Traits.First_Index .. U.Traits.Last_Index loop
+               if SU.To_String (U.Traits.Element (T).Name)
+                    = SU.To_String (TI.Trait_Name)
+               then
+                  declare
+                     Tr : Trait_Decl renames U.Traits.Element (T);
+                  begin
+                     for M in Tr.Methods.First_Index ..
+                              Tr.Methods.Last_Index
+                     loop
+                        declare
+                           TM       : Trait_Method renames
+                             Tr.Methods.Element (M);
+                           MName    : constant String :=
+                             SU.To_String (TM.Sig.Name);
+                           Provided : Boolean := False;
+                        begin
+                           for P in TI.Methods.First_Index ..
+                                    TI.Methods.Last_Index
+                           loop
+                              if SU.To_String (TI.Methods.Element (P))
+                                   = MName
+                              then
+                                 Provided := True;
+                              end if;
+                           end loop;
+
+                           if TM.Has_Body and then not Provided
+                             and then not Already_Generated
+                               (SU.To_String (TI.Ty_Name) & "$"
+                                & SU.To_String (TI.Trait_Name) & "$"
+                                & MName)
+                           then
+                              declare
+                                 New_Fn : Fn_Decl;
+                              begin
+                                 New_Fn.Header := TM.Sig;
+                                 --  §9.2.1 trait-qualified mangling: the
+                                 --  synthesised default lowers to
+                                 --  `Type$Trait$method`.
+                                 New_Fn.Header.Name :=
+                                   SU.To_Unbounded_String
+                                     (SU.To_String (TI.Ty_Name) & "$"
+                                      & SU.To_String (TI.Trait_Name) & "$"
+                                      & MName);
+                                 New_Fn.Header.Params.Clear;
+                                 for K in TM.Sig.Params.First_Index ..
+                                          TM.Sig.Params.Last_Index
+                                 loop
+                                    New_Fn.Header.Params.Append
+                                      ((Name => TM.Sig.Params.Element (K)
+                                                  .Name,
+                                        Ty   => Subst
+                                          (TM.Sig.Params.Element (K).Ty,
+                                           SelfP, Args1),
+                                        Is_Mut => TM.Sig.Params.Element (K)
+                                                    .Is_Mut));
+                                 end loop;
+                                 New_Fn.Header.Return_Type :=
+                                   Subst (TM.Sig.Return_Type,
+                                          SelfP, Args1);
+                                 New_Fn.Body_Stmts :=
+                                   Copy_Block (TM.Body_Stmts,
+                                               SelfP, Args1);
+                                 U.Fns.Append (New_Fn);
+                              end;
+                           end if;
+                        end;
+                     end loop;
+                  end;
+               end if;
+            end loop;
+         end;
+      end loop;
+
+      --  Lift generic templates out of U; keep only concrete declarations.
+      declare
+         Keep_S : Struct_Vectors.Vector;
+         Keep_E : Enum_Vectors.Vector;
+      begin
+         for I in U.Structs.First_Index .. U.Structs.Last_Index loop
+            if U.Structs.Element (I).Generic_Params.Is_Empty then
+               Keep_S.Append (U.Structs.Element (I));
+            else
+               Gen_Structs.Append (U.Structs.Element (I));
+               --  §9.1/§9.4: also kept on U itself (unlike the purely
+               --  local Gen_Structs above, which does not survive past
+               --  this procedure) so Kurt.Sema.Check can resolve a field
+               --  access on `self` while template-checking a
+               --  never-instantiated impl(...) method (spec 5.9.2).
+               U.Gen_Structs.Append (U.Structs.Element (I));
+            end if;
+         end loop;
+         U.Structs := Keep_S;
+
+         for I in U.Enums.First_Index .. U.Enums.Last_Index loop
+            if U.Enums.Element (I).Generic_Params.Is_Empty then
+               Keep_E.Append (U.Enums.Element (I));
+            else
+               Gen_Enums.Append (U.Enums.Element (I));
+               U.Gen_Enums.Append (U.Enums.Element (I));
+            end if;
+         end loop;
+         U.Enums := Keep_E;
+      end;
+
+      --  §4.5 verdict is intrinsic (see Visit_Type / Kurt.Layout): it is
+      --  recognised by name and never monomorphised, so no template here.
+
+      --  Lift §5.9 fn templates into U.Gen_Fns. They are checked once by
+      --  Kurt.Sema under type erasure and never reach codegen; only the
+      --  instances generated below (back into U.Fns) are lowered.
+      declare
+         Keep_F : Fn_Vectors.Vector;
+      begin
+         for I in U.Fns.First_Index .. U.Fns.Last_Index loop
+            if U.Fns.Element (I).Header.Generic_Params.Is_Empty then
+               Keep_F.Append (U.Fns.Element (I));
+            else
+               U.Gen_Fns.Append (U.Fns.Element (I));
+            end if;
+         end loop;
+         U.Fns := Keep_F;
+      end;
+
+      --  §9.3 rewrite generic-trait bounds (`U: Pair.<si4>`) on every
+      --  lifted template's generic parameter list to concrete instances.
       for I in U.Gen_Fns.First_Index .. U.Gen_Fns.Last_Index loop
          declare
             Fn : Fn_Decl := U.Gen_Fns.Element (I);

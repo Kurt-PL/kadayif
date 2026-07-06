@@ -970,6 +970,11 @@ package Kurt.Parser is
       --  Bound_Check above); appended by Kurt.Mono, validated by
       --  Kurt.Sema.
       Bound_Checks : Bound_Check_Vectors.Vector;
+      --  §5.9.2 set by Kurt.Sema when it resolved a bare generic call by
+      --  inference (writing the deduced arguments into the callee's
+      --  P_Type_Args): the driver runs another monomorphise + register +
+      --  check round so the new instances are generated and checked.
+      Needs_Mono_Rerun : Boolean := False;
       --  §7.10.1 the single `@trap { ... }` handler for this translation
       --  unit, if one is declared. At most one is permitted.
       Has_Trap_Handler : Boolean := False;

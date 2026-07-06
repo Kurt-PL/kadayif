@@ -1,0 +1,33 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.9.2 generic argument inference: a bare call to a generic template
+// deduces the type arguments from the actuals; bare literals are steered
+// by whatever the definitive arguments fixed.
+
+fn max.<T: primitive>(a: T, b: T) -> T {
+    return if a > b then a else b;
+}
+
+fn pick_first.<A, B>(x: A, y: B) -> A {
+    return x;
+}
+
+fn second.<T>(pair: .{T, T}) -> T {
+    return pair.1;
+}
+
+fn main() -> ui1 {
+    let p: si4 = 41;
+    let q: ui1 = 9;
+    let t: .{si8, si8} = .{ 5, 6 };
+    airside {
+        posix::printf("%d %d %u %d %ld\n\0".ptr,
+                      max(p, 7),           // T=si4; literal steered by p
+                      max.<si4>(3, 5),     // explicit form unchanged
+                      max(q, q),           // T=ui1
+                      pick_first(p, q),    // A=si4, B=ui1
+                      second(t));          // T=si8 through a tuple
+        // 41 5 9 41 6
+    }
+    return 0;
+}

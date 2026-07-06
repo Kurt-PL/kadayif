@@ -59,6 +59,12 @@ separate (Kurt.Mono.Monomorphize)
          when E_Loop =>
             Visit_Block (E.Loop_Body);
          when E_Closure =>
+            --  Re-entrancy: a closure already lifted by a previous
+            --  monomorphisation round keeps its subroutine (whose body is
+            --  walked via U.Fns); re-lifting would duplicate it.
+            if SU.Length (E.Clo_Fn_Name) > 0 then
+               return;
+            end if;
             --  §9.9 lift the closure to a fresh top-level subroutine so it
             --  follows the normal sema/codegen path. The expression keeps
             --  a pointer to it (Clo_Fn_Name). A non-capturing closure

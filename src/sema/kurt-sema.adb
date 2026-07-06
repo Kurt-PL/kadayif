@@ -4,6 +4,7 @@ with Ada.Containers.Vectors;
 
 with Kurt.Layout;
 with Kurt.Borrow;
+with Kurt.Mono;
 
 package body Kurt.Sema is
 
