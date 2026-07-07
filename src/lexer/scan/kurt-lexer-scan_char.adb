@@ -35,7 +35,7 @@ separate (Kurt.Lexer)
          end if;
       end;
       --  §3.5.4: a character literal's value is one cell (8 bits here,
-      --  config/IDB.md). A multi-byte UTF-8 character does not fit -- the
+      --  IDB.md). A multi-byte UTF-8 character does not fit -- the
       --  case above only ever consumed its first raw byte into V, so the
       --  cursor lands on one of its continuation bytes rather than the
       --  closing quote, and is caught here rather than being decoded.

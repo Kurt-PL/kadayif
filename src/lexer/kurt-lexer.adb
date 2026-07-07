@@ -76,7 +76,7 @@ package body Kurt.Lexer is
    --  §3.1 UTF-8 decoding.
    --
    --  kadayif's implementation-defined source encoding is UTF-8
-   --  (config/IDB.md). §3.4 defines a *letter* as any character the source
+   --  (IDB.md). §3.4 defines a *letter* as any character the source
    --  encoding stipulates denotes a letter, and a *digit* as any character
    --  it stipulates denotes a decimal digit; for UTF-8 that delegates to
    --  Unicode general-category classification, exposed by
