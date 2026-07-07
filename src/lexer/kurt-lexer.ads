@@ -176,10 +176,13 @@ package Kurt.Lexer is
       --  Value of a Tok_Float_Lit (§3.5.2).
       Float_V   : Long_Float := 0.0;
       --  §3.5.2 special float literal: 0 = ordinary (value in Float_V),
-      --  1 = `0nan`, 2 = `0inf`. Non-finite values are carried as this tag
-      --  (never as a Long_Float — the compiler is built with validity
+      --  1 = NaN (`0nanq`/`0nans`, kind in Nan_Quiet, payload in
+      --  Nan_Payload), 2 = `0inf`. Non-finite values are carried as this
+      --  tag (never as a Long_Float — the compiler is built with validity
       --  checks, which reject NaN/infinity as invalid data).
       Float_Special : Natural := 0;
+      Nan_Quiet     : Boolean := True;
+      Nan_Payload   : Long_Long_Integer := 0;
       --  Numeric type suffix (§3.5.1/§3.5.2), e.g. "si4" / "fe8m23"; empty
       --  if absent. Shared by integer and floating-point literals.
       Int_Suffix : SU.Unbounded_String;

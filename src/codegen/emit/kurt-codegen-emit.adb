@@ -486,17 +486,51 @@ separate (Kurt.Codegen)
                         Bits := Interfaces.Unsigned_64'Mod (V);
                      end;
                   when E_Float_Lit =>
-                     declare
-                        V : constant Long_Float :=
-                          (if Neg then -Lit.Float_V else Lit.Float_V);
-                     begin
-                        if Sz = 4 then
-                           Bits := Interfaces.Unsigned_64
-                             (To_U32 (Float (V)));
-                        else
-                           Bits := To_U64 (V);
-                        end if;
-                     end;
+                     if Lit.Float_Special /= 0 then
+                        --  §3.5.2 non-finite initialiser: assemble the
+                        --  IEEE bit pattern directly (§4.4.2 kind =
+                        --  mantissa MSB, payload below); a leading unary
+                        --  minus sets the sign bit.
+                        declare
+                           use Interfaces;
+                        begin
+                           if Sz = 4 then
+                              Bits := 16#7F80_0000#
+                                or (if Lit.Float_Special = 1
+                                      and then Lit.Nan_Quiet
+                                    then 2 ** 22 else 0)
+                                or (if Lit.Float_Special = 1
+                                    then Unsigned_64'Mod (Lit.Nan_Payload)
+                                    else 0);
+                              if Neg then
+                                 Bits := Bits or 16#8000_0000#;
+                              end if;
+                           else
+                              Bits := 16#7FF0_0000_0000_0000#
+                                or (if Lit.Float_Special = 1
+                                      and then Lit.Nan_Quiet
+                                    then 2 ** 51 else 0)
+                                or (if Lit.Float_Special = 1
+                                    then Unsigned_64'Mod (Lit.Nan_Payload)
+                                    else 0);
+                              if Neg then
+                                 Bits := Bits or 16#8000_0000_0000_0000#;
+                              end if;
+                           end if;
+                        end;
+                     else
+                        declare
+                           V : constant Long_Float :=
+                             (if Neg then -Lit.Float_V else Lit.Float_V);
+                        begin
+                           if Sz = 4 then
+                              Bits := Interfaces.Unsigned_64
+                                (To_U32 (Float (V)));
+                           else
+                              Bits := To_U64 (V);
+                           end if;
+                        end;
+                     end if;
                   when E_Bool_Lit =>
                      Bits := (if Lit.Bool_V then 1 else 0);
                   when others =>

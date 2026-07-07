@@ -310,9 +310,12 @@ package Kurt.Parser is
          when E_Float_Lit =>
             Float_V      : Long_Float := 0.0;
             Float_Suffix : SU.Unbounded_String;  --  e.g. "fe8m23"; empty=none
-            --  §3.5.2: 0 = ordinary, 1 = `0nan`, 2 = `0inf` (non-finite
-            --  values travel as this tag, never as a Long_Float).
+            --  §3.5.2: 0 = ordinary, 1 = NaN (`0nanq`/`0nans`), 2 = `0inf`
+            --  (non-finite values travel as this tag + the kind/payload
+            --  fields below, never as a Long_Float).
             Float_Special : Natural := 0;
+            Nan_Quiet     : Boolean := True;
+            Nan_Payload   : Long_Long_Integer := 0;
          when E_Bool_Lit =>
             Bool_V : Boolean := False;
          when E_String_Lit =>

@@ -73,6 +73,8 @@ separate (Kurt.Parser)
             E.Float_V       := C.Cur.Float_V;
             E.Float_Suffix  := C.Cur.Int_Suffix;
             E.Float_Special := C.Cur.Float_Special;
+            E.Nan_Quiet     := C.Cur.Nan_Quiet;
+            E.Nan_Payload   := C.Cur.Nan_Payload;
             Advance (C);
             return E;
 

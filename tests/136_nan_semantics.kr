@@ -1,0 +1,43 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §4.4.4 NaN propagation: every NaN-producing arithmetic result is a
+// quiet NaN with payload 0; sign = the (first) NaN operand's — or the
+// leading operand's — sign for + and -, the XOR of the operands' signs
+// for * / %. §6.8.5: float->float casts preserve a NaN's sign and kind;
+// payloads zero-extend when widening and saturate when they do not fit.
+
+fn b2i(b: bool) -> si4 { return if b then 1 else 0; }
+
+fn main() -> ui1 {
+    let p: fe11m52 = 0.0 / 0.0;    // +0nanq — payload 0, XOR(+, +) = +
+    let q: fe11m52 = -(0.0 / 0.0); // -0nanq
+    let inf = 0inf;
+    airside {
+        posix::printf("%d%d%d%d%d%d%d%d%d\n\0".ptr,
+            b2i(p == 0nanq),                    // 1 — canonical bits
+            b2i(q == -0nanq),                   // 1
+            b2i(0nanq'5 + 1.0 == 0nanq),        // 1 — payload zeroed
+            b2i(1.0 - 0nanq'7 == 0nanq),        // 1 — sign of NaN operand
+            b2i(-0nanq * 1.0 == -0nanq),        // 1 — XOR(-, +) = -
+            b2i(0nans + 1.0 == 0nanq),          // 1 — sNaN quieted
+            b2i(inf - inf == 0nanq),            // 1 — leading operand +
+            b2i(1.0 % 0.0 == 0nanq),            // 1 — XOR(+, +) = +
+            b2i(-1.0 / 0.0 == -0inf));          // 1 — ordinary special op
+        // 111111111
+
+        // §6.8.5 NaN casts.
+        let sat: fe8m23 = 0nanq'0x7FFFFF00000 as fe8m23; // saturates
+        let max32: fe8m23 = 0nanq'4194303;               // 0x3FFFFF
+        let fit: fe8m23 = 0nanq'3 as fe8m23;             // preserved
+        let lit32: fe8m23 = 0nanq'3;
+        let wide: fe11m52 = 0nanq'3fe8m23 as fe11m52;    // zero-extend
+        let skind: fe11m52 = 0nansfe8m23 as fe11m52;     // kind preserved
+        posix::printf("%d%d%d%d\n\0".ptr,
+            b2i(sat == max32),
+            b2i(fit == lit32),
+            b2i(wide == 0nanq'3),
+            b2i(skind == 0nans));
+        // 1111
+    }
+    return 0;
+}

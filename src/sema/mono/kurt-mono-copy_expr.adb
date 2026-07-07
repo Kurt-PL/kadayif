@@ -20,6 +20,8 @@ separate (Kurt.Mono)
             R.Float_V      := E.Float_V;
             R.Float_Suffix  := E.Float_Suffix;
             R.Float_Special := E.Float_Special;
+            R.Nan_Quiet     := E.Nan_Quiet;
+            R.Nan_Payload   := E.Nan_Payload;
          when E_Bool_Lit =>
             R.Bool_V := E.Bool_V;
          when E_String_Lit =>

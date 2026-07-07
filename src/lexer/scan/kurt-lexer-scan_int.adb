@@ -7,10 +7,12 @@ separate (Kurt.Lexer)
       Base       : Long_Long_Integer := 10;
       T          : Token;
    begin
-      --  §3.5.2 special floating-point literal `0nan` / `0inf`, with an
-      --  optional float suffix fused on (bare — no separator). `0nan` is a
-      --  NaN with sign bit 0 and all-zero payload (the quiet-NaN pattern);
-      --  `0inf` is positive infinity. Negative forms are unary negation.
+      --  §3.5.2 special floating-point literal `0nanq` / `0nans` /
+      --  `0inf`, with an optional payload (`0nanq'26`, `0nans'0x1a` — any
+      --  integer-literal digit form) and an optional float suffix fused
+      --  on (bare — no separator). `0nanq` is a quiet NaN with sign bit 0
+      --  and payload 0; `0nans` a signalling NaN with payload 1; `0inf`
+      --  positive infinity. Negative forms are unary negation.
       if Peek (L) = '0'
         and then ((Peek (L, 1) = 'n' and then Peek (L, 2) = 'a'
                      and then Peek (L, 3) = 'n')
@@ -18,10 +20,111 @@ separate (Kurt.Lexer)
                              and then Peek (L, 3) = 'f'))
       then
          declare
-            Is_Nan : constant Boolean := Peek (L, 1) = 'n';
-            Suf    : SU.Unbounded_String;
+            Is_Nan  : constant Boolean := Peek (L, 1) = 'n';
+            Suf     : SU.Unbounded_String;
+            Quiet   : Boolean := True;
+            Payload : Long_Long_Integer := 0;
          begin
             Advance (L); Advance (L); Advance (L); Advance (L);
+            if Is_Nan then
+               --  §3.5.2: the kind letter is part of the literal — `q`
+               --  (quiet) or `s` (signalling, default payload 1).
+               if Peek (L) = 'q' then
+                  Advance (L);
+               elsif Peek (L) = 's' then
+                  Quiet   := False;
+                  Payload := 1;
+                  Advance (L);
+               else
+                  raise Translation_Failure with
+                    "`0nan` requires a kind letter: `0nanq` (quiet) or "
+                    & "`0nans` (signalling) (§3.5.2) at line"
+                    & Positive'Image (Start_Line);
+               end if;
+               --  Optional payload `'N` (decimal / 0b / 0q / 0o / 0x).
+               if Peek (L) = ''' and then Peek (L, 1) in '0' .. '9' then
+                  Advance (L);   --  '''
+                  declare
+                     PBase : Long_Long_Integer := 10;
+                     Seen  : Boolean := False;
+                     Given : Long_Long_Integer := 0;
+                  begin
+                     if Peek (L) = '0'
+                       and then (Peek (L, 1) = 'x' or else Peek (L, 1) = 'X'
+                                 or else Peek (L, 1) = 'o'
+                                 or else Peek (L, 1) = 'O'
+                                 or else Peek (L, 1) = 'b'
+                                 or else Peek (L, 1) = 'B'
+                                 or else Peek (L, 1) = 'q'
+                                 or else Peek (L, 1) = 'Q')
+                     then
+                        case Peek (L, 1) is
+                           when 'x' | 'X' => PBase := 16;
+                           when 'o' | 'O' => PBase := 8;
+                           when 'b' | 'B' => PBase := 2;
+                           when others    => PBase := 4;
+                        end case;
+                        Advance (L); Advance (L);
+                     end if;
+                     loop
+                        exit when At_End (L);
+                        declare
+                           C : constant Character := Peek (L);
+                        begin
+                           if C = '_' then
+                              --  §3.5.8: a separator only between digits.
+                              if not Seen
+                                or else Digit_Value (Peek (L, 1)) < 0
+                                or else Long_Long_Integer
+                                          (Digit_Value (Peek (L, 1)))
+                                        >= PBase
+                              then
+                                 raise Translation_Failure with
+                                   "misplaced digit separator in NaN "
+                                   & "payload (§3.5.8) at line"
+                                   & Positive'Image (Start_Line);
+                              end if;
+                              Advance (L);
+                           else
+                              declare
+                                 D : constant Integer := Digit_Value (C);
+                              begin
+                                 exit when D < 0
+                                   or else Long_Long_Integer (D) >= PBase;
+                                 begin
+                                    Given := Given * PBase
+                                      + Long_Long_Integer (D);
+                                 exception
+                                    when Constraint_Error =>
+                                       raise Translation_Failure with
+                                         "NaN payload is too large to "
+                                         & "represent (§3.5.2) at line"
+                                         & Positive'Image (Start_Line);
+                                 end;
+                                 Seen := True;
+                                 Advance (L);
+                              end;
+                           end if;
+                        end;
+                     end loop;
+                     if not Seen then
+                        raise Translation_Failure with
+                          "NaN payload digits expected after ' (§3.5.2) "
+                          & "at line" & Positive'Image (Start_Line);
+                     end if;
+                     --  §3.5.2: a payload value of zero shall not appear,
+                     --  in any base (`0nanq` already denotes payload 0;
+                     --  a zero-payload signalling NaN would be infinity).
+                     if Given = 0 then
+                        raise Translation_Failure with
+                          "a NaN payload of zero shall not appear "
+                          & "(§3.5.2) at line"
+                          & Positive'Image (Start_Line);
+                     end if;
+                     Payload := Given;
+                  end;
+               end if;
+            end if;
             while Is_Ident_Continue (Peek (L)) loop
                SU.Append (Suf, Peek (L));
                Advance (L);
@@ -35,6 +138,8 @@ separate (Kurt.Lexer)
             end if;
             T.Kind          := Tok_Float_Lit;
             T.Float_Special := (if Is_Nan then 1 else 2);
+            T.Nan_Quiet     := Quiet;
+            T.Nan_Payload   := Payload;
             T.Int_Suffix    := Suf;
             T.Line          := Start_Line;
             T.Col           := Start_Col;

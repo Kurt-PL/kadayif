@@ -9,14 +9,17 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
       Use_64 : constant Boolean := Is_Ref (Lhs_Ty)
                                 or else Sizeof (Lhs_Ty) > 4;
    begin
-      --  §4.4.3 floating-point comparison via the hardware `fcmp`, which
-      --  follows ISO/IEC 60559:2020 (unordered → all relational false,
-      --  ordered-equal handles ±0). The Kurt deviations are patched on top:
-      --    == reflexive over NaN (both-NaN → true);
-      --    != false when both NaN;
-      --    <= and >= true when both NaN.
-      --  <, > need no patch — the ordered conditions (mi/gt) already yield
-      --  false on any unordered (NaN) operand.
+      --  §4.4.3 floating-point comparison: the ISO/IEC 60559:2020 total
+      --  order predicate. For binary interchange formats, totalOrder is
+      --  exactly the ordering of the bit patterns read as sign-magnitude
+      --  integers, so each operand's bits are mapped monotonically onto
+      --  the unsigned integers — x := x xor ((x asr N-1) or SIGN), i.e.
+      --  negative patterns are inverted, positive ones get the sign bit
+      --  set — and compared with one integer `cmp`. This realises the
+      --  whole class order NegQNN < NegSNN < NegInf < NegScl < NegZro <
+      --  PosZro < PosScl < PosInf < PosSNN < PosQNN, the payload order
+      --  within the NaN classes, and -0.0 < +0.0. No FP compare is
+      --  issued, so a signalling NaN operand cannot signal.
       if Is_Float (Lhs_Ty)
         and then E.B_Op in B_Eq | B_Ne | B_Lt | B_Gt | B_Le | B_Ge
       then
@@ -24,11 +27,17 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             W64 : constant Boolean := Sizeof (Lhs_Ty) = 8;
             F0  : constant String := (if W64 then "d0" else "s0");
             F1  : constant String := (if W64 then "d1" else "s1");
+            RA  : constant String := (if W64 then "x14" else "w14");
+            RB  : constant String := (if W64 then "x15" else "w15");
+            RS  : constant String := (if W64 then "x12" else "w12");
+            Sh  : constant String := (if W64 then "#63" else "#31");
+            Sgn : constant String :=
+              (if W64 then "#0x8000000000000000" else "#0x80000000");
             Cnd : constant String :=
               (case E.B_Op is
                   when B_Eq => "eq", when B_Ne => "ne",
-                  when B_Lt => "mi", when B_Gt => "gt",
-                  when B_Le => "ls", when others => "ge");  --  B_Ge
+                  when B_Lt => "lo", when B_Gt => "hi",
+                  when B_Le => "ls", when others => "hs");  --  B_Ge
          begin
             Lower_Float_Into_D (F, E.B_Lhs, 0, ST);
             IO.Put_Line (F, "    sub     sp, sp, #16");
@@ -36,22 +45,16 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
             Lower_Float_Into_D (F, E.B_Rhs, 0, ST);   --  rhs in d0/s0
             IO.Put_Line (F, "    ldr     " & F1 & ", [sp]");  --  lhs in d1/s1
             IO.Put_Line (F, "    add     sp, sp, #16");
-            IO.Put_Line (F, "    fcmp    " & F1 & ", " & F0);  --  lhs ? rhs
+            IO.Put_Line (F, "    fmov    " & RA & ", " & F1);  --  lhs bits
+            IO.Put_Line (F, "    fmov    " & RB & ", " & F0);  --  rhs bits
+            IO.Put_Line (F, "    asr     " & RS & ", " & RA & ", " & Sh);
+            IO.Put_Line (F, "    orr     " & RS & ", " & RS & ", " & Sgn);
+            IO.Put_Line (F, "    eor     " & RA & ", " & RA & ", " & RS);
+            IO.Put_Line (F, "    asr     " & RS & ", " & RB & ", " & Sh);
+            IO.Put_Line (F, "    orr     " & RS & ", " & RS & ", " & Sgn);
+            IO.Put_Line (F, "    eor     " & RB & ", " & RB & ", " & RS);
+            IO.Put_Line (F, "    cmp     " & RA & ", " & RB);
             IO.Put_Line (F, "    cset    " & Wt & ", " & Cnd);
-            if E.B_Op in B_Eq | B_Ne | B_Le | B_Ge then
-               --  both-NaN := isnan(lhs) and isnan(rhs); `vs` is the
-               --  unordered flag, set by `fcmp x, x` exactly when x is NaN.
-               IO.Put_Line (F, "    fcmp    " & F1 & ", " & F1);
-               IO.Put_Line (F, "    cset    w14, vs");
-               IO.Put_Line (F, "    fcmp    " & F0 & ", " & F0);
-               IO.Put_Line (F, "    cset    w15, vs");
-               IO.Put_Line (F, "    and     w14, w14, w15");
-               if E.B_Op = B_Ne then
-                  IO.Put_Line (F, "    bic     " & Wt & ", " & Wt & ", w14");
-               else
-                  IO.Put_Line (F, "    orr     " & Wt & ", " & Wt & ", w14");
-               end if;
-            end if;
          end;
          return;
       end if;

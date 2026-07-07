@@ -106,6 +106,30 @@ separate (Kurt.Sema.Check)
             else
                E.Sem_Ty := Mk_Named ("fe11m52");
             end if;
+            --  §3.5.2/§4.4.2: a written NaN payload shall fit within the
+            --  resolved format's payload field (mantissa bits minus the
+            --  quiet bit).
+            if E.Float_Special = 1 then
+               declare
+                  N  : constant String := SU.To_String (E.Sem_Ty.Name);
+                  PB : constant Natural :=
+                    (if    N = "fe5m10"   then 9
+                     elsif N = "fe8m7"    then 6
+                     elsif N = "fe8m23"   then 22
+                     elsif N = "fe11m52"  then 51
+                     elsif N = "fe15m112" then 111
+                     else                      235);   --  fe19m236
+               begin
+                  if PB < 63
+                    and then E.Nan_Payload > 2 ** PB - 1
+                  then
+                     Error ("NaN payload" & E.Nan_Payload'Image
+                            & " does not fit the" & Natural'Image (PB)
+                            & "-bit payload field of '" & N
+                            & "' (spec 3.5.2/4.4.2)");
+                  end if;
+               end;
+            end if;
             return E.Sem_Ty;
 
          when E_Bool_Lit =>
