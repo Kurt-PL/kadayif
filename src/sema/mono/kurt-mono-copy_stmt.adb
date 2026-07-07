@@ -24,6 +24,7 @@ separate (Kurt.Mono)
             R.L_Ty          := Subst (S.L_Ty, Params, Args);
             R.L_Init        := C (S.L_Init);
             R.L_Tuple_Names := S.L_Tuple_Names;
+            R.L_Tuple_Muts  := S.L_Tuple_Muts;
             R.L_Is_Refut    := S.L_Is_Refut;
             R.L_Refut_Pat   := S.L_Refut_Pat;
             R.L_Else        := Copy_Block (S.L_Else, Params, Args);

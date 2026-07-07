@@ -32,7 +32,8 @@ separate (Kurt.Sema.Check.Check_Stmt)
                      loop
                         Scope.Append
                           ((Name => S.SI_Let_Pat.Bindings.Element (K),
-                            Ty   => Pat_Field_Ty (S.SI_Let_Pat, CT, VN, K), others => <>));
+                            Ty   => Pat_Field_Ty (S.SI_Let_Pat, CT, VN, K),
+                            Is_Mut => Pat_Bind_Is_Mut (S.SI_Let_Pat, K)));
                      end loop;
                      Check_Block (S.SI_Then);
                      while Natural (Scope.Length) > Saved loop

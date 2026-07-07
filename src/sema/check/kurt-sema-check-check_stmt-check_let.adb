@@ -76,7 +76,9 @@ separate (Kurt.Sema.Check.Check_Stmt)
                           (S.L_Refut_Pat.Bindings.Element (K));
                         Scope.Append
                           ((Name => S.L_Refut_Pat.Bindings.Element (K),
-                            Ty   => Pat_Field_Ty (S.L_Refut_Pat, CT, VN, K), others => <>));
+                            Ty   => Pat_Field_Ty (S.L_Refut_Pat, CT, VN, K),
+                            Is_Mut => S.Kind = S_Mut
+                              or else Pat_Bind_Is_Mut (S.L_Refut_Pat, K)));
                      end loop;
                   end if;
                end;
@@ -191,7 +193,13 @@ separate (Kurt.Sema.Check.Check_Stmt)
                           ((Name => S.L_Tuple_Names.Element (I),
                             Ty   => Kurt.Layout.Tuple_Field_Type
                                       (Ty, I - S.L_Tuple_Names.First_Index),
-                            Is_Mut => S.Kind = S_Mut));
+                            Is_Mut => S.Kind = S_Mut
+                              or else
+                                (I - S.L_Tuple_Names.First_Index + 1
+                                   <= Natural (S.L_Tuple_Muts.Length)
+                                 and then S.L_Tuple_Muts.Element
+                                   (S.L_Tuple_Muts.First_Index
+                                    + (I - S.L_Tuple_Names.First_Index)))));
                      end loop;
                   end if;
                else

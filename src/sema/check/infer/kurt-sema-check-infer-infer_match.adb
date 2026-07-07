@@ -160,11 +160,14 @@ separate (Kurt.Sema.Check.Infer)
                                    Ty.Elems.Element
                                      (Ty.Elems.First_Index + (K - 1));
                               begin
-                                 if SU.Length (P.Bindings.Element (K)) > 0
+                                 if SU.Length
+                                      (P.Bindings.Element (K)) > 0
                                  then
                                     Scope.Append
                                       ((Name => P.Bindings.Element (K),
-                                        Ty => FT, others => <>));
+                                        Ty => FT,
+                                        Is_Mut =>
+                                    Pat_Bind_Is_Mut (P, K)));
                                  end if;
                                  if K <= Natural (P.Sub_Pats.Length)
                                    and then P.Sub_Pats.Element (K) /= null
@@ -231,7 +234,9 @@ separate (Kurt.Sema.Check.Infer)
                                        then
                                           Scope.Append
                                             ((Name => P.Bindings.Element (K),
-                                              Ty => FT, others => <>));
+                                              Ty => FT,
+                                              Is_Mut =>
+                                                Pat_Bind_Is_Mut (P, K)));
                                        end if;
                                        if K <= Natural (P.Sub_Pats.Length)
                                          and then P.Sub_Pats.Element (K)
@@ -286,7 +291,9 @@ separate (Kurt.Sema.Check.Infer)
                                        then
                                           Scope.Append
                                             ((Name => P.Bindings.Element (K),
-                                              Ty => FT, others => <>));
+                                              Ty => FT,
+                                              Is_Mut =>
+                                                Pat_Bind_Is_Mut (P, K)));
                                        end if;
                                        if K <= Natural (P.Sub_Pats.Length)
                                          and then P.Sub_Pats.Element (K)
@@ -448,7 +455,9 @@ separate (Kurt.Sema.Check.Infer)
                                              Scope.Append
                                                ((Name => Arm.Pat.Bindings
                                                            .Element (K),
-                                                 Ty   => FT, others => <>));
+                                                 Ty   => FT,
+                                                 Is_Mut => Pat_Bind_Is_Mut
+                                                             (Arm.Pat, K)));
                                           end if;
                                           if K <= Natural
                                                (Arm.Pat.Sub_Pats.Length)
@@ -542,7 +551,8 @@ separate (Kurt.Sema.Check.Infer)
                                                         (K),
                                               Ty   => Pat_Field_Ty
                                                 (Arm.Pat, Scrut_Ty, VN, K),
-                                              others => <>));
+                                              Is_Mut => Pat_Bind_Is_Mut
+                                                          (Arm.Pat, K)));
                                        end if;
                                        if K <= Natural
                                             (Arm.Pat.Sub_Pats.Length)

@@ -11,7 +11,7 @@ fn main() -> ui1 {
     // Countdown 5..1: print n and the running accumulator, fold n into acc,
     // decrement n through the alias, and at n == 0 switch to Stop to exit.
     mut s: step = step::More { 5, 0 };
-    while let step::More { n, acc } = s {
+    while let step::More { mut n, mut acc } = s {   // §5.10.3 per-binding mut
         airside { posix::printf("n=%d acc=%d\n\0".ptr, n, acc); }
         acc = acc + n;          // write through the `acc` alias
         n = n - 1;              // write through the `n` alias

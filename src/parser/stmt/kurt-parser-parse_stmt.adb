@@ -3,7 +3,7 @@ separate (Kurt.Parser)
       S : Stmt_Access;
       Asm_Pos_Idx : Natural := 0;   --  §6.11 anonymous-operand index counter
       function Stmt_If return Stmt_Access is separate;
-      function Stmt_Let return Stmt_Access is separate;
+      function Stmt_Let (Kind : Stmt_Kind) return Stmt_Access is separate;
       function Stmt_Asm return Stmt_Access is separate;
       function Stmt_Const return Stmt_Access is separate;
    begin
@@ -68,7 +68,7 @@ separate (Kurt.Parser)
             return S;
 
          when Kw_Let =>
-            return Stmt_Let;
+            return Stmt_Let (S_Let);
          when Kw_Const =>
             --  §5.3: statement-position `const NAME: T = expr;` inside a
             --  fn body (the spec's examples use `const` both at top level
@@ -76,27 +76,10 @@ separate (Kurt.Parser)
             --  former).
             return Stmt_Const;
          when Kw_Mut =>
-            --  §5.2: mut IDENT [: type] [= expr] ;
-            --  Multi-assignment binding (§2.2.1).
-            Advance (C);
-            S := new Stmt_Node (Kind => S_Mut);
-            S.L_Name := Take_Ident (C, "mut binding name");
-            if C.Cur.Kind = Punct_Colon then
-               Advance (C);
-               if C.Cur.Kind = Op_Question then   --  §4.12 inferred
-                  Advance (C);
-               else
-                  S.L_Ty := Parse_Type (C);
-               end if;
-            end if;
-            if C.Cur.Kind = Punct_Eq then
-               Advance (C);
-               S.L_Init := Parse_Expr (C);
-            else
-               S.L_Init := null;
-            end if;
-            Expect (C, Punct_Semi, "';'");
-            return S;
+            --  §5.2/§5.10.3: `mut` takes the same binding and
+            --  destructuring forms as `let`; every binding it introduces
+            --  is mutable.
+            return Stmt_Let (S_Mut);
 
          when Tok_Label =>
             --  §7.9: a `'name:` label prefixes a loop or a block. A

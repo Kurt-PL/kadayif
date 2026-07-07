@@ -24,6 +24,7 @@ separate (Kurt.Parser)
                        and then Peek_Tok (C).Kind = Punct_LBrace)
             then
                P.Bindings.Append (SU.Null_Unbounded_String);
+               P.Bind_Muts.Append (False);
                P.Bind_Fields.Append (SU.Null_Unbounded_String);
                while Natural (P.Sub_Pats.Length) < Natural (P.Bindings.Length) - 1
                loop
@@ -32,6 +33,13 @@ separate (Kurt.Parser)
                P.Sub_Pats.Append
                  (new Pattern'(Parse_Match_Pattern (C)));
             else
+               --  §5.10.3 per-binding `mut` on the entry.
+               if C.Cur.Kind = Kw_Mut then
+                  P.Bind_Muts.Append (True);
+                  Advance (C);
+               else
+                  P.Bind_Muts.Append (False);
+               end if;
                declare
                   N1 : constant SU.Unbounded_String :=
                     Take_Ident (C, "payload binding");

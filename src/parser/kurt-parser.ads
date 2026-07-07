@@ -221,6 +221,9 @@ package Kurt.Parser is
       Range_Incl : Boolean := False;  --  Pat_Range: `..=` (true) vs `..`
       --  Pat_Variant payload bindings, positional (e.g. `{ w, h }`).
       Bindings : Path_Segments.Vector;
+      --  §5.10.3 per-binding `mut`, parallel to Bindings (a missing or
+      --  short entry means immutable).
+      Bind_Muts : Bool_Vectors.Vector;
       --  §7.4 parallel to Bindings: rename entry's source field name (else
       --  empty = positional).
       Bind_Fields : Path_Segments.Vector;
@@ -528,6 +531,8 @@ package Kurt.Parser is
             --  non-empty, the names bind the tuple's positional fields and
             --  L_Name is unused.
             L_Tuple_Names : Path_Segments.Vector;
+            --  §5.10.3 per-binding `mut`, parallel to L_Tuple_Names.
+            L_Tuple_Muts  : Bool_Vectors.Vector;
             --  §5.2.1 refutable let-else: `let Enum::V { binds } = e else
             --  { diverge };`. On a match the payload binds for the rest of
             --  the enclosing scope; on a mismatch the (diverging) else block

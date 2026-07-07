@@ -238,6 +238,13 @@ separate (Kurt.Sema)
         (Pat : Kurt.Parser.Pattern; Scrut : Type_Access;
          VN : String; K : Positive) return Type_Access is separate;
 
+      --  §5.10.3 whether the K-th binding of a destructuring pattern
+      --  carries the per-binding `mut` modifier.
+      function Pat_Bind_Is_Mut
+        (Pat : Kurt.Parser.Pattern; K : Positive) return Boolean is
+        (K <= Natural (Pat.Bind_Muts.Length)
+         and then Pat.Bind_Muts.Element (K));
+
       --  §5.10.2: without `...`, a destructuring payload-binds clause
       --  shall mention every field of the variant. A bare `Enum::Variant`
       --  pattern with no binds clause matches on the discriminant only

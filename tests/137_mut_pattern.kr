@@ -1,0 +1,42 @@
+@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+
+// §5.10.3 per-binding mutability: bindings inside a destructuring
+// pattern may carry `mut` individually, in every pattern context; a
+// `mut` declaration makes all of its bindings mutable.
+
+enum step {
+    More { n: si4 },
+    Stop
+}
+
+fn get_pair() -> .{si4, si4} { return .{ 1, 2 }; }
+
+fn main() -> ui1 {
+    // tuple destructuring under `let`: b is mutable, a is not.
+    let .{ a, mut b } = get_pair();
+    b += 10;
+
+    // `mut` declaration: destructuring forms now parse, all bindings
+    // mutable without per-binding annotations.
+    mut .{ c, d } = get_pair();
+    c += 100;
+    d += 100;
+
+    // match arm payload alias: `mut` permits writing the scrutinee
+    // through the alias.
+    mut s: step = step::More { n = 7 };
+    let bumped: si4 = match s {
+        step::More { mut n } = {
+            n = n + 1;
+            express n;
+        },
+        step::Stop = 0,
+        #wild#     = -1,
+    };
+
+    airside {
+        posix::printf("%d %d %d %d %d\n\0".ptr, a, b, c, d, bumped);
+        // 1 12 101 102 8
+    }
+    return 0;
+}

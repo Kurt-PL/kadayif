@@ -1,17 +1,27 @@
 separate (Kurt.Parser.Parse_Stmt)
-   function Stmt_Let return Stmt_Access is
+   function Stmt_Let (Kind : Stmt_Kind) return Stmt_Access is
    begin
-            --  §5.2 binding  OR  §4.7 tuple destructuring:
+            --  §5.2 binding  OR  §4.7 tuple destructuring — the same
+            --  forms for `let` and `mut` (§5.2's two productions differ
+            --  only in the keyword):
             --      let v = expr ;
-            --      let .{ a, b } = expr ;
+            --      let .{ a, mut b } = expr ;
             --  (§7.2.3 contract extraction, `contract e else ...`, is an
             --  ordinary expression -- it reaches here only as `expr` above.)
             Advance (C);
             if C.Cur.Kind = Punct_Dot then
                Advance (C);
                Expect (C, Punct_LBrace, "'{' after '.' in destructuring let");
-               S := new Stmt_Node (Kind => S_Let);
+               S := new Stmt_Node (Kind => Kind);
                loop
+                  --  §5.10.3 per-binding `mut` (redundant under a `mut`
+                  --  declaration, but permitted).
+                  if C.Cur.Kind = Kw_Mut then
+                     S.L_Tuple_Muts.Append (True);
+                     Advance (C);
+                  else
+                     S.L_Tuple_Muts.Append (False);
+                  end if;
                   S.L_Tuple_Names.Append
                     (Take_Ident (C, "destructuring binding name"));
                   exit when C.Cur.Kind /= Punct_Comma;
@@ -40,7 +50,7 @@ separate (Kurt.Parser.Parse_Stmt)
               and then (Peek_Tok (C).Kind = Punct_ColonColon
                         or else Peek_Tok (C).Kind = Punct_LBrace)
             then
-               S := new Stmt_Node (Kind => S_Let);
+               S := new Stmt_Node (Kind => Kind);
                S.L_Is_Refut := True;
                S.L_Refut_Pat.Kind := Pat_Variant;
                S.L_Refut_Pat.Path.Append
@@ -63,9 +73,9 @@ separate (Kurt.Parser.Parse_Stmt)
             end if;
             declare
                Name : constant SU.Unbounded_String :=
-                 Take_Ident (C, "let binding name");
+                 Take_Ident (C, "binding name");
             begin
-               S := new Stmt_Node (Kind => S_Let);
+               S := new Stmt_Node (Kind => Kind);
                S.L_Name := Name;
                if C.Cur.Kind = Punct_Colon then
                   Advance (C);

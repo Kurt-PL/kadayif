@@ -33,7 +33,9 @@ separate (Kurt.Sema.Check.Check_Stmt)
                         loop
                            Scope.Append
                              ((Name => S.W_Let_Pat.Bindings.Element (K),
-                               Ty   => Pat_Field_Ty (S.W_Let_Pat, CT, VN, K), others => <>));
+                               Ty   => Pat_Field_Ty (S.W_Let_Pat, CT, VN, K),
+                               Is_Mut => Pat_Bind_Is_Mut
+                                           (S.W_Let_Pat, K)));
                         end loop;
                      end if;
                   end;

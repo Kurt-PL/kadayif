@@ -34,6 +34,14 @@ separate (Kurt.Parser)
                        & "(spec 5.10.1) at line"
                        & Positive'Image (C.Cur.Line);
                   end if;
+                  --  §5.10.3 per-binding `mut` on an identifier
+                  --  position.
+                  if C.Cur.Kind = Kw_Mut then
+                     P.Bind_Muts.Append (True);
+                     Advance (C);
+                  else
+                     P.Bind_Muts.Append (False);
+                  end if;
                   if C.Cur.Kind = Tok_Ident
                     and then Peek_Tok (C).Kind = Tok_Hash
                   then
