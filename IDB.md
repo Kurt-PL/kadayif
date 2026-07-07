@@ -8,11 +8,11 @@ the spec clause that delegates the choice to the implementation.
 
 | Behaviour | kadayif's choice | Spec |
 |---|---|---|
-| Target | `arm64-apple-darwin` (AArch64 Mach-O), linked against `libSystem` | §1.3 |
+| Target | `aarch64+Apple` (Mach-O), linked against `libSystem` | §1.3 |
 | Cell bit-width `cellbits::exec` | `8` (byte-addressed); `Cell_Bits_Exec` in `kurt.ads` | §2.1.1, §4.1 |
 | Cell bit-width `cellbits::xlat` | `8`; `Cell_Bits_Xlat` in `kurt.ads` | §2.1.1 |
 | Address width | 8 cells (64-bit); `Address_Cells` | §4.2.1 |
-| Byte/cell order | little-endian (AArch64) | §2.1.1 |
+| Byte/cell order | little-endian (aarch64) | §2.1.1 |
 
 ## Lexical
 

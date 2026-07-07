@@ -16,7 +16,7 @@ separate (Kurt.Sema.Check.Infer)
                --  §8.5.2: atomic/guard references are restricted to
                --  unsigned integer referents, and further to a width the
                --  execution environment can operate on atomically (this
-               --  arm64 backend: 1/2/4/8 bytes via ldaxr/stlxr).
+               --  aarch64 backend: 1/2/4/8 bytes via ldaxr/stlxr).
                if E.Rf_Store in RS_Atomic | RS_Guard then
                   if not Is_Unsigned_Int_Type (PT) then
                      Error ("'&" & (if E.Rf_Store = RS_Atomic

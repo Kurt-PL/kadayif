@@ -82,7 +82,7 @@ package body Kurt.Codegen is
    ----------------------------------------------------------------------
    --  Dyn-item symbol table — every fn prototype inside a `@dyn` block.
    --  Records the fixed-arg count and whether the prototype is variadic,
-   --  so call sites can split arguments correctly under Apple's arm64
+   --  so call sites can split arguments correctly under the Apple
    --  variadic ABI (named args in regs, ... on the stack).
    ----------------------------------------------------------------------
 

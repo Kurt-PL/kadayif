@@ -1,6 +1,6 @@
 --  Kadayif L0 bootstrap codegen.
 --
---  Target: arm64 Apple Darwin (Mach-O).
+--  Target: aarch64+Apple (Mach-O).
 --  Strategy: brain-dead 1:1 lowering, zero optimisation, zero register
 --  allocator. Each statement emits a self-contained instruction sequence.
 --
@@ -13,7 +13,7 @@ with Kurt.Parser;
 package Kurt.Codegen is
 
    --  Emit assembly text for the unit. The output file is overwritten if
-   --  it exists. Symbol naming follows the Darwin convention: every
+   --  it exists. Symbol naming follows the Apple convention: every
    --  Kurt-level function `name` is emitted as `_name`.
    procedure Emit (U : Kurt.Parser.Translation_Unit; Out_Path : String);
 

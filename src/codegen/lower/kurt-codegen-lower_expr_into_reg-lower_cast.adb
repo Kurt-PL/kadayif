@@ -41,7 +41,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
                     & (if SrcW then "d0" else "s0"));
                else
                   --  §6.8.4 float → integer: truncate toward zero, saturating.
-                  --  arm64 fcvtzs/fcvtzu already implement the required
+                  --  aarch64 fcvtzs/fcvtzu already implement the required
                   --  boundary behaviour exactly — finite in range: trunc-zero;
                   --  above max → max; below min → min; +Inf → max;
                   --  -Inf → min (0 for unsigned); NaN → 0 (regardless of sign).

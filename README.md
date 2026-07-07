@@ -4,7 +4,7 @@ The brainless reference implementation of the Kurt programming language.
 
 Kadayif is a bootstrap compiler for Kurt, written in Ada. It
 translates a single `.kr` source file all the way to a native
-`arm64-apple-darwin` executable: lex → parse → semantic analysis → assembly,
+`aarch64+Apple` executable: lex → parse → semantic analysis → assembly,
 then it shells out to the system `as` and `ld` to assemble and link.
 
 > [!WARNING]
@@ -27,8 +27,8 @@ And if you're wondering why this compiler is named `kadayif` rather than just
 programming language could have only *one* compiler?
 
 > [!NOTE]
-> **Platform.** Right now this only runs on **arm64 macOS**. It emits Mach-O
-> arm64 assembly and leans on the host `as`/`ld` (plus `xcrun` for the SDK
+> **Platform.** Right now this only runs on **aarch64+Apple** (Apple-silicon
+> macOS). It emits Mach-O aarch64 assembly and leans on the host `as`/`ld` (plus `xcrun` for the SDK
 > path). The AAPCS64 calling convention is only **partly** implemented — the
 > common integer/aggregate and variadic cases work, but HFAs and a pile of edge
 > cases don't yet, so that's still on the to-do list. No other OS or
@@ -102,7 +102,7 @@ kadayif/
     sema/       Kurt.Sema     — type inference & checking
                 Kurt.Layout   — KSA size/align/offset
                 Kurt.Mono     — generic monomorphisation
-    codegen/    Kurt.Codegen  — direct arm64 assembly emitter
+    codegen/    Kurt.Codegen  — direct aarch64+Apple assembly emitter
     main.adb    command-line entry point
   tests/        regression tests + run.sh
 ```

@@ -358,7 +358,7 @@ separate (Kurt.Codegen)
 
       IO.Create (F, IO.Out_File, Out_Path);
       IO.Put_Line (F, "// kadayif bootstrap output");
-      IO.Put_Line (F, "// target: arm64-apple-darwin");
+      IO.Put_Line (F, "// target: aarch64+Apple");
 
       Emit_String_Pool (F, Pool);
 

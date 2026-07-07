@@ -23,7 +23,7 @@ is
    ------------------------------------------------------------------
    --  Call lowering. Arguments are evaluated to stack scratch slots in
    --  source order (§2.7.1), then fixed args are loaded into x0..x7.
-   --  Variadic args (Apple arm64 ABI) sit at the bottom of the frame.
+   --  Variadic args (Apple aarch64 ABI) sit at the bottom of the frame.
    ------------------------------------------------------------------
    procedure Lower_Call (E : Expr_Access) is separate;
 
@@ -419,7 +419,7 @@ begin
                Sz := Sizeof (Inner_Ty.Target);
                --  §8.5: a `guard` load is fully ordered (load-acquire).
                --  An `atomic` load needs no extra instruction — aligned
-               --  loads up to 8 bytes are single-copy atomic on arm64.
+               --  loads up to 8 bytes are single-copy atomic on aarch64.
                Guarded := Inner_Ty.R_Store = RS_Guard;
             end if;
             if Guarded then

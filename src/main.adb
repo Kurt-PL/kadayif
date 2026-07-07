@@ -109,7 +109,7 @@ procedure Main is
    begin
       IO.Put_Line (Version_Line);
       IO.Put_Line ("");
-      IO.Put_Line ("Compile a Kurt source file (arm64-apple-darwin).");
+      IO.Put_Line ("Compile a Kurt source file (aarch64+Apple).");
       IO.Put_Line ("");
       IO.Put_Line ("USAGE:");
       IO.Put_Line ("    kadayif [options] <input.kr>");

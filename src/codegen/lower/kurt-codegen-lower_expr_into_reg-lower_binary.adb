@@ -177,7 +177,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
          when B_Div | B_Mod =>
             --  §6.4.1. The instruction follows the operand signedness, and
             --  narrow operands are normalised first (registers may hold
-            --  garbage above the type width). arm64 division semantics
+            --  garbage above the type width). aarch64 division semantics
             --  match the spec exactly: x / 0 == 0 and MIN / -1 == MIN, so
             --  a % b = a - (a / b) * b (msub) also yields x % 0 == x and
             --  MIN % -1 == 0 without further correction.

@@ -258,7 +258,7 @@ package body Kurt.Sema is
 
    --  §8.5.2: "Creating an `&atomic T` or `&guard T` reference for a `T`
    --  at a width for which the execution environment does not provide
-   --  atomic operations shall not appear." On this arm64 backend, atomic
+   --  atomic operations shall not appear." On this aarch64 backend, atomic
    --  load/store/RMW/CAS lower to ldaxr/stlxr, which handle 1/2/4/8-byte
    --  operands only; a 16-byte (ldaxp-shaped) or wider operand has no
    --  lowering here, so widths above 8 bytes are not atomic-eligible.

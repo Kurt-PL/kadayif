@@ -22,7 +22,7 @@ separate (Kurt.Sema.Check.Infer)
                elsif not Is_Atomic_Width_Ok (TT.Target) then
                   --  §8.5.2 via §8.7: the referent's width must be one
                   --  this execution environment can CAS atomically (this
-                  --  arm64 backend: 1/2/4/8 bytes).
+                  --  aarch64 backend: 1/2/4/8 bytes).
                   Error ("compare-and-swap referent '"
                          & Image (TT.Target) & "' is wider than this "
                          & "execution environment's atomic operations "

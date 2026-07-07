@@ -24,7 +24,7 @@ separate (Kurt.Layout)
             then
                return 16;
             end if;
-            return 8;  --  pointer width (host arm64)
+            return 8;  --  pointer width (host aarch64)
          when T_Array =>
             --  §4.6: N elements at the element stride. Every Kurt type's
             --  size is a multiple of its alignment, so stride = size.
