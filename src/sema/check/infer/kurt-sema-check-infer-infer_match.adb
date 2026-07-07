@@ -19,6 +19,7 @@ separate (Kurt.Sema.Check.Infer)
                Prev_Body  : Expr_Access := null;
                Prev_Names : Path_Segments.Vector;
                Prev_Tys   : Type_Vectors.Vector;
+               Prev_Muts  : Bool_Vectors.Vector;
                --  §8.8.2/§5.2: arms are mutually exclusive alternatives,
                --  not sequential code -- each is checked from the SAME
                --  pre-match Moved/Init_States snapshot (one arm shall not
@@ -698,6 +699,18 @@ separate (Kurt.Sema.Check.Infer)
                                             (Prev_Names.Element (J)) = Nm
                                        then
                                           Found := True;
+                                          --  §5.10.3: mutability is part
+                                          --  of the binding contract the
+                                          --  alternatives must agree on.
+                                          if Prev_Muts.Element (J)
+                                               /= Scope.Element (K).Is_Mut
+                                          then
+                                             Error ("or-pattern binding '"
+                                               & Nm & "' is `mut` in one "
+                                               & "alternative but not the "
+                                               & "other (spec 5.10.1/"
+                                               & "5.10.3)");
+                                          end if;
                                           if not Same_Type
                                             (Prev_Tys.Element (J),
                                              Scope.Element (K).Ty)
@@ -727,9 +740,11 @@ separate (Kurt.Sema.Check.Infer)
                            Prev_Body := Arm.Arm_Body;
                            Prev_Names.Clear;
                            Prev_Tys.Clear;
+                           Prev_Muts.Clear;
                            for K in Saved + 1 .. N loop
                               Prev_Names.Append (Scope.Element (K).Name);
                               Prev_Tys.Append (Scope.Element (K).Ty);
+                              Prev_Muts.Append (Scope.Element (K).Is_Mut);
                            end loop;
                         end if;
                      end;
