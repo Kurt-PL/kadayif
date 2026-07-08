@@ -119,7 +119,8 @@ begin
          --  quiet NaN with payload 0, its sign the XOR of the operands'
          --  signs for * / %, and the sign of the (first) NaN operand —
          --  or, when neither operand is NaN, of the leading operand —
-         --  for + and -.
+         --  for + and -; for `-` alone, a NaN that is the following (and
+         --  only NaN) operand contributes its sign negated.
          declare
             R1  : constant String := FReg (D_Reg + 1, Ty);
             R2  : constant String := FReg (D_Reg + 2, Ty);
@@ -161,6 +162,20 @@ begin
             if E.B_Op in B_Mul | B_Div | B_Mod then
                IO.Put_Line (F, "    eor     " & XS & ", " & XA
                                & ", " & XB);
+            elsif E.B_Op = B_Sub then
+               --  sign of the first NaN operand — negated when that is
+               --  the following operand — else of the leading one:
+               --  XS := rhs-NaN ? -rhs : lhs, then lhs-NaN overrides
+               --  (covering the both-NaN case with the un-negated
+               --  leading sign).
+               IO.Put_Line (F, "    eor     " & XS & ", " & XB & ", "
+                               & Sgn);
+               IO.Put_Line (F, "    fcmp    " & R1 & ", " & R1);
+               IO.Put_Line (F, "    csel    " & XS & ", " & XS & ", "
+                               & XA & ", vs");
+               IO.Put_Line (F, "    fcmp    " & R & ", " & R);
+               IO.Put_Line (F, "    csel    " & XS & ", " & XA & ", "
+                               & XS & ", vs");
             else
                --  sign of the first NaN operand, else of the leading one:
                --  XS := rhs-NaN ? rhs : lhs, then lhs-NaN overrides.

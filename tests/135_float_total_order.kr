@@ -13,7 +13,8 @@ fn main() -> ui1 {
     let s = 0nans;
     let i = 0inf;
     airside {
-        posix::printf("%d%d%d%d%d%d%d%d%d%d%d%d\n\0".ptr,
+        posix::printf("%d%d%d%d%d%d%d%d%d%d%d%d%d\n\0".ptr,
+            b2i(-5.0 < -1.0),           // 1 — NegScl orders by value
             b2i(nz < pz),               // 1 — -0.0 < +0.0
             b2i(nz == pz),              // 0 — sign distinguishes zero
             b2i(nz != pz),              // 1
@@ -26,7 +27,7 @@ fn main() -> ui1 {
             b2i(-0nanq'2 < -0nanq'1),   // 1 — payload orders earlier (-)
             b2i(q == 1.0),              // 0 — NaN equals nothing else
             b2i(0nanqfe8m23 > 0inffe8m23)); // 1 — fe8m23 path
-        // 101111111101
+        // 1101111111101
     }
     return 0;
 }

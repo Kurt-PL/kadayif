@@ -13,17 +13,20 @@ fn main() -> ui1 {
     let q: fe11m52 = -(0.0 / 0.0); // -0nanq
     let inf = 0inf;
     airside {
-        posix::printf("%d%d%d%d%d%d%d%d%d\n\0".ptr,
+        posix::printf("%d%d%d%d%d%d%d%d%d%d%d\n\0".ptr,
             b2i(p == 0nanq),                    // 1 — canonical bits
             b2i(q == -0nanq),                   // 1
             b2i(0nanq'5 + 1.0 == 0nanq),        // 1 — payload zeroed
-            b2i(1.0 - 0nanq'7 == 0nanq),        // 1 — sign of NaN operand
+            b2i(1.0 - 0nanq'7 == -0nanq),       // 1 — following-operand
+                                                //     NaN sign negated
+            b2i(1.0 - -0nanq == 0nanq),         // 1 — and back
+            b2i(0nanq'9 - 1.0 == 0nanq),        // 1 — leading NaN as-is
             b2i(-0nanq * 1.0 == -0nanq),        // 1 — XOR(-, +) = -
             b2i(0nans + 1.0 == 0nanq),          // 1 — sNaN quieted
             b2i(inf - inf == 0nanq),            // 1 — leading operand +
             b2i(1.0 % 0.0 == 0nanq),            // 1 — XOR(+, +) = +
             b2i(-1.0 / 0.0 == -0inf));          // 1 — ordinary special op
-        // 111111111
+        // 11111111111
 
         // §6.8.5 NaN casts.
         let sat: fe8m23 = 0nanq'0x7FFFFF00000 as fe8m23; // saturates
