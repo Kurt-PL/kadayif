@@ -17,7 +17,7 @@ separate (Kurt.Parser)
             Advance (C);
             E := new Expr_Node (Kind => E_Ref);
             E.Rf_Sigil := R_Shared;
-            --  §8.1 `&raw` is a single fused token — see Parse_Type.
+            --  §8.1 `%` is a single fused token — see Parse_Type.
             if C.Cur.Kind = Tok_Ident
               and then SU.To_String (C.Cur.Lexeme) = "raw"
               and then C.Cur.Line = Amp_Line

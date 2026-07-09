@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 // §6.1.1 associated functions: `Type::fn()` and qualified `(T as Trait)::fn()`
 trait Factory { fn build() -> si4; }
 struct widget { id: si4 }

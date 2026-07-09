@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §9.9.3 capturing an aggregate (copyable struct) binding. The value is
 // copied into the closure's anonymous capture struct at creation; the body

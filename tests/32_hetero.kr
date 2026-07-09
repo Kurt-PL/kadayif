@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 trait Show {
     fn val(&self) -> si4;
@@ -21,7 +21,7 @@ fn main() -> ui1 {
     mut i: uaddr = 0;
     mut total: si4 = 0;
     airside {
-        let base: &raw &dyn Show = items.ptr;
+        let base: %&dyn Show = items.ptr;
         while i < items.len {
             let d: &dyn Show = *(base + i);   // load one fat ref
             total += d.val();                 // dynamic dispatch per element

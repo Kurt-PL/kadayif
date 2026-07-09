@@ -6,7 +6,7 @@ separate (Kurt.Codegen.Lower_Expr_Into_Reg)
          --  produce float results and are handled by Lower_Float_Into_D.)
 
          --  §8.1.3 reference cast: a sigil/modifier conversion preserves
-         --  the address bits (and uaddr ↔ &raw is the same machine word),
+         --  the address bits (and uaddr ↔ %is the same machine word),
          --  so the value is simply moved into the target register. Fat
          --  references are not part of the cast chain, so 8 bytes suffice.
          declare

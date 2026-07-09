@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §9.3.1 associated types: the trait declares `type Item;`, the impl provides
 // `type Item = Concrete;`, and the method signature refers to `selftype::Item`.

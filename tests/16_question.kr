@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 fn add1(m: verdict.<si4, si4>) -> verdict.<si4, si4> {
     let v: si4 = m?;                 // success: v = inner; fail: return m

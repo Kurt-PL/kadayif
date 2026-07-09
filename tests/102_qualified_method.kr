@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 trait Greet { fn hello(&self) -> si4; }
 struct dog { age: si4 }
 impl dog as Greet {

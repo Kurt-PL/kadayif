@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §5.10.1 `#wild#(name)`: the type-destroying catch-all binds the matched
 // value's raw representation as a `&[ui1]` cell slice.

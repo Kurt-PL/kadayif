@@ -80,7 +80,7 @@ package Kurt.Lexer is
       Kw_Use,            --  `use path;` (§5.12.2)
       Kw_Volatile,       --  reference modifier (§8.1)
       Kw_Xfer,           --  ownership-transferring closure (§9.9)
-      --  Reference sigils (§4.9, §8.1). The `raw` qualifier in `&raw T`
+      --  Reference sigils (§4.9, §8.1). The `raw` qualifier in `%T`
       --  is grammatically bound to `&` with no separator; the parser
       --  splices the two tokens after verifying adjacency.
       Op_Amp,            --  &

@@ -2,7 +2,7 @@
 // `printf`; the call site emits a reference to `printf`.
 // §4.12 inferred `?`: a `?` annotation is equivalent to an omitted one.
 // §5.16 @[...]@: non-normative annotations are parsed and ignored.
-@dyn as libc { @symbol "printf" variadic fn say(&raw ui1) -> si4; }
+@dyn as libc { @symbol "printf" variadic fn say(%ui1) -> si4; }
 
 @[ doc("entry point") ]@
 fn main() -> ui1 {

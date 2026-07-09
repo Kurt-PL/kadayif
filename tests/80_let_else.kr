@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §5.2.1 refutable let-else: `let Enum::V { binds } = e else { diverge };`.
 // On a match the payload binds for the rest of the enclosing scope; on a

@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §4.7: layouts past 2**31 cells are representable (uaddr is 64-bit).
 struct wide {

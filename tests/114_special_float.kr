@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §3.5.2 special floating-point literals: `0nanq` is a quiet NaN (sign 0,
 // payload 0), `0nans` a signalling NaN (payload 1), `0inf` positive

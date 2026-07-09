@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 trait A { fn act(&self) -> si4; }
 trait B { fn act(&self) -> si4; }
 struct s { v: si4 }

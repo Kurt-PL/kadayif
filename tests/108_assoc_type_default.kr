@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §9.3.1 associated-type DEFAULT: the trait declares `type Item = si4;` with a
 // default, and the impl OMITS `type Item = ...`. The method signature refers to

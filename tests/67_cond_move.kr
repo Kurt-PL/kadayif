@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §8.8/§8.11 conditional-move drop flags: a binding moved on only some
 // control-flow paths is destroyed exactly once. `g` is moved into `sink`

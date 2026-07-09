@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §8.11.1 the destructor of every `with destruct` value runs exactly once.
 // An array literal transfers its element bindings (their scope-exit drops are

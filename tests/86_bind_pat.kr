@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 // §5.10 binding pattern `name # sub`: bind the value while testing.
 fn classify(code: si4) -> si4 {
     return match code {

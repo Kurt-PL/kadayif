@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 fn main() -> ui1 {
     let ok:  verdict.<si4, si4> = verdict::Pass { 42 };
     let v = contract ok else.e {

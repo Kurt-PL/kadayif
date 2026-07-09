@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 struct vec3 { x: si4, y: si4, z: si4 }          // 12B -> two registers
 struct mat2 { a: ui8, b: ui8, c: ui8, d: ui8 }  // 32B -> indirect (sret)

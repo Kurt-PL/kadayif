@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 fn main() -> ui1 {
     // §3.4.3 bool literals via the new `true`/`false` keywords.

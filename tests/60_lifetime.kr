@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §8.4 lifetime annotations on reference types. Lifetimes are a
 // compile-time discipline with no representation, so the bootstrap parses

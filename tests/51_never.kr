@@ -1,4 +1,4 @@
-@dyn as posix { fn write(si4, &raw ui1, uaddr) -> saddr; }
+@dyn as posix { fn write(si4, %ui1, uaddr) -> saddr; }
 
 // §7.10 with no handler declared, `@trap;` diverges via the
 // implementation-defined default: an undefined-instruction trap

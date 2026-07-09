@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §6.10.2 implicit xlatime: const initializer folded at translation time.
 const SIZE: si4 = xlatime { express 64 * 4; };   // 256

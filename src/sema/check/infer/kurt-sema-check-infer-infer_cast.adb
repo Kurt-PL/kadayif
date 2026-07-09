@@ -87,7 +87,7 @@ separate (Kurt.Sema.Check.Infer)
                                & "' as '" & Image (E.Cast_Ty)
                                & "' is not permitted (spec 8.1.3)");
                      elsif Outcome = 1 and then In_Airside = 0 then
-                        --  §8.1.3: an ascending cast `&raw T` -> a managed
+                        --  §8.1.3: an ascending cast `%T` -> a managed
                         --  reference (`&T`/`&mut T`/`$T`) begins lifetime
                         --  tracking on an asserted referent and is
                         --  permitted only in an `airside` region.

@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 fn main() -> ui1 {
     // ui4 with the sign bit set: sdiv would read it as negative (§6.4.1).

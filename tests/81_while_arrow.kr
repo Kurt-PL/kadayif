@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §7.5.1 `while cond -> v { }` — cond is a contract value re-evaluated each
 // iteration; on the success variant its payload binds to `v` in the body, on

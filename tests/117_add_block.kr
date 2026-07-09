@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §10.3 `@add` block form groups several imports under one prefix — no
 // semantic difference from separate `@add` declarations.

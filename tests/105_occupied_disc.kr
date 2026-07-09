@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 // §5.7 occupied-set discriminant: C must skip used values {1,0} -> 2
 enum e { A = 1, B = 0, C }
 fn main() -> ui1 {

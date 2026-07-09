@@ -82,7 +82,7 @@ package body Kurt.Sema is
             return (case T.Sigil is
                        when R_Shared => "&",
                        when R_Excl   => "$",
-                       when R_Raw    => "&raw ")
+                       when R_Raw    => "%")
                    & (if T.R_Volatile then "volatile " else "")
                    & (case T.R_Store is
                          when RS_None   => "",
@@ -279,7 +279,7 @@ package body Kurt.Sema is
    end Unsigned_Of_Size;
 
    --  §8.1.3 sigil strength rank along the descending chain
-   --  `$T(4) → &mut T(3) → &T(2) → &raw T(1) → uaddr(0)`. A storable
+   --  `$T(4) → &mut T(3) → &T(2) → %T(1) → uaddr(0)`. A storable
    --  shared reference (`&mut`/`&atomic`/`&guard`) ranks 3; a load-only
    --  `&T` ranks 2.
    function Ref_Rank (T : Type_Access) return Natural is
@@ -347,9 +347,9 @@ package body Kurt.Sema is
       else
          --  Ascending.
          if RS = 0 and then RT = 1 then
-            return 0;                  --  uaddr → &raw: landside
+            return 0;                  --  uaddr → %: landside
          elsif RS = 1 then
-            return 1;                  --  &raw → &/&mut/$: airside
+            return 1;                  --  %→ &/&mut/$: airside
          else
             return 2;                  --  &T→&mut, &T→$, &mut→$: TF
          end if;

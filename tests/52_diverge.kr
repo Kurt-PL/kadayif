@@ -1,5 +1,5 @@
 @dyn as posix {
-    variadic fn printf(&raw ui1) -> si4;
+    variadic fn printf(%ui1) -> si4;
     fn exit(si4);
 }
 

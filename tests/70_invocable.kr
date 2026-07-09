@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §9.9.2 invocable type syntax. `/.T/ -> U` accepts subroutine pointer
 // values and non-`xfer` closures, and is invocable any number of times.

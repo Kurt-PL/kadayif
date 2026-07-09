@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §8.5.2 `mut` field requirement for atomic stores: an atomic store
 // (RMW) through `&self` to a struct field is permitted precisely when the

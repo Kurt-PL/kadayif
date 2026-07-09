@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §8.4.3 a returned reference shall not outlive its referent. These returns
 // are conforming: `pick` returns one of its reference parameters (whose

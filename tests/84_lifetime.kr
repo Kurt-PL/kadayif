@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §5.9 lifetime parameters `'a` on a generic subroutine: a compile-time
 // discipline with no representation, parsed and ignored. The reference

@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 enum offset { Neg = -19700101, Zero = 0, Pos = 7 }      // -> si4 discriminant
 enum tiny { A = -3, B = 5 }                             // -> si1 discriminant

@@ -271,7 +271,7 @@ separate (Kurt.Sema.Check.Check_Stmt)
                end if;
                --  §8.1.2: a store through a reference requires store
                --  permission — `$T`, or a `mut`/`atomic`/`guard`
-               --  modifier. `&T` and `&raw T` are load-only.
+               --  modifier. `&T` and `%T` are load-only.
                if S.Asn_Lhs.Kind = E_Deref then
                   declare
                      IT : constant Type_Access :=

@@ -289,7 +289,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                        & "unreachable)";
                   end if;
                   --  §8.1.4 stored representation: ptr at offset 0, len
-                  --  at offset (&raw T)@size -- 8 bytes on this target.
+                  --  at offset (%T)@size -- 8 bytes on this target.
                   Lower_Expr_Into_Reg (F, S.Asn_Rhs, 9, ST);
                   IO.Put_Line (F, "    str     x9, [x29, #"
                                   & Img (B.Offset

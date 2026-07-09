@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §5.5.3 default-value expressions: a field may carry `= expr`; a composite
 // literal that omits such a field gets the default, evaluated at construction.

@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §9.3 generic traits: one template, distinct concrete instances per
 // argument list; usable as an impl target and as a generic bound.

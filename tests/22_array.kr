@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // Kurt has no `[]` indexing (§6.2): element access is `*(arr.ptr + i)`
 // via the fat-reference view (§4.6.1) + raw reference arithmetic (§8.6.4).
@@ -6,7 +6,7 @@ fn sum(a: [si4; 4]) -> si4 {          // 16B array -> two-register param
     mut t: si4 = 0;
     mut i: uaddr = 0;
     airside {
-        let base: &raw si4 = a.ptr;
+        let base: %si4 = a.ptr;
         while i < 4 {
             t += *(base + i);
             i += 1;
@@ -19,7 +19,7 @@ fn main() -> ui1 {
     // §6.1.6 element-list literal; element store via a writable raw cursor
     mut a: [si4; 4] = [10, 20, 30, 40];
     airside {
-        let cell2: &raw mut si4 = (&raw mut a as! &raw mut si4) + 2;
+        let cell2: %mut si4 = (%mut a as! %mut si4) + 2;
         *cell2 = 33;                                          // a[2] := 33
     }
     airside { posix::printf("s=%d\n\0".ptr, sum(a)); }       // 103
@@ -29,7 +29,7 @@ fn main() -> ui1 {
     mut i: uaddr = 0;
     mut t: ui8 = 0;
     airside {
-        let zw: &raw mut ui8 = &raw mut z as! &raw mut ui8;
+        let zw: %mut ui8 = %mut z as! %mut ui8;
         while i < 5 {
             *(zw + i) = *(zw + i) * (i as ui8);               // 0,7,14,21,28
             t += *(zw + i);
@@ -41,8 +41,8 @@ fn main() -> ui1 {
 
     // §4.6.1 .ptr feeds §8.6.4 raw arithmetic (scale = si4@size)
     airside {
-        let p: &raw si4 = a.ptr;
-        let q: &raw si4 = p + 2;
+        let p: %si4 = a.ptr;
+        let q: %si4 = p + 2;
         posix::printf("p2=%d\n\0".ptr, *q);                  // 33
     }
     return 0;

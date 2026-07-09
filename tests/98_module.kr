@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §10.6 `module` is a real namespace: items are reachable only through the
 // qualified path (`math::square`), bare names do not leak out, and nested

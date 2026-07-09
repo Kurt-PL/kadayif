@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §4.4.4 NaN propagation: every NaN-producing arithmetic result is a
 // quiet NaN with payload 0; sign = the (first) NaN operand's — or the

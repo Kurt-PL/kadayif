@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §7.7 `loop { … }` as an expression: it runs until a `break expr` supplies
 // its value. `continue` skips to the next iteration as usual.

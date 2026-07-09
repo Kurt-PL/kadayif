@@ -10,7 +10,7 @@ package body Kurt.Mono is
    ----------------------------------------------------------------------
    --  Mangle an instantiated type into a flat identifier.
    --     verdict.<si4, si4>  ->  "verdict$si4$si4"
-   --     &raw ui1            ->  "praw_ui1"
+   --     %ui1            ->  "praw_ui1"
    ----------------------------------------------------------------------
    function Mangle (T : Type_Access) return String is separate;
 

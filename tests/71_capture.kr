@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §9.9.3 capturing closures. By default a closure captures every referenced
 // enclosing binding by copy (copyable bindings are copied into the closure's

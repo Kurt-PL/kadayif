@@ -1,8 +1,8 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 struct point { x: si4, y: si8 }
 type myint = si4;
-type cstr = &raw ui1;
+type cstr = %ui1;
 
 fn main() -> ui1 {
     // §6.12.1 layout intrinsics (xlatime constants).

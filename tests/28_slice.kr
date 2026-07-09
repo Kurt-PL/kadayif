@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §4.6: &[T] slice parameter — fat ref (ptr + len). Element access is
 // `*(s.ptr + i)` (no `[]` operator in Kurt); `.len` is the runtime extent.
@@ -6,7 +6,7 @@ fn sum(s: &[si4]) -> si4 {
     mut t: si4 = 0;
     mut i: uaddr = 0;
     airside {
-        let base: &raw si4 = s.ptr;
+        let base: %si4 = s.ptr;
         while i < s.len {
             t += *(base + i);
             i += 1;
@@ -36,7 +36,7 @@ fn main() -> ui1 {
     let t: &[si4] = &a;
     mut i: uaddr = 0;
     airside {
-        let w: &raw mut si4 = t.ptr as! &raw mut si4;
+        let w: %mut si4 = t.ptr as! %mut si4;
         while i < t.len {
             *(w + i) = *(w + i) + 1;
             i += 1;

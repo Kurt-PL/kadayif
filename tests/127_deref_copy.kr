@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §8.8.1 an aggregate `let` may be initialised from a dereferenced pointer
 // (`let b: T = *p;`) or from an aggregate field of a binding (`let c: T =
@@ -11,7 +11,7 @@ fn main() -> ui1 {
     let s: box = box { tag = 9, p = a };
     let c: pt  = s.p;                   // aggregate field copy
     airside {
-        let b: pt = *(&a as &raw pt);   // aggregate deref-copy
+        let b: pt = *(&a as %pt);   // aggregate deref-copy
         posix::printf("b=(%d,%d) c=(%d,%d)\n\0".ptr, b.x, b.y, c.x, c.y);
     }                                   // b=(1,2) c=(1,2)
     return 0;

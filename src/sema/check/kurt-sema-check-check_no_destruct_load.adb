@@ -9,6 +9,6 @@ separate (Kurt.Sema.Check)
       then
          Error ("loading '" & Image (E.Sem_Ty) & "' through a tracked "
                 & "reference copies a value satisfying `destruct`; only "
-                & "a `&raw` load is permitted (spec 8.9)");
+                & "a `%` load is permitted (spec 8.9)");
       end if;
    end Check_No_Destruct_Load;

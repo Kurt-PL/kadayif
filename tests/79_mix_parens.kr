@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §6.6: a comparison mixed with `& | ^ << >>` requires explicit parentheses.
 // Well-formed uses must parenthesise the bitwise/shift sub-expression; this

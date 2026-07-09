@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §3.5.2 hexadecimal floating-point literals: `0x` significand with a
 // fractional part and/or a binary exponent (`p`/`P`, power of two).

@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §5.1 a bare `return;` (no value) is well-formed in a `void` subroutine,
 // both as an early exit and as the final statement.

@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §8.11 destruct propagation: a type with no `with destruct` of its own
 // still satisfies `destruct` when a field/payload does, and the implicit

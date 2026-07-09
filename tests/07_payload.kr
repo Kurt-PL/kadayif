@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // Tuple-variant payload (§5.6): positional fields, accessed by .0/.1
 enum shape {

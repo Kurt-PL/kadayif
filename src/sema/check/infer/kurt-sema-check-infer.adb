@@ -201,10 +201,10 @@ separate (Kurt.Sema.Check)
                IT : constant Type_Access := Infer (E.D_Inner, null);
             begin
                if Is_Ref (IT) then
-                  --  §2.6: dereferencing a `&raw` reference is an
+                  --  §2.6: dereferencing a `%` reference is an
                   --  airside-only operation. `&`/`$` derefs are landside.
                   if IT.Sigil = R_Raw and then In_Airside = 0 then
-                     Error ("dereference of a `&raw` reference is "
+                     Error ("dereference of a `%` reference is "
                             & "permitted only in an `airside` region "
                             & "(spec 2.6)");
                   end if;

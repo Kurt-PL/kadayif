@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §7.4 guard clause: `pattern if expr = body`. An arm is selected only when
 // the pattern matches AND the guard is true. A guard does not affect
@@ -6,7 +6,7 @@
 
 // (a) integer scrutinee — guards on int patterns and on the wild arm. The
 // first arm whose pattern matches and whose guard holds wins, in order.
-fn classify(n: si4) -> &raw ui1 {
+fn classify(n: si4) -> %ui1 {
     return match n {
         0                 = "zero\0".ptr,
         #wild# if n < 0   = "negative\0".ptr,
@@ -35,28 +35,28 @@ fn main() -> ui1 {
     let ci: shape = shape::Circle { 5 };
     let sq: shape = shape::Rect { 4, 4 };
     let rc: shape = shape::Rect { 3, 4 };
-    let a: &raw ui1 = match pt {
+    let a: %ui1 = match pt {
         shape::Circle { r } if r == 0 = "point\0".ptr,
         shape::Circle { r }           = "circle\0".ptr,
         shape::Rect { w, h } if w == h = "square\0".ptr,
         shape::Rect { w, h }           = "rect\0".ptr,
         #wild#                         = "?\0".ptr,
     };
-    let b: &raw ui1 = match ci {
+    let b: %ui1 = match ci {
         shape::Circle { r } if r == 0 = "point\0".ptr,
         shape::Circle { r }           = "circle\0".ptr,
         shape::Rect { w, h } if w == h = "square\0".ptr,
         shape::Rect { w, h }           = "rect\0".ptr,
         #wild#                         = "?\0".ptr,
     };
-    let c: &raw ui1 = match sq {
+    let c: %ui1 = match sq {
         shape::Circle { r } if r == 0 = "point\0".ptr,
         shape::Circle { r }           = "circle\0".ptr,
         shape::Rect { w, h } if w == h = "square\0".ptr,
         shape::Rect { w, h }           = "rect\0".ptr,
         #wild#                         = "?\0".ptr,
     };
-    let d: &raw ui1 = match rc {
+    let d: %ui1 = match rc {
         shape::Circle { r } if r == 0 = "point\0".ptr,
         shape::Circle { r }           = "circle\0".ptr,
         shape::Rect { w, h } if w == h = "square\0".ptr,

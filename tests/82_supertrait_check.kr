@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §9.3.3 supertrait satisfaction is now checked: a type implementing a trait
 // shall also implement all of that trait's supertraits. This exercises a

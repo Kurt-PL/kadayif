@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §8.2/§8.3 a conforming exclusive reference: `$x` is the sole live
 // reference to x, so storing through it (asserting exclusivity) and

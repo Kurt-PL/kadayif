@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 // §10.2 diamond-imported unit processed exactly once: geo.kr is reached via
 // three different `@add ... as` sites (through 112_lib/diamond_a.kr,
 // 112_lib/diamond_b.kr, and directly), each under its own local alias, and

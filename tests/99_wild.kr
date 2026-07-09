@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 enum colour { Red, Green, Blue }    // no declared #wild#; disc ui1, vals 0/1/2
 fn main() -> ui1 {
     let w: colour = colour::#wild#;   // §6.1.5 implicit wild = 3 (smallest unused)

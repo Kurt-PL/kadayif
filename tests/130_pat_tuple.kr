@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §5.10.1 anonymous-struct (tuple) patterns `.{ ... }` in match: top-level
 // over a tuple binding, nested inside a variant payload, and with `#`

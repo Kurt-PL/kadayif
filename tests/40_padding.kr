@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 struct test_pad {
     magic: ui4,
@@ -17,11 +17,11 @@ fn main() -> ui1 {
 
     // We cannot access s.? directly (which causes a translation failure).
     // Instead, we inspect the padding memory at offset 4 via raw pointer
-    // arithmetic — a `&raw` dereference, which is airside-only (§2.6).
+    // arithmetic — a % dereference, which is airside-only (§2.6).
     mut pad_val: ui4 = 0;
     airside {
-        let s_ptr: &raw test_pad = &raw s;
-        let pad_ptr: &raw ui4 = (s_ptr as uaddr + 4) as &raw ui4;
+        let s_ptr: %test_pad = %s;
+        let pad_ptr: %ui4 = (s_ptr as uaddr + 4) as %ui4;
         pad_val = *pad_ptr;
     }
 

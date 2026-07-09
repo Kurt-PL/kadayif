@@ -36,9 +36,9 @@ separate (Kurt.Layout)
             --  fat-pair size so a stray query is harmless.
             return 16;
          when T_Fn =>
-            --  §4.10: a bare subroutine pointer equals `(&raw void)@size`
+            --  §4.10: a bare subroutine pointer equals `(%void)@size`
             --  (one word). §9.9.2: an INVOCABLE type (`/.T/ -> U` / `xfer
-            --  /.T/ -> U`) is the two-word tuple `.{ &raw void, &raw void
+            --  /.T/ -> U`) is the two-word tuple `.{ %void, %void
             --  }` -- field .0 the callable descriptor, field .1 the state
             --  pointer.
             if T.Fn_Invocable then

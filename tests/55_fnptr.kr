@@ -1,24 +1,24 @@
 @dyn as posix {
-    variadic fn printf(&raw ui1) -> si4;
-    fn qsort(&raw ui1, uaddr, uaddr, fn(&raw ui1, &raw ui1) -> si4);
+    variadic fn printf(%ui1) -> si4;
+    fn qsort(%ui1, uaddr, uaddr, fn(%ui1, %ui1) -> si4);
 }
 
 // §4.10 a subroutine used as a value is a subroutine pointer. `cmp` is
 // passed to qsort, which calls it back across the FFI boundary.
-airside fn cmp(a: &raw ui1, b: &raw ui1) -> si4 {
-    let pa: &raw si4 = a as! &raw si4;
-    let pb: &raw si4 = b as! &raw si4;
+airside fn cmp(a: %ui1, b: %ui1) -> si4 {
+    let pa: %si4 = a as! %si4;
+    let pb: %si4 = b as! %si4;
     return *pa - *pb;          // ascending
 }
 
 fn main() -> ui1 {
     mut a: [si4; 5] = [5, 3, 1, 4, 2];
     airside {
-        let base: &raw ui1 = &raw mut a as! &raw ui1;
+        let base: %ui1 = %mut a as! %ui1;
         posix::qsort(base, 5, 4, cmp);     // bare `cmp` -> fn-ptr value
     }
     airside {
-        let p: &raw si4 = &raw a as! &raw si4;
+        let p: %si4 = %a as! %si4;
         posix::printf("sorted: %d %d %d %d %d\n\0".ptr,
             *(p + 0), *(p + 1), *(p + 2), *(p + 3), *(p + 4));   // 1 2 3 4 5
     }

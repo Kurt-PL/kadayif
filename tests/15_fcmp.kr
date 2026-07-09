@@ -1,6 +1,6 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
-fn airss(b: bool, lbl: &raw ui1) -> void {
+fn airss(b: bool, lbl: %ui1) -> void {
     airside { posix::printf("%s = %d\n\0".ptr, lbl, b); }
 }
 

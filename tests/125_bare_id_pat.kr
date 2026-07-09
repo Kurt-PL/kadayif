@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §5.10.1 a bare identifier match arm is an irrefutable binding (catch-all):
 // it binds the scrutinee to the name at its original type. Works over any

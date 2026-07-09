@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §8.8.2/§8.1: an exclusive reference `$T` is intrinsically bodyless-
 // `destruct` (uncopyable, transfer-only) regardless of referent. Rebinding

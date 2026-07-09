@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 fn main() -> ui1 {
     // §6.11 positional: anonymous in() / in() -> indices 0,1; body uses '0/'1
     mut s: si4 = 0;

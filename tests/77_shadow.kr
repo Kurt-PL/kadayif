@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §5.17: a name may be declared at most once *within a scope*, but an inner
 // scope may shadow an outer declaration — a distinct, independent binding.

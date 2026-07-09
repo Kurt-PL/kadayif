@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §8.4 a destruct local declared inside an `if let` then-block is destroyed
 // at the block's end — while the payload alias binding (`v`, projecting into

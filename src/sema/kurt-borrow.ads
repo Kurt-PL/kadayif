@@ -4,7 +4,7 @@
 --  from it. Kurt.Sema drives it during the body-analysis pass.
 --
 --  Bootstrap scope: references are tracked per simple named place (the
---  binding they are taken of). `&raw` references are NOT tracked (§8.2.2:
+--  binding they are taken of). `%` references are NOT tracked (§8.2.2:
 --  they carry no position in the tree). The tree models re-derivation via
 --  parent links; the first milestone creates roots only.
 

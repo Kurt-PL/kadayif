@@ -224,7 +224,7 @@ separate (Kurt.Sema)
       procedure Maybe_Move (E : Expr_Access) is separate;
 
       --  §8.9: a type satisfying `destruct` shall not be LOADED (copied)
-      --  through a tracked reference (&T, &mut T, $T) -- only a `&raw`
+      --  through a tracked reference (&T, &mut T, $T) -- only a `%`
       --  load is exempt. Conservative check for a direct load position
       --  (initializer, return value, call argument): E must already be
       --  Infer'd, so E.Sem_Ty and E.D_Inner.Sem_Ty (for an E_Deref) are
@@ -337,7 +337,7 @@ separate (Kurt.Sema)
       procedure Check_Stmt (S : Stmt_Access);
 
       --  §8.2/§8.3: map a reference sigil + store modifier to its initial
-      --  permission state. `&raw` is untracked (§8.2.2): Tracked is False.
+      --  permission state. `%` is untracked (§8.2.2): Tracked is False.
       procedure Borrow_State
         (Sigil   : Ref_Sigil;
          Store   : Ref_Store;
@@ -366,7 +366,7 @@ separate (Kurt.Sema)
       --  reference to a local or to a value parameter escapes its scope.
       --  Provenance of a returned reference binding comes from the derivation
       --  tree (`let r = &local; return r;` is caught the same as `return
-      --  &local;`). `&raw` is unmanaged (airside responsibility) and exempt.
+      --  &local;`). `%` is unmanaged (airside responsibility) and exempt.
       procedure Check_Return_Escape (E : Expr_Access) is separate;
 
       procedure Check_Block (Stmts : Stmt_Vectors.Vector) is separate;

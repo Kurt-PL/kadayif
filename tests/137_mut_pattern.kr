@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §5.10.3 per-binding mutability: bindings inside a destructuring
 // pattern may carry `mut` individually, in every pattern context; a

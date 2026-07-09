@@ -10,7 +10,7 @@ separate (Kurt.Parser)
             Advance (C);
             Node := new AST_Type (Kind => T_Ref);
             Node.Sigil := R_Shared;
-            --  §8.1 `&raw` is a single fused token — no separator may
+            --  §8.1 `%` is a single fused token — no separator may
             --  appear between `&` and `raw` (strict EBNF, ch. 3/8). A
             --  `raw` that follows any whitespace is an ordinary type
             --  name, not the raw-reference qualifier.

@@ -100,7 +100,7 @@ separate (Kurt.Codegen.Lower_Stmt)
                  Is_Slice_Ref (Ty) or else Is_Dyn_Ref (Ty);
                --  §2.2.3 automatic objects are laid out contiguously in
                --  declaration order, each at its natural alignment — not
-               --  rounded to a uniform 8-byte slot. This keeps a `&raw`
+               --  rounded to a uniform 8-byte slot. This keeps a `%`
                --  cursor's arithmetic across adjacent locals well-defined
                --  while preserving natural alignment for aarch64 loads/stores.
                Slot : constant Cell_Count :=

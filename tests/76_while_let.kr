@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §7.5.1 `while let PAT = e { }` — tests a refutable variant pattern against
 // a binding each iteration; the loop exits when the pattern no longer

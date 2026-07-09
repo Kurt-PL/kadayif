@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 fn describe(a: [si4; 3]) -> si4 {
     return match a {
         [0, 0, 0] = 100,

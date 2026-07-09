@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 fn f(x: si4) -> si4 { return x * 2; }
 fn g(x: si4) -> si4 { return x + 100; }
 

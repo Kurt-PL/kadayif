@@ -60,12 +60,12 @@ separate (Kurt.Sema.Check.Infer)
                      end if;
                      --  Steer a literal rhs toward the lhs type, but
                      --  not when lhs is a reference (§8.6.4 raw
-                     --  reference arithmetic: lead &raw T, follow uaddr).
+                     --  reference arithmetic: lead %T, follow uaddr).
                      if Is_Ref (LT) then
                         RT := Infer (E.B_Rhs, Mk_Named ("uaddr"));
                         if LT.Sigil /= R_Raw then
                            Error ("reference arithmetic requires a "
-                                  & "`&raw` family lead operand, got '"
+                                  & "`%` family lead operand, got '"
                                   & Image (LT) & "' (spec 8.6.4)");
                         elsif E.B_Op /= B_Add and then E.B_Op /= B_Sub
                         then

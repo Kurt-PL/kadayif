@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 // §10.8 all-line-branch conditional translation. With no -f flags the
 // `@flag_else` branches are taken; never-set line ifs are skipped (their
 // inactive bodies may even be ill-formed, per §10.8).

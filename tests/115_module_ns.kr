@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §10.6 modules are real namespaces: qualified access, nesting, `super`,
 // `srcroot`, and composition with `@add` namespaces all resolve through

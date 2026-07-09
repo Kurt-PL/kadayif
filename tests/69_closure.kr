@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §9.9 non-capturing closures. All three forms — short (`<- e`), standard
 // (`{ ... }`, return inferred) and full (`-> U { ... }`) — lower to an

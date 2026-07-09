@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §9.9.3 `xfer` closures. A closure that references a `with destruct` binding
 // transfers ownership of it into the closure's anonymous capture struct and

@@ -13,7 +13,7 @@ separate (Kurt.Sema.Check.Infer)
                   Error ("access to padding field '?' is prohibited (spec 5.5.2)");
                end if;
                if FN = "ptr" then
-                  --  Fat-pointer view (§8.1.4): `.ptr` is &raw elem.
+                  --  Fat-pointer view (§8.1.4): `.ptr` is %elem.
                   if E.F_Recv.Kind = E_String_Lit then
                      E.Sem_Ty := Mk_Raw_Ref (Mk_Named ("ui1"));
                   elsif RT /= null and then RT.Kind = T_Array then

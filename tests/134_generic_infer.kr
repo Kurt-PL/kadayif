@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 
 // §5.9.2 generic argument inference: a bare call to a generic template
 // deduces the type arguments from the actuals; bare literals are steered

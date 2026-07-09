@@ -1,4 +1,4 @@
-@dyn as posix { variadic fn printf(&raw ui1) -> si4; }
+@dyn as posix { variadic fn printf(%ui1) -> si4; }
 // §7.2.3 extraction into an existing place: `place = contract e else fb;`
 // copies the success payload into an existing mut place. The fallback shall
 // diverge or yield a value assignable to the success payload type.
