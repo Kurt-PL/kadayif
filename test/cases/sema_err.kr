@@ -1,0 +1,21 @@
+#dyn io {
+    variadic fn printf(%ui1) -> si4;
+}
+
+fn no_return(x: si4) -> si4 {
+    if x > 0 { return 1~si4; }
+}
+
+
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    io::printf("outside airside\n\0".ptr);
+    let x: si4 = 1~si4;
+    x = 2~si4;
+    let y: ui1 = 300;
+    let p: %si4 = argc as %si4;
+    let v = *p;
+    let w: si4 = argc;
+    undefined_thing(1);
+    return 0;
+}
+

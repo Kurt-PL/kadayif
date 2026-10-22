@@ -1,0 +1,14 @@
+name = "kadayif"
+description = "Reference compiler for the Kurt programming language"
+version = "0.0.0-aleph-1"
+
+authors = ["한울"]
+maintainers = ["한울 <jun061119@gmail.com>"]
+licenses = "ISC"
+website = ""
+tags = []
+executables = ["kadayif"]
+
+# GNAT이 macOS 27에서 clang이 거부하는 -mmacosx-version-min=18.0을 만들어 냄
+[environment]
+MACOSX_DEPLOYMENT_TARGET.set = "15.0"

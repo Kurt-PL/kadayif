@@ -1,0 +1,11 @@
+/obj/
+/bin/
+/alire/
+/config/
+
+a.out
+*.s
+*.ssa
+
+.DS_Store
+.vscode/

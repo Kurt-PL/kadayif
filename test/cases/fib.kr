@@ -1,0 +1,20 @@
+#dyn io {
+    variadic fn printf(%ui1) -> si4;
+}
+
+fn fib(n: si4) -> si4 {
+    if n < 2 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    let mut i: si4 = 0;
+    while i < 15 {
+        airside { io::printf("%d \0".ptr, fib(i)); }
+        i += 1;
+    }
+    airside { io::printf("\n\0".ptr); }
+    return 0;
+}

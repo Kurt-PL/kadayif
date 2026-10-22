@@ -1,0 +1,7 @@
+error - the end of the body of 'no_return' is reachable, but it returns 'si4' at test/cases/sema_err.kr on 5:1
+error - invoking an airside subroutine requires airside at test/cases/sema_err.kr on 11:15
+error - 'x' is a single-assignment binding at test/cases/sema_err.kr on 13:5
+error - value does not fit in 'ui1' at test/cases/sema_err.kr on 14:18
+error - dereferencing an unmanaged reference requires airside at test/cases/sema_err.kr on 16:13
+error - expected 'si4', found 'uaddr' at test/cases/sema_err.kr on 17:18
+error - unknown name 'undefined_thing' at test/cases/sema_err.kr on 18:5

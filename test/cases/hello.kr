@@ -1,0 +1,13 @@
+// 이건 #include <stdio.h> 내지는 int printf(const char*, ...);
+#dyn io {
+    variadic fn printf(%ui1) -> si4;
+}
+
+// 이건 int main(int argc, char *argv[]) {}
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    airside {
+        io::printf("Hello, world!\n\0".ptr);
+    } // 이건 printf("Hello, world!\n");
+
+    return 0;
+}

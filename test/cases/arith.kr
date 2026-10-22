@@ -1,0 +1,43 @@
+#dyn io {
+    variadic fn printf(%ui1) -> si4;
+}
+
+fn show(v: saddr) {
+    airside { io::printf("%ld\n\0".ptr, v); }
+}
+
+fn store(p: %mut si4, v: si4) {
+    airside { *p = v; }
+}
+
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    let a: si1 = 127~si1;
+    show((a + 1~si1) as saddr);           // wrapping: -128
+    let z: si4 = 0;
+    show((7~si4 / z) as saddr);           // a / 0 = 0
+    show((7~si4 % z) as saddr);           // a % 0 = a = 7
+    let m: si1 = -128~si1;
+    show((m / -1~si1) as saddr);          // MIN / -1 = MIN = -128
+    show((-7~si4 % 3~si4) as saddr);      // a - q*b = -1
+    let u: ui1 = 250~ui1;
+    show((u + 10~ui1) as saddr);          // 4
+    show((0~ui1 - 1~ui1) as saddr);       // 255
+
+    let big: ui4 = 4000000000~ui4;
+    let small: ui4 = 1~ui4;
+    let x = if big > small then 1~si4 else 2~si4;   // unsigned compare: 1
+    show(x as saddr);
+
+    let mut n: si4 = 0;
+    loop {
+        n += 1;
+        if n == 5 and !(n == 3) { break; }
+    }
+    show(n as saddr);                     // 5
+
+    let mut cell: si4 = 0;
+    store(%mut cell, 42~si4);
+    show(cell as saddr);                  // 42
+    show((!0~ui1) as saddr);              // 255
+    return 0;
+}

@@ -1,0 +1,6 @@
+fn chain(a: si4, b: si4, c: si4) -> si4 {
+    let ok = a < b < c;
+    return 0~si4;
+}
+
+struct point { x: si4, y: si4 }
