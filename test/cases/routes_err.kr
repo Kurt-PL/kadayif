@@ -1,0 +1,48 @@
+struct slot { h: &si4 }
+
+fn set(s: $slot, x: &si4) routes(x -> *s) { s.h = x; }
+fn keep(x: &si4) routes(x -> static) { }
+fn left(a: &si4, b: &si4) -> &si4 routes(a -> return) { return a; }
+
+// 선언하지 않은 층을 반환
+fn wrong_return(a: &si4, b: &si4) -> &si4 routes(a -> return) {
+    return b;
+}
+
+// 선언하지 않은 저장
+fn wrong_store(s: $slot, x: &si4, y: &si4) routes(x -> *s) {
+    s.h = y;
+}
+
+// routes가 있으면 static도 명시해야 반환할 수 있다
+fn literal() -> &[ui1; 2] routes(static -> return) { return "hi"; }
+fn no_static(a: &si4) -> &[ui1; 2] routes(a -> return) { return "hi"; }
+
+// §8.1.2 예: sl이 t보다 오래 산다
+fn outlive() {
+    let one: si4 = 1~si4;
+    let mut sl = slot.{ .h = &one };
+    {
+        let t: si4 = 2~si4;
+        set($sl, &t);
+    }
+}
+
+// static으로 가는 지역 참조
+fn to_static() {
+    let x: si4 = 1~si4;
+    keep(&x);
+}
+
+// left의 결과는 a에 연결된다: e를 거친 접근과 충돌
+fn still_chained() -> si4 {
+    let mut x: si4 = 0~si4;
+    let e = $x;
+    let r = left(&*e, &x);
+    *e = 1~si4;
+    return *r;
+}
+
+// 잘못된 route
+fn bad1(a: &si4) routes(z -> return) { }
+fn bad2(a: &si4, b: $slot) routes(a -> b) { }

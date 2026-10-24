@@ -1,0 +1,127 @@
+struct pair { a: si4, b: si4 }
+struct holder { val: &si4 }
+struct slot { h: &si4 }
+
+fn id(r: &si4) -> &si4 { return r; }
+fn both(a: $si4, b: &si4) { }
+
+// §8.1.1 예: id의 결과는 인자에 연결된다
+fn chained() -> si4 {
+    let mut x: si4 = 1~si4;
+    let e: $si4 = $x;
+    let r = id(&*e);
+    *e = 2~si4;                         // r이 pending
+    return *r;
+}
+
+// 공유 참조가 pending인데 바인딩에 직접 저장
+fn direct_store() -> si4 {
+    let mut x: si4 = 1~si4;
+    let r = &x;
+    x = 2~si4;
+    return *r;
+}
+
+// 배타 참조가 pending인데 바인딩을 직접 읽기
+fn direct_load() -> si4 {
+    let mut x: si4 = 1~si4;
+    let e = $x;
+    let v = x;
+    *e = v;
+    return x;
+}
+
+// 겹치는 필드에 배타 참조 둘
+fn overlap() -> si4 {
+    let mut p = pair.{ .a = 1~si4, .b = 2~si4 };
+    let whole = $p;
+    let part = $p.a;
+    *part = 3~si4;
+    let q = whole;
+    return 0;
+}
+
+// 재참조한 자손이 pending인데 부모로 접근
+fn reborrow() -> si4 {
+    let mut x: si4 = 1~si4;
+    let e = $x;
+    let f = $*e;
+    *e = 2~si4;
+    *f = 3~si4;
+    return x;
+}
+
+// 한 호출에 같은 객체를 배타로 빌려주면서 함께 빌려주기
+fn lend_twice() {
+    let mut x: si4 = 1~si4;
+    both($x, &x);
+}
+
+// 지역 객체로 가는 참조를 반환
+fn dangling() -> &si4 {
+    let x: si4 = 1~si4;
+    return &x;
+}
+
+// 더 오래 사는 바인딩에 짧게 사는 객체로 가는 참조
+fn outlive() -> si4 {
+    let a: si4 = 1~si4;
+    let mut r = &a;
+    {
+        let t: si4 = 2~si4;
+        r = &t;
+    }
+    return *r;
+}
+
+// 임시 객체로 가는 참조를 대입: 임시 객체는 문장이 끝나면 사라진다
+fn temporary() -> si4 {
+    let a: si4 = 1~si4;
+    let mut r = &a;
+    r = &(a + 1~si4);
+    return *r;
+}
+
+// §8.1.2 예: routes 없이 다른 매개변수의 참조를 저장
+fn put(s: $slot, x: &si4) {
+    s.h = x;
+}
+
+// 저장 권한 없는 참조
+fn no_store() {
+    let x: si4 = 1~si4;
+    let r = &x;
+    *r = 2~si4;
+}
+
+// &mut 접근은 airside
+fn shared_mut() -> si4 {
+    let mut x: si4 = 1~si4;
+    let m = &mut x;
+    return *m;
+}
+
+// 단일 대입 바인딩에 저장 권한 있는 참조
+fn single() {
+    let x: si4 = 1~si4;
+    let e = $x;
+}
+
+// 공유 참조에서 배타 참조로는 캐스트할 수 없다
+fn up_cast(r: &si4) -> $si4 {
+    return r as $si4;
+}
+
+// 이전 반복이 만든 배타 참조를 다시 쓰는데 또 만든다
+fn kept_used() {
+    let mut x: si4 = 0~si4;
+    let mut y: si4 = 0~si4;
+    let mut keep = $y;
+    let mut i: si4 = 0~si4;
+    while i < 2~si4 {
+        let e = $x;
+        *keep = 1~si4;     // 두 번째 반복: 이전 반복의 e를 거친 접근
+        keep = e;
+        i += 1~si4;
+    }
+}

@@ -1,7 +1,9 @@
+with Ada.Containers.Ordered_Maps;
 with Ada.Containers.Vectors;
 with Ada.Containers;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
+with Derivation;
 with Diagnostics;
 with Flow;
 with Idents;
@@ -263,6 +265,44 @@ package body Check is
    ---------------------------------------------------------------------
    --  선언 수집 (§10.2 3단계)
 
+   --  route_path가 가리키는 매개변수의 층 (§8.1.2)
+   function Route_End_Of (Fn, P : Node_Id) return Route_End is
+      R      : constant Node := Get (P);
+      Params : constant List_Id := Get (Fn).List;
+      E      : Route_End;
+   begin
+      if R.Flags (F_Static) then
+         return (Kind => End_Static, others => <>);
+      elsif R.Flags (F_Return) then
+         return (Kind => End_Return, others => <>);
+      elsif R.Flags (F_Self) then
+         Unimplemented (P, "self parameters (§9.2)");
+         return E;
+      end if;
+      E := (Kind => End_Layer, Param => 0, Layer => R.Sym,
+            Deeper => R.Flags (F_Ellipsis));
+      if R.Name /= Idents.No_Ident then
+         for I in 1 .. Params.Count loop
+            if Get (Item (Params, I)).Name = R.Name then
+               E.Param := I - 1;
+               return E;
+            end if;
+         end loop;
+         Error (P, "no parameter '" & Idents.Image (R.Name) & "'");
+      else
+         declare
+            Pos : constant Natural := Natural'Value (To_String (R.Text));
+         begin
+            if Pos < Params.Count then
+               E.Param := Pos;
+               return E;
+            end if;
+            Error (P, "no parameter at position" & Pos'Image);
+         end;
+      end if;
+      return E;
+   end Route_End_Of;
+
    function Fn_Type (N : Node_Id; Airside : Boolean) return Type_Id is
       R   : constant Node := Get (N);
       Rec : Type_Rec;
@@ -275,6 +315,28 @@ package body Check is
       Rec.Variadic := R.Flags (F_Variadic);
       Rec.Airside := Airside;
       Rec.Invocation := R.Name2;
+      if R.C /= No_Node then
+         Rec.Default_Routes := False;
+         for I in 1 .. Get (R.C).List.Count loop
+            declare
+               RN : constant Node_Id := Item (Get (R.C).List, I);
+               Rt : Route;
+            begin
+               for J in 1 .. Get (RN).List.Count loop
+                  Rt.Sources.Append
+                    (Route_End_Of (N, Item (Get (RN).List, J)));
+               end loop;
+               Rt.Target := Route_End_Of (N, Get (RN).A);
+               if Rt.Target.Kind = End_Layer
+                 and then Get (Get (RN).A).Sym = 0
+               then
+                  Error (Get (RN).A, "the target of a route is return, static,"
+                         & " or a path that carries '*'");
+               end if;
+               Rec.Routes.Append (Rt);
+            end;
+         end loop;
+      end if;
       return Make (Rec);
    end Fn_Type;
 
@@ -771,15 +833,84 @@ package body Check is
 
    function Check_Expr (N : Node_Id; Expected : Type_Id) return Type_Id;
 
+   --  §8.2.3 참조 캐스트의 네 가지 변환
+   type Conversion is (Same, Landside, Needs_Airside, Forbidden);
+
+   function Ref_Conversion (From, To : Type_Id) return Conversion is
+      F      : constant Type_Rec := Get (From);
+      T      : constant Type_Rec := Get (To);
+      Result : Conversion := Landside;
+
+      --  배타 참조는 mut을 가진 것으로 친다
+      F_Mut : constant Boolean := F.Mods.Mut or else F.Ref_Tribe = Exclusive;
+      T_Mut : constant Boolean := T.Mods.Mut or else T.Ref_Tribe = Exclusive;
+      F_Atom : constant Boolean := F.Mods.Atomic or else F.Mods.Guard;
+      T_Atom : constant Boolean := T.Mods.Atomic or else T.Mods.Guard;
+
+      procedure Note (C : Conversion; Modifier : Boolean := True) is
+         --  비관리 원천에서는 수식자 변환의 실패가 airside 요구가 된다
+         Effective : constant Conversion :=
+           (if C = Forbidden and then Modifier and then F.Ref_Tribe = Unmanaged
+            then Needs_Airside else C);
+      begin
+         if Effective > Result then
+            Result := Effective;
+         end if;
+      end Note;
+
+   begin
+      if From = To then
+         return Same;
+      end if;
+      case F.Ref_Tribe is
+         when Exclusive => null;
+         when Shared =>
+            if T.Ref_Tribe = Exclusive then
+               Note (Forbidden, Modifier => False);
+            end if;
+         when Unmanaged =>
+            if T.Ref_Tribe /= Unmanaged then
+               Note (Needs_Airside, Modifier => False);
+            end if;
+      end case;
+      if F.Mods.Volatile and then not T.Mods.Volatile then
+         Note (Forbidden);
+      end if;
+      if T_Mut and then not F_Mut then
+         Note (Forbidden);
+      end if;
+      if F_Atom and then not T_Atom then
+         Note (Forbidden);
+      end if;
+      return Result;
+   end Ref_Conversion;
+
+   --  decay: 대상 타입이 같고 airside 없이 허용되는 캐스트 (§8.2.3)
+   function Decays (From, To : Type_Id) return Boolean is
+     (Kind (From) = Ty_Ref and then Kind (To) = Ty_Ref
+      and then Get (From).Target = Get (To).Target
+      and then Ref_Conversion (From, To) in Same | Landside);
+
+   package Decay_Maps is new Ada.Containers.Ordered_Maps (Node_Id, Type_Id);
+   Decay_Map : Decay_Maps.Map;
+
+   function Decayed (N : AST.Node_Id) return Natural is
+     (if Decay_Map.Contains (N) then Natural (Decay_Map.Element (N))
+      else 0);
+
    --  N을 검사하고 그 타입이 Expected에 배정될 수 있는지 본다 (§6.8)
    procedure Check_Against (N : Node_Id; Expected : Type_Id) is
       T : constant Type_Id := Check_Expr (N, Expected);
    begin
-      if T /= Expected and then Kind (T) not in Ty_Error | Ty_Never
-        and then Kind (Expected) /= Ty_Error
+      if T = Expected or else Kind (T) in Ty_Error | Ty_Never
+        or else Kind (Expected) = Ty_Error
       then
-         Error (N, "expected " & Quote (Expected) & ", found " & Quote (T));
+         return;
+      elsif Decays (T, Expected) then
+         Decay_Map.Include (N, Expected);
+         return;
       end if;
+      Error (N, "expected " & Quote (Expected) & ", found " & Quote (T));
    end Check_Against;
 
    --  합성으로 타입이 정해지지 않는 식: 접미사 없는 정수 리터럴과 그
@@ -1030,7 +1161,7 @@ package body Check is
                      then Get (Type_Of (R.A)).Target else Type_Of (R.A));
                   F    : constant Field_Info := Field_Of (Base, R.Sym);
                begin
-                  if not Storable (R.A) then
+                  if not Storable (N) then
                      if F.Mut then
                         --  field mutability (§4.6.1)
                         Require_Airside (N, "a store through field"
@@ -1120,6 +1251,128 @@ package body Check is
       return Fn.Ret;
    end Check_Call;
 
+   --  객체 식인가: 바인딩, 필드, 역참조 (§6.1)
+   function Is_Object_Expr (N : Node_Id) return Boolean is
+      R : constant Node := Get (N);
+   begin
+      case R.Kind is
+         when N_Name =>
+            return R.Sym /= 0
+              and then Symbols.Get (Symbol_Id (R.Sym)).Kind
+                       in Sym_Local | Sym_Param;
+         when N_Field =>
+            return R.Sym /= 0;
+         when N_Unary =>
+            return R.Op = P_Star;
+         when others =>
+            return False;
+      end case;
+   end Is_Object_Expr;
+
+   --  객체 식이 객체에 닿을 때 거치는 가장 가까운 참조의 타입
+   function Nearest_Ref (N : Node_Id) return Type_Id is
+      R : constant Node := Get (N);
+   begin
+      case R.Kind is
+         when N_Unary =>
+            return (if R.Op = P_Star then Type_Of (R.A) else No_Type);
+         when N_Field =>
+            if Kind (Type_Of (R.A)) = Ty_Ref then
+               return Type_Of (R.A);
+            end if;
+            return Nearest_Ref (R.A);
+         when others =>
+            return No_Type;
+      end case;
+   end Nearest_Ref;
+
+   --  참조 만들기 (§6.4.4)와 재참조 (§8.2.3)
+   function Check_Reference (N : Node_Id) return Type_Id is
+      R      : constant Node := Get (N);
+      T      : constant Tribe := Ref_Tribe (R.Op);
+      M      : Modifiers := Mods_Of (R);
+      Stores : constant Boolean := T = Exclusive or else M.Mut;
+   begin
+      if not Valid_Mods (N, T, M) then
+         return Error_Type;
+      end if;
+
+      if Kind (R.A) = N_Unary and then Get (R.A).Op = P_Star then
+         declare
+            Src : constant Type_Id := Check_Expr (Get (R.A).A, No_Type);
+         begin
+            if Kind (Src) = Ty_Error then
+               return Src;
+            elsif Kind (Src) /= Ty_Ref then
+               Error (R.A, "operand of '*' shall be a thin reference");
+               return Error_Type;
+            end if;
+            Set_Type (R.A, Get (Src).Target);
+            declare
+               Target : constant Type_Id := Ref (Get (Src).Target, T, M);
+            begin
+               case Ref_Conversion (Src, Target) is
+                  when Forbidden =>
+                     Error (N, Quote (Src) & " cannot become "
+                            & Quote (Target));
+                     return Error_Type;
+                  when Needs_Airside =>
+                     Require_Airside (N, "this re-reference");
+                  when Same | Landside =>
+                     null;
+               end case;
+               return Target;
+            end;
+         end;
+      end if;
+
+      declare
+         Operand : constant Type_Id := Check_Expr (R.A, No_Type);
+      begin
+         if Kind (Operand) = Ty_Error then
+            return Operand;
+         elsif Kind (Operand) in Ty_Void | Ty_Never then
+            Error (N, "no reference to a value of type " & Quote (Operand));
+            return Error_Type;
+         end if;
+         if Is_Object_Expr (R.A) then
+            declare
+               Near : constant Type_Id := Nearest_Ref (R.A);
+            begin
+               if T /= Unmanaged and then Near /= No_Type
+                 and then Get (Near).Ref_Tribe = Unmanaged
+               then
+                  Require_Airside (N, "a managed reference to an object"
+                                   & " reached through an unmanaged"
+                                   & " reference");
+               end if;
+               if Stores and then not Storable (R.A) then
+                  if Kind (R.A) = N_Field
+                    and then Field_Of
+                      ((if Kind (Type_Of (Get (R.A).A)) = Ty_Ref
+                        then Get (Type_Of (Get (R.A).A)).Target
+                        else Type_Of (Get (R.A).A)), Get (R.A).Sym).Mut
+                  then
+                     Require_Airside (N, "a store-permitting reference"
+                                      & " through field mutability");
+                  else
+                     Error (N, "a store-permitting reference needs a"
+                            & " storable object");
+                  end if;
+               end if;
+               if Near /= No_Type and then Get (Near).Mods.Volatile then
+                  M.Volatile := True;
+               end if;
+            end;
+         elsif Stores and then T /= Unmanaged then
+            --  값 식은 임시 객체를 가리킨다: 저장 가능한 객체가 아니다
+            Error (N, "a store-permitting managed reference needs a storable"
+                   & " object");
+         end if;
+         return Ref (Operand, T, M);
+      end;
+   end Check_Reference;
+
    function Check_Unary (N : Node_Id; Expected : Type_Id) return Type_Id is
       R : constant Node := Get (N);
    begin
@@ -1201,38 +1454,16 @@ package body Check is
                if Get (T).Ref_Tribe = Unmanaged then
                   Require_Airside
                     (N, "dereferencing an unmanaged reference");
+               elsif Get (T).Ref_Tribe = Shared and then Get (T).Mods.Mut then
+                  --  §8.1: 공유 mut 참조를 거친 접근
+                  Require_Airside (N, "an access through a shared mut"
+                                   & " reference");
                end if;
                return Get (T).Target;
             end;
 
-         when P_Percent =>
-            declare
-               T : constant Type_Id := Check_Expr (R.A, No_Type);
-               M : constant Modifiers := Mods_Of (R);
-            begin
-               if Kind (R.A) = N_Name and then Get (R.A).Sym /= 0
-                 and then Symbols.Get (Symbol_Id (Get (R.A).Sym)).Kind
-                          in Sym_Local | Sym_Param
-               then
-                  null;
-               elsif Kind (R.A) = N_Unary and then Get (R.A).Op = P_Star then
-                  null;
-               else
-                  Unimplemented
-                    (N, "references to value expressions (§6.4.4)");
-                  return Error_Type;
-               end if;
-               if Kind (T) = Ty_Error or else not Valid_Mods (N, Unmanaged, M)
-               then
-                  return Error_Type;
-               end if;
-               return Ref (T, Unmanaged, M);
-            end;
-
-         when P_Amp | P_Dollar =>
-            Unimplemented (N, "managed reference creation and the derivation"
-                           & " chain (§6.4.4, §8.1.1)");
-            return Error_Type;
+         when P_Amp | P_Dollar | P_Percent =>
+            return Check_Reference (N);
 
          when others =>
             Error (N, "unknown unary operator");
@@ -1351,6 +1582,24 @@ package body Check is
          return Target;
       elsif Kind (Source) in Ty_Ref | Ty_Slice and then Target = Uaddr then
          return Target;
+      elsif Kind (Source) = Ty_Ref and then Kind (Target) = Ty_Ref then
+         if Get (Target).Ref_Tribe /= Unmanaged
+           and then Get (Source).Target /= Get (Target).Target
+         then
+            Error (N, "a cast to a managed reference keeps the referent"
+                   & " type");
+            return Error_Type;
+         end if;
+         case Ref_Conversion (Source, Target) is
+            when Forbidden =>
+               Error (N, Quote (Source) & " cannot become " & Quote (Target));
+               return Error_Type;
+            when Needs_Airside =>
+               Require_Airside (N, "this reference cast");
+            when Same | Landside =>
+               null;
+         end case;
+         return Target;
       elsif Source = Uaddr and then Kind (Target) = Ty_Ref then
          if Get (Target).Ref_Tribe /= Unmanaged then
             Error (N, "a cast from 'uaddr' reaches only an unmanaged"
@@ -1399,6 +1648,11 @@ package body Check is
       end if;
       --  참조 투명성: 참조를 한 번 거쳐 가리키는 객체에 적용 (§6.3.5)
       if Kind (Base) = Ty_Ref then
+         if Get (Base).Ref_Tribe = Unmanaged then
+            Require_Airside (N, "an access through an unmanaged reference");
+         elsif Get (Base).Ref_Tribe = Shared and then Get (Base).Mods.Mut then
+            Require_Airside (N, "an access through a shared mut reference");
+         end if;
          Base := Get (Base).Target;
       end if;
       if Is_Variant (Base) then
@@ -1929,6 +2183,7 @@ package body Check is
    --  본문 분석 (§10.2 4단계)
 
    procedure Analyse_Fn (N : Node_Id) is
+      Failures_Before : constant Natural := Diagnostics.Failures;
       R  : constant Node := Get (N);
       FT : constant Type_Rec := Get (Type_Id (Symbols.Get
                                   (Symbol_Id (R.Sym)).Ty));
@@ -1964,6 +2219,9 @@ package body Check is
          null;
       end;
       Flow.Check_Transfers (N);
+      if Diagnostics.Failures = Failures_Before then
+         Derivation.Check_Body (N);
+      end if;
       if Fn_Ret /= Void and then not Diverges (R.B) then
          Diagnostics.Error
            (R.Pos, "the end of the body of '" & Idents.Image (R.Name)

@@ -27,7 +27,13 @@ package AST is
       N_Unit,        --  List: 항목
       N_Fn,          --  Name, List: N_Param, A: 반환 타입(없으면 void),
                      --  B: 본문(N_Block, 원형이면 없음),
+                     --  C: N_Routes(없으면 기본 routes),
                      --  Name2: 호출 인터페이스 식별자
+      N_Routes,      --  List: N_Route
+      N_Route,       --  List: 원천(N_Route_Path), A: 대상(N_Route_Path)
+      N_Route_Path,  --  F_Static / F_Return, 아니면 Name(식별자),
+                     --  F_Self(self), Text(위치)로 매개변수, Sym: '*' 수,
+                     --  F_Ellipsis면 더 깊은 층도
       N_Param,       --  Name(익명 원형 매개변수면 없음), A: 타입
       N_Dyn,         --  Name, List: 항목
       N_Struct,      --  Name, List: N_Field_Decl, C: N_With,
@@ -87,7 +93,8 @@ package AST is
    type Flag is
      (F_Pub, F_Extern, F_Airside, F_Variadic, F_Mut,
       F_Volatile, F_Atomic, F_Guard, F_Xlat, F_Reinterpret,
-      F_Unit, F_Named, F_Pad, F_Wild, F_Inverted, F_Braces);
+      F_Unit, F_Named, F_Pad, F_Wild, F_Inverted, F_Braces,
+      F_Static, F_Return, F_Self, F_Ellipsis);
    type Flag_Set is array (Flag) of Boolean with Pack;
    No_Flags : constant Flag_Set := [others => False];
 

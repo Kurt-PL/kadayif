@@ -1,0 +1,38 @@
+#dyn io {
+    variadic fn printf(%ui1) -> si4;
+}
+
+fn show(v: saddr) {
+    airside { io::printf("%ld\n\0".ptr, v); }
+}
+
+struct slot { h: &si4 }
+
+// §8.1.2: x를 *s로 보낸다
+fn set(s: $slot, x: &si4) routes(x -> *s) {
+    s.h = x;
+}
+
+// a만 return으로: 결과는 b에 연결되지 않는다
+fn left(a: &si4, b: &si4) -> &si4 routes(a -> return) {
+    return a;
+}
+
+fn read(s: &slot) -> si4 { return *s.h; }
+
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    let one: si4 = 1~si4;
+    let two: si4 = 2~si4;
+    let mut sl = slot.{ .h = &one };
+    set($sl, &two);
+    show(read(&sl) as saddr);           // 2
+
+    let y: si4 = 40~si4;
+    let mut x: si4 = 0~si4;
+    let e = $x;
+    let r = left(&y, &*e);              // r은 e에서 파생되지 않는다
+    *e = 3~si4;                         // 그래서 r이 pending이어도 괜찮다
+    show(*r as saddr);                  // 40
+    show(x as saddr);                   // 3
+    return 0;
+}

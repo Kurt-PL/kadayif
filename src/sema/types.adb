@@ -10,6 +10,7 @@ package body Types is
 
    function Same (L, R : Type_Rec) return Boolean is
       use type Type_Vectors.Vector;
+      use type Route_Vectors.Vector;
       use type Idents.Ident;
    begin
       if L.Kind /= R.Kind then
@@ -36,7 +37,9 @@ package body Types is
             return L.Params = R.Params and then L.Ret = R.Ret
               and then L.Variadic = R.Variadic
               and then L.Airside = R.Airside
-              and then L.Invocation = R.Invocation;
+              and then L.Invocation = R.Invocation
+              and then L.Default_Routes = R.Default_Routes
+              and then L.Routes = R.Routes;
       end case;
    end Same;
 
@@ -167,6 +170,33 @@ package body Types is
    function Is_Variant (T : Type_Id) return Boolean is
      (Kind (T) = Ty_Verdict
       or else (Kind (T) = Ty_Composite and then Info (T).Kind /= Struct_Type));
+
+   --  끝점 E가 층·static·return 하나인 X를 가리키는가
+   function Denotes (E, X : Route_End) return Boolean is
+     (E.Kind = X.Kind
+      and then (E.Kind /= End_Layer
+                or else (E.Param = X.Param
+                         and then (X.Layer = E.Layer
+                                   or else (E.Deeper
+                                            and then X.Layer > E.Layer)))));
+
+   function Routes_To (Fn : Type_Id; From, To : Route_End) return Boolean is
+      R : constant Type_Rec := Get (Fn);
+   begin
+      if R.Kind /= Ty_Fn then
+         return False;
+      elsif R.Default_Routes then
+         return To.Kind = End_Return;
+      end if;
+      for Rt of R.Routes loop
+         if Denotes (Rt.Target, To)
+           and then (for some Src of Rt.Sources => Denotes (Src, From))
+         then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Routes_To;
 
    function Is_Copyable (T : Type_Id) return Boolean is
       R : constant Type_Rec := Get (T);

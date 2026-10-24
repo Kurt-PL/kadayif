@@ -196,10 +196,13 @@ package body Flow is
                end if;
 
             when N_Field =>
-               if Root (N) = 0 then
-                  Walk (R.A, S);
-               else
+               if Root (N) /= 0 then
                   Load (N, S);
+               elsif Kind (Type_Of (R.A)) = Ty_Ref then
+                  --  참조 투명성: 참조를 옮기지 않는다
+                  Inspect (R.A, S);
+               else
+                  Walk (R.A, S);
                end if;
 
             when N_Let =>
@@ -224,7 +227,8 @@ package body Flow is
                      if Root (R.A) /= 0 then
                         Require_Valid (S, Root (R.A), R.A);
                      elsif Get (R.A).Kind = N_Unary then
-                        Walk (Get (R.A).A, S);
+                        --  *p = v: 참조로 대상을 가리킬 뿐 옮기지 않는다
+                        Inspect (Get (R.A).A, S);
                      else
                         Walk (R.A, S);
                      end if;
@@ -250,6 +254,21 @@ package body Flow is
                        and then Payloads_Copyable (Type_Of (R.A))
                      then
                         Inspect (R.A, S);
+                     else
+                        Walk (R.A, S);
+                     end if;
+                  when P_Star =>
+                     --  역참조는 참조로 대상을 가리킬 뿐 참조를 옮기지 않는다
+                     Inspect (R.A, S);
+                  when P_Amp | P_Dollar =>
+                     --  관리 참조를 만드는 것은 적재가 아니지만, 무효인
+                     --  객체에는 만들 수 없다
+                     if Root (R.A) /= 0 then
+                        Require_Valid (S, Root (R.A), R.A);
+                     elsif Get (R.A).Kind = N_Unary
+                       and then Get (R.A).Op = P_Star
+                     then
+                        Inspect (Get (R.A).A, S);
                      else
                         Walk (R.A, S);
                      end if;

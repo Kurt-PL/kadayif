@@ -31,6 +31,23 @@ package Types is
 
    package Type_Vectors is new Ada.Containers.Vectors (Positive, Type_Id);
 
+   --  §8.1.2 routes. 끝점은 매개변수의 층 하나(Deeper면 그보다 깊은 층
+   --  전부도), static, 또는 return이다. Param은 0부터 센다.
+   type Route_End_Kind is (End_Layer, End_Static, End_Return);
+   type Route_End is record
+      Kind   : Route_End_Kind := End_Return;
+      Param  : Natural := 0;
+      Layer  : Natural := 0;
+      Deeper : Boolean := False;
+   end record;
+   package Route_End_Vectors is new Ada.Containers.Vectors
+     (Positive, Route_End);
+   type Route is record
+      Sources : Route_End_Vectors.Vector;
+      Target  : Route_End;
+   end record;
+   package Route_Vectors is new Ada.Containers.Vectors (Positive, Route);
+
    type Type_Rec is record
       Kind   : Type_Kind := Ty_Error;
 
@@ -57,6 +74,9 @@ package Types is
       Variadic  : Boolean := False;
       Airside   : Boolean := False;
       Invocation : Idents.Ident := Idents.No_Ident;  --  호출 인터페이스
+      --  routes 절이 없으면 기본 routes: 모든 층과 static이 return으로
+      Default_Routes : Boolean := True;
+      Routes         : Route_Vectors.Vector;
    end record;
 
    ---------------------------------------------------------------------
@@ -131,6 +151,10 @@ package Types is
    function Is_Contract (T : Type_Id) return Boolean;
    --  variant 타입인가: contract 타입이거나 enum
    function Is_Variant (T : Type_Id) return Boolean;
+
+   --  서브루틴 타입 Fn이 From(층 하나 또는 static)을 To(층 하나, static,
+   --  또는 return)로 보내는가 (§8.1.2 routes)
+   function Routes_To (Fn : Type_Id; From, To : Route_End) return Boolean;
 
    --  §8.7 copyable
    function Is_Copyable (T : Type_Id) return Boolean;

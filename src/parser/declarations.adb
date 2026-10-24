@@ -159,6 +159,68 @@ package body Declarations is
       end case;
    end Parse_Type;
 
+   --  route_path = { '*' }, [ '...' ], ( identifier | "self" | dec_literal )
+   function Parse_Route_Path (Is_Target : Boolean) return Node_Id is
+      P     : Node := Fresh (N_Route_Path);
+      Stars : Natural := 0;
+   begin
+      if Peek = K_Static then
+         Advance;
+         P.Flags (F_Static) := True;
+         return Add (P);
+      elsif Is_Target and then Peek = K_Return then
+         Advance;
+         P.Flags (F_Return) := True;
+         return Add (P);
+      end if;
+      while Skip (P_Star) loop
+         Stars := Stars + 1;
+      end loop;
+      P.Flags (F_Ellipsis) := Skip (P_Ellipsis);
+      case Peek is
+         when T_Ident =>
+            P.Name := Take_Ident;
+         when K_Self =>
+            Advance;
+            P.Flags (F_Self) := True;
+         when T_Int =>
+            P.Text := Ada.Strings.Unbounded.To_Unbounded_String (Current_Text);
+            Advance;
+         when others =>
+            Fail ("expected a parameter");
+      end case;
+      P.Sym := Stars;
+      return Add (P);
+   end Parse_Route_Path;
+
+   --  routes_clause (§8.1.2)
+   function Parse_Routes return Node_Id is
+      N      : Node := Fresh (N_Routes);
+      Routes : Id_Vectors.Vector;
+   begin
+      Expect (K_Routes);
+      Expect (P_LParen);
+      loop
+         declare
+            R       : Node := Fresh (N_Route);
+            Sources : Id_Vectors.Vector;
+         begin
+            loop
+               Sources.Append (Parse_Route_Path (Is_Target => False));
+               exit when not Skip (P_Plus);
+            end loop;
+            Expect (P_Arrow);
+            R.A := Parse_Route_Path (Is_Target => True);
+            R.List := Make_List (Sources);
+            Routes.Append (Add (R));
+         end;
+         exit when not Skip (P_Comma) or else Peek = P_RParen;
+      end loop;
+      Expect (P_RParen);
+      N.List := Make_List (Routes);
+      return Add (N);
+   end Parse_Routes;
+
    --  subroutine_def / subroutine_proto (§4.2, §10.5)
    function Parse_Subroutine (Is_Proto : Boolean; Pub : Boolean)
                               return Node_Id
@@ -228,8 +290,9 @@ package body Declarations is
          end if;
       end if;
       if Peek = K_Routes then
-         Unimplemented ("routes clauses (§8.1.2)");
-      elsif Peek = K_With then
+         N.C := Parse_Routes;
+      end if;
+      if Peek = K_With then
          Unimplemented ("with clauses on subroutines (§4.12)");
       end if;
 

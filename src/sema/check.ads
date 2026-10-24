@@ -14,6 +14,9 @@ package Check is
    function Int_Value (N : AST.Node_Id)
      return Ada.Numerics.Big_Numbers.Big_Integers.Big_Integer;
 
+   --  N의 값이 decay한 타입 (§8.2.3), 아니면 0
+   function Decayed (N : AST.Node_Id) return Natural;
+
    --  N이 서브루틴 본문 끝까지 실행이 이어지지 못하게 하는가 (§2.4)
    function Diverges (N : AST.Node_Id) return Boolean;
 

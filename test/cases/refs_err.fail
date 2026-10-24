@@ -1,0 +1,16 @@
+error - an access through an exclusive reference while the reference derived from it at 12:15 is pending at test/cases/refs_err.kr on 13:8
+error - this access conflicts with the reference created at 20:13, which is still pending at test/cases/refs_err.kr on 21:7
+error - this access conflicts with the exclusive reference created at 28:13, which is still pending at test/cases/refs_err.kr on 29:13
+error - the exclusive reference created at 37:17 and the reference created at 38:16 are pending together at test/cases/refs_err.kr on 38:16
+error - an access through an exclusive reference while the reference derived from it at 48:13 is pending at test/cases/refs_err.kr on 49:8
+error - the exclusive reference created at 57:10 and the reference created at 57:14 are pending together at test/cases/refs_err.kr on 57:14
+error - an invocation lends an exclusive reference together with another reference to the same object at test/cases/refs_err.kr on 57:9
+error - the returned reference designates an object that ends when the subroutine returns at test/cases/refs_err.kr on 63:5
+error - a reference to 't' is stored into 'r', which outlives it at test/cases/refs_err.kr on 72:11
+error - a reference to a temporary object is stored into 'r', which outlives it at test/cases/refs_err.kr on 81:7
+error - no route takes layer 0 of 'x' to layer 1 of 's' at test/cases/refs_err.kr on 87:9
+error - a store through '&si4' is not permitted at test/cases/refs_err.kr on 94:5
+error - an access through a shared mut reference requires airside at test/cases/refs_err.kr on 101:12
+error - a store-permitting reference needs a storable object at test/cases/refs_err.kr on 107:13
+error - '&si4' cannot become '$si4' at test/cases/refs_err.kr on 112:14
+error - an exclusive reference created here on an earlier pass is still pending at test/cases/refs_err.kr on 122:17

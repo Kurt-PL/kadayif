@@ -68,6 +68,14 @@ package body Emit is
    function Is_Aggregate (T : Type_Id) return Boolean is
      (Class_Of (T) = Aggregate_Class);
 
+   --  객체 식: 바인딩, 필드, 역참조 (투영은 값이다)
+   function Object_Expr (N : Node_Id) return Boolean is
+     (case Get (N).Kind is
+        when N_Name  => True,
+        when N_Field => Get (N).Sym /= 0,
+        when N_Unary => Get (N).Op = P_Star,
+        when others  => False);
+
    function Shape (N : Node_Id; T : Type_Id) return Scalar is
       R : constant Type_Rec := Types.Get (T);
    begin
@@ -225,6 +233,12 @@ package body Emit is
                when N_Unary =>
                   if R.Op = P_Bang and then Is_Aggregate (Type_Of (N)) then
                      Node_Temps.Include (N, Object_Slot (Type_Of (N)));
+                  elsif R.Op in P_Amp | P_Dollar | P_Percent
+                    and then not Object_Expr (R.A)
+                    and then Class_Of (Type_Of (R.A)) = Scalar_Class
+                  then
+                     --  값 식을 가리키는 참조: 임시 객체 (§6.4.4)
+                     Node_Temps.Include (N, Object_Slot (Type_Of (R.A)));
                   end if;
                when others =>
                   null;
@@ -790,8 +804,20 @@ package body Emit is
                      if Class_Of (T) = Scalar_Class then
                         M.Load_Field (R, R, 0, Shape (N, T));
                      end if;
-                  when P_Percent =>
-                     Address (Rec.A, R);
+                  when P_Amp | P_Dollar | P_Percent =>
+                     if Object_Expr (Rec.A) then
+                        Address (Rec.A, R);
+                     elsif Is_Aggregate (Type_Of (Rec.A)) then
+                        --  값이 이미 임시 자리에 있다
+                        Value (Rec.A, R);
+                     else
+                        Check_Temp (N, R + 1);
+                        Value (Rec.A, R);
+                        M.Frame_Address (R + 1, Node_Temps (N));
+                        M.Store_Field
+                          (R, R + 1, 0, Shape (Rec.A, Type_Of (Rec.A)));
+                        M.Move (R, R + 1);
+                     end if;
                   when others =>
                      Unimplemented (N, "this unary operator");
                end case;

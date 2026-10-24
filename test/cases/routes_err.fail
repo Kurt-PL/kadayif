@@ -1,0 +1,9 @@
+error - no parameter 'z' at test/cases/routes_err.kr on 47:25
+error - the target of a route is return, static, or a path that carries '*' at test/cases/routes_err.kr on 48:40
+error - no route takes layer 0 of 'b' to return at test/cases/routes_err.kr on 9:5
+error - no route takes layer 0 of 'y' to layer 1 of 's' at test/cases/routes_err.kr on 14:9
+error - no route takes static to return at test/cases/routes_err.kr on 19:58
+error - the invocation stores a reference to 't' into 'sl', which outlives it at test/cases/routes_err.kr on 27:12
+error - the invocation stores a reference to 'x' where it outlives it at test/cases/routes_err.kr on 34:9
+error - the exclusive reference created at 40:13 and the reference created at 41:23 are pending together at test/cases/routes_err.kr on 41:23
+error - an access through an exclusive reference while the reference derived from it at 41:17 is pending at test/cases/routes_err.kr on 42:8
