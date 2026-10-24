@@ -1,0 +1,42 @@
+struct point { x: si4, y: si4 }
+struct node { next: node }
+enum colour { red, green, blue }
+enum two_wilds { a = wild, b = wild }
+enum dup { a = 1, b = 1 }
+contract bad { yes { si4 }, no { si4 } }
+contract one_way { on { si4 }, off { void } = wild } with inv -> colour;
+struct cfg { pub mut level: si4, airside secret: si4 }
+
+fn take(p: point) -> si4 { return p.x; }
+
+fn uses() -> si4 {
+    let p = point.{ .x = 1~si4, .y = 2~si4 };
+    let a = take(p);
+    let b = take(p);                    // 옮긴 뒤 다시 씀
+    let q = point.{ .x = 1~si4 };       // y가 빠짐
+    let r = point.{ 1~si4, 2~si4 };     // 이름 있는 형태에 식 목록
+    let c = colour::green;
+    let d = c.x;                        // variant 타입의 필드
+    let e = colour;                     // 변형 없이 variant 타입
+    let f = point.{ .x = 1~si4, .x = 2~si4, .y = 3~si4 };
+    let g = cfg.{ .level = 1~si4, .secret = 2~si4 };   // airside 필드
+    g.level = 3~si4;                    // 단일 대입 바인딩: field mutability는 airside 필요
+    let mut m = point.{ .x = 1~si4, .y = 2~si4 };
+    let n = take(m);
+    m.x = 5~si4;                        // 무효인 객체의 필드에 저장
+    m = point.{ .x = 7~si4, .y = 8~si4 };
+    return take(m) + a + b + n;
+}
+
+fn branchy(flag: verdict[void, void]) -> si4 {
+    let p = point.{ .x = 1~si4, .y = 2~si4 };
+    if flag { let z = take(p); }
+    return take(p);                     // 한 갈래에서 옮겨졌을 수 있다
+}
+
+fn loopy() -> si4 {
+    let p = point.{ .x = 1~si4, .y = 2~si4 };
+    let mut i: si4 = 0;
+    while i < 3 { let z = take(p); i += 1; }   // 두 번째 반복에서 다시 씀
+    return 0;
+}

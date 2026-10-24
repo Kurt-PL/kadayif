@@ -1,0 +1,8 @@
+// 라이브러리를 하나도 싣지 않는 실행 파일: dyld가 실행하고 종료한다
+fn sq(x: ui1) -> ui1 {
+    return x * x;
+}
+
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    return sq(7~ui1) - 49~ui1;
+}

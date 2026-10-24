@@ -16,7 +16,8 @@ package Symbols is
      (Sym_Fn,         --  서브루틴
       Sym_Param,      --  매개변수 바인딩
       Sym_Local,      --  let 바인딩
-      Sym_Namespace); --  #dyn 네임스페이스
+      Sym_Namespace,  --  #dyn 네임스페이스
+      Sym_Type);      --  struct, enum, contract 선언
 
    type Symbol is record
       Kind     : Symbol_Kind := Sym_Local;

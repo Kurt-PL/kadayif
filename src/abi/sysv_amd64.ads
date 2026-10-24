@@ -14,4 +14,11 @@ package SysV_AMD64 is
       Locs       : out Calling.Location_Array;
       Stack_Size : out Natural);
 
+   overriding procedure Return_Location
+     (C         : Convention;
+      Size      : Natural;
+      Aggregate : Boolean;
+      Registers : out Natural;
+      Indirect  : out Boolean);
+
 end SysV_AMD64;

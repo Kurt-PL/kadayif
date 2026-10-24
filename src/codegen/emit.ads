@@ -6,14 +6,21 @@
 with AST;
 with Calling;
 with Instruction_Set;
+with Sections;
 
 package Emit is
 
-   --  의미 분석을 마친 단위의 어셈블리 텍스트. 번역 한계를 넘으면
-   --  진단을 내고, 그때 결과는 쓰지 말아야 한다.
-   function Generate
+   --  의미 분석을 마친 단위를 M의 명령 버퍼와 Obj의 데이터로 내린다.
+   --  번역 한계나 미구현 요소를 만나면 진단을 내고 OK는 False다.
+   procedure Generate
      (Unit       : AST.Node_Id;
       M          : in out Instruction_Set.ISA'Class;
-      Convention : Calling.Convention'Class) return String;
+      Convention : Calling.Convention'Class;
+      Obj        : in out Sections.Object;
+      OK         : out Boolean);
+
+   --  Generate의 결과를 어셈블리 텍스트로
+   function Text
+     (M : Instruction_Set.ISA'Class; Obj : Sections.Object) return String;
 
 end Emit;

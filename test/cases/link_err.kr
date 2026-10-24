@@ -1,0 +1,9 @@
+// libz를 링크하지 않았으니 compressBound는 어디에도 없다
+#dyn z {
+    fn compressBound(uaddr) -> uaddr;
+}
+
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    airside { z::compressBound(1~uaddr); }
+    return 0;
+}

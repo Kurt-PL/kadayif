@@ -1,0 +1,16 @@
+error - a type has at most one wild variant at test/cases/composite_err.kr on 4:1
+error - discriminant value 1 is given twice at test/cases/composite_err.kr on 5:1
+error - exactly one variant of a contract is wild at test/cases/composite_err.kr on 6:1
+error - the layout of 'node' requires itself at test/cases/composite_err.kr on 2:1
+error - the type that inv names shall declare inv back to 'one_way' at test/cases/composite_err.kr on 7:1
+error - field 'y' is not initialized at test/cases/composite_err.kr on 16:13
+error - an expression list needs a type in unnamed-field form at test/cases/composite_err.kr on 17:21
+error - a field expression shall not have a receiver of a variant type at test/cases/composite_err.kr on 19:14
+error - a value of a variant type is constructed through one of its variants at test/cases/composite_err.kr on 20:13
+error - field 'x' is initialized twice at test/cases/composite_err.kr on 21:33
+error - constructing a type with an airside field requires airside at test/cases/composite_err.kr on 22:13
+error - a store through field mutability requires airside at test/cases/composite_err.kr on 23:6
+error - 'p' is used after its value was transferred at test/cases/composite_err.kr on 15:18
+error - 'm' is used after its value was transferred at test/cases/composite_err.kr on 26:6
+error - 'p' is used after its value was transferred at test/cases/composite_err.kr on 34:17
+error - 'p' is used after its value was transferred at test/cases/composite_err.kr on 40:32

@@ -67,6 +67,32 @@ package body Expressions is
       return Add (N);
    end Literal;
 
+   --  '{' [ expression_list | field_init_list ] '}'
+   function Construction_Items return List_Id is
+      Items : Id_Vectors.Vector;
+   begin
+      Expect (P_LBrace);
+      while Peek /= P_RBrace loop
+         if Peek = P_Dot and then Peek (1) = T_Ident and then Peek (2) = P_Eq
+         then
+            declare
+               F : Node := Fresh (N_Field_Init);
+            begin
+               Advance;
+               F.Name := Take_Ident;
+               Expect (P_Eq);
+               F.A := Parse_Expression;
+               Items.Append (Add (F));
+            end;
+         else
+            Items.Append (Parse_Expression);
+         end if;
+         exit when not Skip (P_Comma);
+      end loop;
+      Expect (P_RBrace);
+      return Make_List (Items);
+   end Construction_Items;
+
    function Parse_Primary return Node_Id is
    begin
       case Peek is
@@ -85,9 +111,16 @@ package body Expressions is
             begin
                N.A := Declarations.Parse_Path (In_Type => False);
                if Peek = P_Colon_Colon and then Peek (1) = K_Wild then
-                  Unimplemented ("wild construction (§6.2.4)");
+                  --  wild_construction (§6.2.4)
+                  Advance;
+                  Advance;
+                  N.Kind := N_Wild_Construct;
                elsif Peek = P_Dot and then Peek (1) = P_LBrace then
-                  Unimplemented ("composite construction (§6.2.3)");
+                  --  composite_construction (§6.2.3)
+                  Advance;
+                  N.Kind := N_Construct;
+                  N.Flags (F_Braces) := True;
+                  N.List := Construction_Items;
                end if;
                return Add (N);
             end;
@@ -107,7 +140,20 @@ package body Expressions is
          when P_LBracket =>
             Unimplemented ("array construction (§6.2.5)");
          when P_Dot =>
-            Unimplemented ("anonymous struct construction (§6.2.6)");
+            --  anon_struct_construction (§6.2.6)
+            declare
+               N : Node := Fresh (N_Anon);
+            begin
+               Advance;
+               if Peek /= P_LBrace then
+                  Fail ("expected '{'");
+               end if;
+               N.List := Construction_Items;
+               if N.List.Count = 0 then
+                  Fail ("an anonymous struct has at least one field");
+               end if;
+               return Add (N);
+            end;
          when K_Self =>
             Unimplemented ("self (§9.2)");
          when K_Trap =>

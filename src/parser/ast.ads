@@ -30,6 +30,18 @@ package AST is
                      --  Name2: 호출 인터페이스 식별자
       N_Param,       --  Name(익명 원형 매개변수면 없음), A: 타입
       N_Dyn,         --  Name, List: 항목
+      N_Struct,      --  Name, List: N_Field_Decl, C: N_With,
+                     --  F_Unit / F_Named로 형태
+      N_Enum,        --  Name, List: N_Variant, C: N_With
+      N_Contract,    --  Name, List: N_Variant 둘, C: N_With,
+                     --  F_Inverted면 contract!
+      N_Variant,     --  Name, List: N_Field_Decl, F_Unit / F_Named,
+                     --  A: 판별자 값(N_Int_Lit), F_Wild면 wild
+      N_Field_Decl,  --  Name(이름 없는 필드면 없음), A: 타입,
+                     --  B: 기본값 식, F_Pub/F_Airside/F_Mut, F_Pad면 ?
+      N_With,        --  List: N_With_Item
+      N_With_Item,   --  Name: 항목 이름(copyable, discrim, inv, repr,
+                     --  align …), A: 타입 또는 정수 리터럴
 
       --  타입
       N_Path,        --  List: N_Segment (single_path)
@@ -39,6 +51,7 @@ package AST is
       N_Array_Type,  --  A: 원소 타입, B: 길이 식
       N_Never_Type,  --  -> !
       N_Infer_Type,  --  ?
+      N_Anon_Type,   --  List: 필드 타입
 
       --  문
       N_Let,         --  Name, A: 타입, B: 초기식
@@ -55,6 +68,11 @@ package AST is
       N_Cast,        --  A: 식, B: 타입, F_Reinterpret
       N_Call,        --  A: 피호출 식, List: 인자
       N_Field,       --  A: 식, Name 또는 Text(정수 필드)
+      N_Construct,   --  A: N_Path, List: 식 또는 N_Field_Init,
+                     --  F_Braces면 중괄호가 있다
+      N_Field_Init,  --  Name, A: 식
+      N_Anon,        --  List: 식 (익명 구조체 구성)
+      N_Wild_Construct, --  A: N_Path
       N_Block,       --  List: 블록 항목, Name: 레이블
       N_Airside,     --  A: N_Block
       N_If,          --  A: 조건, B: 참 갈래, C: 거짓 갈래
@@ -64,11 +82,12 @@ package AST is
       N_Break,       --  A: 값, Name: 레이블
       N_Continue);   --  Name: 레이블
 
-   subtype Type_Node is Node_Kind range N_Path .. N_Infer_Type;
+   subtype Type_Node is Node_Kind range N_Path .. N_Anon_Type;
 
    type Flag is
      (F_Pub, F_Extern, F_Airside, F_Variadic, F_Mut,
-      F_Volatile, F_Atomic, F_Guard, F_Xlat, F_Reinterpret);
+      F_Volatile, F_Atomic, F_Guard, F_Xlat, F_Reinterpret,
+      F_Unit, F_Named, F_Pad, F_Wild, F_Inverted, F_Braces);
    type Flag_Set is array (Flag) of Boolean with Pack;
    No_Flags : constant Flag_Set := [others => False];
 

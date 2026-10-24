@@ -1,0 +1,16 @@
+// 가져오는 심볼 셋: fixup 체인이 GOT 칸을 차례로 잇는다
+#dyn io {
+    variadic fn printf(%ui1) -> si4;
+    fn puts(%ui1) -> si4;
+    fn putchar(si4) -> si4;
+}
+
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    airside {
+        io::puts("puts\0".ptr);
+        io::putchar(75~si4);
+        io::putchar(10~si4);
+        io::printf("printf %d\n\0".ptr, argc);
+    }
+    return 0;
+}

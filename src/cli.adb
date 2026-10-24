@@ -1,8 +1,11 @@
 with Ada.Command_Line;
+with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Diagnostics;
+with Libraries;
+with Linker;
 with Pipeline;
 
 package body CLI is
@@ -36,10 +39,12 @@ package body CLI is
       IO.Put_Line ("  -O level        *optimisation level");
       IO.Put_Line ("  -Q key=value    *resource constraint");
       IO.Put_Line ("  -f name         *implementation feature");
-      IO.Put_Line ("  -B mode         *linkage mode");
-      IO.Put_Line ("  -L dir          *library search path");
-      IO.Put_Line ("  -l name         *link a library");
-      IO.Put_Line ("  -R dir          *runtime library search path");
+      IO.Put_Line ("  -B mode          linkage mode: dynamic (default),"
+                   & " static");
+      IO.Put_Line ("  -L dir           library search path");
+      IO.Put_Line ("  -l name          link a library (dynamic libraries"
+                   & " only)");
+      IO.Put_Line ("  -R dir           runtime library search path");
       IO.Put_Line ("  -i script       *linker script");
       IO.Put_Line ("  -K version       KPLSS edition: 0.1");
       IO.Put_Line ("  -w name         *toggle a warning");
@@ -72,6 +77,18 @@ package body CLI is
       Input   : Unbounded_String;
       I       : Positive := 1;
       Failed  : Boolean := False;
+
+      --  -l name마다 그보다 앞선 -L 디렉터리 (KCSS §4.9)
+      type Request is record
+         Name : Unbounded_String;
+         Dirs : Libraries.String_Vectors.Vector;
+      end record;
+      package Request_Vectors is new Ada.Containers.Vectors
+        (Positive, Request);
+      Lib_Dirs : Libraries.String_Vectors.Vector;
+      Requests : Request_Vectors.Vector;
+      Mode     : Libraries.Linkage := Libraries.Dynamic;
+      Link     : Linker.Options;
 
       procedure Halt (Message : String) is
       begin
@@ -134,7 +151,28 @@ package body CLI is
                      Unimplemented_Option (Arg, "§4.7");
                   when 'f' =>
                      Unimplemented_Option (Arg, "§4.8");
-                  when 'B' | 'L' | 'l' | 'R' | 'i' =>
+                  when 'L' =>
+                     Lib_Dirs.Append (Operand (Arg));
+                  when 'l' =>
+                     Requests.Append
+                       (Request'(To_Unbounded_String (Operand (Arg)),
+                                 Lib_Dirs));
+                  when 'R' =>
+                     Link.Rpaths.Append (Operand (Arg));
+                  when 'B' =>
+                     declare
+                        Value : constant String := Operand (Arg);
+                     begin
+                        if Value = "static" then
+                           Mode := Libraries.Static;
+                        elsif Value = "dynamic" then
+                           Mode := Libraries.Dynamic;
+                        else
+                           Halt ("unknown linkage mode '" & Value
+                                 & "'; supported: static, dynamic");
+                        end if;
+                     end;
+                  when 'i' =>
                      Unimplemented_Option (Arg, "§4.9");
                   when 'w' | 'v' =>
                      Unimplemented_Option (Arg, "§4.11");
@@ -168,6 +206,17 @@ package body CLI is
             "unimplemented: more than one pathname operand (KCSS §5)");
          Failed := True;
       end if;
+      for R of Requests loop
+         declare
+            Lib : Libraries.Library;
+         begin
+            if Libraries.Find (To_String (R.Name), R.Dirs, Mode, Lib) then
+               Link.Libraries.Append (Lib);
+            else
+               Failed := True;
+            end if;
+         end;
+      end loop;
       if Failed then
          CL.Set_Exit_Status (CL.Failure);
          return;
@@ -190,7 +239,7 @@ package body CLI is
               (Diagnostics.Error,
                "unimplemented: operands other than file.kr (KCSS §5)");
             CL.Set_Exit_Status (CL.Failure);
-         elsif not Pipeline.Translate (Path, Out_Path, Stop) then
+         elsif not Pipeline.Translate (Path, Out_Path, Stop, Link) then
             CL.Set_Exit_Status (CL.Failure);
          end if;
       end;

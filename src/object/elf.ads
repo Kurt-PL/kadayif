@@ -8,6 +8,7 @@ package ELF is
 
    --  어셈블러 지역 레이블
    function Local_Label (Name : String) return String is (".L" & Name);
+   function Private_Symbol (Name : String) return String is (".L" & Name);
 
    Text_Section  : constant String := ".text";
    Const_Section : constant String := ".section .rodata";

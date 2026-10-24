@@ -1,0 +1,81 @@
+#dyn io {
+    variadic fn printf(%ui1) -> si4;
+}
+
+fn show(v: saddr) {
+    airside { io::printf("%ld\n\0".ptr, v); }
+}
+
+// 매개변수 열 개: 아홉째부터 스택으로 온다
+fn ten(a: saddr, b: saddr, c: saddr, d: saddr, e: saddr,
+       f: saddr, g: saddr, h: saddr, i: si2, j: ui1) -> saddr {
+    return a + b + c + d + e + f + g + h + i as saddr + j as saddr;
+}
+
+fn twice(x: saddr) -> saddr {
+    return x * 2;
+}
+
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    let mut v0: saddr = 0;
+    let mut v1: saddr = 1;
+    let mut v2: saddr = 2;
+    let mut v3: saddr = 3;
+    let mut v4: saddr = 4;
+    let mut v5: saddr = 5;
+    let mut v6: saddr = 6;
+    let mut v7: saddr = 7;
+    let mut v8: saddr = 8;
+    let mut v9: saddr = 9;
+    let mut v10: saddr = 10;
+    let mut v11: saddr = 11;
+    let mut v12: saddr = 12;
+    let mut v13: saddr = 13;
+    let mut v14: saddr = 14;
+    let mut v15: saddr = 15;
+    let mut v16: saddr = 16;
+    let mut v17: saddr = 17;
+    let mut v18: saddr = 18;
+    let mut v19: saddr = 19;
+    let mut v20: saddr = 20;
+    let mut v21: saddr = 21;
+    let mut v22: saddr = 22;
+    let mut v23: saddr = 23;
+    let mut v24: saddr = 24;
+    let mut v25: saddr = 25;
+    let mut v26: saddr = 26;
+    let mut v27: saddr = 27;
+    let mut v28: saddr = 28;
+    let mut v29: saddr = 29;
+    let mut v30: saddr = 30;
+    let mut v31: saddr = 31;
+    let mut v32: saddr = 32;
+    let mut v33: saddr = 33;
+    let mut v34: saddr = 34;
+    let mut v35: saddr = 35;
+    let mut v36: saddr = 36;
+    let mut v37: saddr = 37;
+    let mut v38: saddr = 38;
+    let mut v39: saddr = 39;
+    v39 += 1;                                  // 프레임 256바이트 너머
+    show(v39);                                 // 40
+    show(0x1234_5678_9abc~saddr);              // movz/movk
+    show(-2~saddr);                            // 상위 비트가 가득 찬 즉치값
+    show(v1 + twice(v2 + twice(v3)));          // 호출 중 임시값 보존: 1 + 2*(2+6) = 17
+    show(ten(1, 2, 3, 4, 5, 6, 7, 8, -9~si2, 200~ui1));   // 227
+    show((0xF0~ui1 & 0x3C~ui1 | 0x01~ui1 ^ 0x03~ui1) as saddr);   // 0x30|0x02 = 50
+    let h: si2 = 32767~si2;
+    show((h + 1~si2) as saddr);                // -32768
+    let q: ui2 = 65535~ui2;
+    show((q + 2~ui2) as saddr);                // 1
+    let w: ui4 = 4294967295~ui4;
+    show((w + 3~ui4) as saddr);                // 2
+    let s: si4 = 2147483647~si4;
+    show((s + 1~si4) as saddr);                // -2147483648
+    show((17~uaddr / 5~uaddr) as saddr);       // 3
+    show((17~uaddr % 5~uaddr) as saddr);       // 2
+    let t = 1 < 2;
+    let f = !t;
+    if t xor f { show(1); } else { show(0); }   // 1
+    return 0;
+}

@@ -28,6 +28,10 @@ package body Types is
             return L.Target = R.Target and then L.Length = R.Length;
          when Ty_Verdict =>
             return L.Pass = R.Pass and then L.Fail = R.Fail;
+         when Ty_Composite =>
+            return L.Composite = R.Composite;
+         when Ty_Anon =>
+            return L.Params = R.Params;
          when Ty_Fn =>
             return L.Params = R.Params and then L.Ret = R.Ret
               and then L.Variadic = R.Variadic
@@ -118,6 +122,91 @@ package body Types is
       return Make (R);
    end Array_Of;
 
+   function New_Composite (Info : Composite_Info) return Type_Id is
+      R : Type_Rec;
+   begin
+      Composites.Append (Info);
+      R.Kind := Ty_Composite;
+      R.Composite := Composites.Last_Index;
+      return Make (R);
+   end New_Composite;
+
+   function Info (T : Type_Id) return Composite_Info is
+     (Composites (Get (T).Composite));
+
+   function Field (T : Type_Id; Index : Positive) return Field_Info is
+      C : constant Composite_Info := Info (T);
+   begin
+      return C.Fields (Index);
+   end Field;
+
+   function Variant (T : Type_Id; Index : Positive) return Variant_Info is
+      C : constant Composite_Info := Info (T);
+   begin
+      return C.Variants (Index);
+   end Variant;
+
+   procedure Set_Info (T : Type_Id; Info : Composite_Info) is
+   begin
+      Composites.Replace_Element (Get (T).Composite, Info);
+   end Set_Info;
+
+   function Anon (Fields : Type_Vectors.Vector) return Type_Id is
+      R : Type_Rec;
+   begin
+      R.Kind := Ty_Anon;
+      R.Params := Fields;
+      return Make (R);
+   end Anon;
+
+   function Is_Contract (T : Type_Id) return Boolean is
+     (Kind (T) = Ty_Verdict
+      or else (Kind (T) = Ty_Composite
+               and then Info (T).Kind = Contract_Type));
+
+   function Is_Variant (T : Type_Id) return Boolean is
+     (Kind (T) = Ty_Verdict
+      or else (Kind (T) = Ty_Composite and then Info (T).Kind /= Struct_Type));
+
+   function Is_Copyable (T : Type_Id) return Boolean is
+      R : constant Type_Rec := Get (T);
+   begin
+      case R.Kind is
+         when Ty_Error | Ty_Void | Ty_Never | Ty_Int | Ty_Fn =>
+            return True;
+         when Ty_Ref | Ty_Slice =>
+            --  §8.2: 배타 참조는 복사할 수 없다
+            return R.Ref_Tribe /= Exclusive;
+         when Ty_Array =>
+            return Is_Copyable (R.Target);
+         when Ty_Anon =>
+            return (for all P of R.Params => Is_Copyable (P));
+         when Ty_Verdict =>
+            return Is_Copyable (R.Pass) and then Is_Copyable (R.Fail);
+         when Ty_Composite =>
+            declare
+               C : constant Composite_Info := Info (T);
+            begin
+               if not C.Copyable or else C.State = Laying_Out then
+                  return False;
+               end if;
+               for F of C.Fields loop
+                  if not F.Pad and then not Is_Copyable (F.Ty) then
+                     return False;
+                  end if;
+               end loop;
+               for V of C.Variants loop
+                  for F of V.Fields loop
+                     if not F.Pad and then not Is_Copyable (F.Ty) then
+                        return False;
+                     end if;
+                  end loop;
+               end loop;
+               return True;
+            end;
+      end case;
+   end Is_Copyable;
+
    function Builtin (Name : String) return Type_Id is
    begin
       if Name = "void" then
@@ -184,6 +273,20 @@ package body Types is
          when Ty_Verdict =>
             return "verdict[" & Image (R.Pass) & ", " & Image (R.Fail)
               & "]";
+         when Ty_Composite =>
+            return Idents.Image (Info (T).Name);
+         when Ty_Anon =>
+            declare
+               Fields : Unbounded_String;
+            begin
+               for P of R.Params loop
+                  if Length (Fields) > 0 then
+                     Append (Fields, ", ");
+                  end if;
+                  Append (Fields, Image (P));
+               end loop;
+               return ".{" & To_String (Fields) & "}";
+            end;
          when Ty_Fn =>
             declare
                Params : Unbounded_String;

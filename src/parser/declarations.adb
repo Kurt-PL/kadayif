@@ -1,4 +1,6 @@
+with Ada.Strings.Unbounded;
 with Expressions;
+with Idents;
 with Parser;
 with Statements;
 with Tokens;
@@ -26,6 +28,7 @@ package body Declarations is
            False);
 
    function Parse_Path (In_Type : Boolean) return Node_Id is
+      pragma Unreferenced (In_Type);
       Path : Node := Fresh (N_Path);
       Segs : Id_Vectors.Vector;
    begin
@@ -44,7 +47,7 @@ package body Declarations is
                when others =>
                   Fail ("expected path");
             end case;
-            if In_Type and then Peek = P_LBracket then
+            if Peek = P_LBracket then
                declare
                   Args : Id_Vectors.Vector;
                begin
@@ -133,7 +136,20 @@ package body Declarations is
             end;
 
          when P_Dot =>
-            Unimplemented ("anonymous struct types (§5.8)");
+            declare
+               N     : Node := Fresh (N_Anon_Type);
+               Types : Id_Vectors.Vector;
+            begin
+               Advance;
+               Expect (P_LBrace);
+               loop
+                  Types.Append (Parse_Type);
+                  exit when not Skip (P_Comma) or else Peek = P_RBrace;
+               end loop;
+               Expect (P_RBrace);
+               N.List := Make_List (Types);
+               return Add (N);
+            end;
          when K_Fn | K_Extern | K_Variadic | K_Airside =>
             Unimplemented ("subroutine pointer types (§5.10)");
          when K_Dyn =>
@@ -253,6 +269,232 @@ package body Declarations is
       return Add (N);
    end Parse_Dyn;
 
+   function Is_Context_Word (Word : String) return Boolean is
+     (Peek = T_Ident and then Current_Text = Word);
+
+   --  with_single / with_curly (§4.12)
+   function Parse_With return Node_Id is
+      N     : Node := Fresh (N_With);
+      Items : Id_Vectors.Vector;
+
+      function Parse_With_Item return Node_Id is
+         I : Node := Fresh (N_With_Item);
+      begin
+         if Peek = K_Copyable or else Peek = K_Variadic then
+            I.Name := Idents.Intern (Current_Text);
+            Advance;
+         elsif Peek = K_Impl then
+            Unimplemented ("subject bounds (§9.4.2)");
+         elsif Is_Context_Word ("inv") then
+            I.Name := Take_Ident;
+            Expect (P_Arrow);
+            I.A := Parse_Type;
+         elsif Is_Context_Word ("discrim") then
+            I.Name := Take_Ident;
+            Expect (P_LParen);
+            I.A := Parse_Type;
+            Expect (P_RParen);
+         elsif Is_Context_Word ("align") then
+            I.Name := Take_Ident;
+            Expect (P_LParen);
+            I.A := Expressions.Parse_Expression;
+            Expect (P_RParen);
+         elsif Is_Context_Word ("repr") then
+            I.Name := Take_Ident;
+            Expect (P_LParen);
+            if Is_Context_Word ("pack") then
+               I.Name2 := Take_Ident;
+               Expect (P_LParen);
+               I.A := Expressions.Parse_Expression;
+               Expect (P_RParen);
+            else
+               I.Name2 := Take_Ident;
+            end if;
+            Expect (P_RParen);
+         elsif Is_Context_Word ("destruct") then
+            Unimplemented ("destructors (§8.8)");
+         else
+            Fail ("expected with item");
+         end if;
+         return Add (I);
+      end Parse_With_Item;
+
+   begin
+      Expect (K_With);
+      if Skip (P_LBrace) then
+         loop
+            Items.Append (Parse_With_Item);
+            exit when not Skip (P_Comma) or else Peek = P_RBrace;
+         end loop;
+         Expect (P_RBrace);
+         N.Flags (F_Braces) := True;
+      else
+         Items.Append (Parse_With_Item);
+      end if;
+      N.List := Make_List (Items);
+      return Add (N);
+   end Parse_With;
+
+   --  composite_form (§4.6). Named는 이름 있는 필드 형태인지.
+   procedure Parse_Composite_Form (Fields : out List_Id; Named : out Boolean)
+   is
+      Items : Id_Vectors.Vector;
+      Ahead : Natural := 0;
+   begin
+      Expect (P_LBrace);
+      while Peek (Ahead) in K_Pub | K_Airside | K_Mut loop
+         Ahead := Ahead + 1;
+      end loop;
+      Named := (Peek (Ahead) = T_Ident and then Peek (Ahead + 1) = P_Colon)
+        or else Peek (Ahead) = P_Question;
+      loop
+         declare
+            F : Node := Fresh (N_Field_Decl);
+         begin
+            loop
+               case Peek is
+                  when K_Pub     => F.Flags (F_Pub) := True;
+                  when K_Airside => F.Flags (F_Airside) := True;
+                  when K_Mut     => F.Flags (F_Mut) := True;
+                  when others    => exit;
+               end case;
+               Advance;
+            end loop;
+            if Named then
+               if Skip (P_Question) then
+                  F.Flags (F_Pad) := True;
+               else
+                  F.Name := Take_Ident;
+               end if;
+               Expect (P_Colon);
+            end if;
+            F.A := Parse_Type;
+            if Skip (P_Eq) then
+               F.B := Expressions.Parse_Expression;
+            end if;
+            Items.Append (Add (F));
+         end;
+         exit when not Skip (P_Comma) or else Peek = P_RBrace;
+      end loop;
+      Expect (P_RBrace);
+      Fields := Make_List (Items);
+   end Parse_Composite_Form;
+
+   --  [ with_single, ';' | with_curly ]
+   procedure Parse_Trailing_With (N : in out Node; Required_Semi : Boolean)
+   is
+   begin
+      if Peek = K_With then
+         N.C := Parse_With;
+         if not Nodes (Positive (N.C)).Flags (F_Braces) then
+            Expect (P_Semi);
+         end if;
+      elsif Required_Semi then
+         Expect (P_Semi);
+      end if;
+   end Parse_Trailing_With;
+
+   --  struct_decl (§4.7)
+   function Parse_Struct (Pub : Boolean) return Node_Id is
+      N : Node := Fresh (N_Struct);
+   begin
+      N.Flags (F_Pub) := Pub;
+      Expect (K_Struct);
+      N.Name := Take_Ident;
+      if Peek = P_LBracket then
+         Unimplemented ("generic declarations (§4.10)");
+      end if;
+      if Peek = P_LBrace then
+         declare
+            Named : Boolean;
+         begin
+            Parse_Composite_Form (N.List, Named);
+            N.Flags (F_Named) := Named;
+         end;
+         Parse_Trailing_With (N, Required_Semi => False);
+      else
+         N.Flags (F_Unit) := True;
+         Parse_Trailing_With (N, Required_Semi => True);
+      end if;
+      return Add (N);
+   end Parse_Struct;
+
+   --  discrim_value = [ sign, ws ], integer_literal ;  부호는 철자에 붙인다
+   function Parse_Discrim_Value return Node_Id is
+      N    : Node := Fresh (N_Int_Lit);
+      Sign : String := " ";
+   begin
+      if Peek in P_Minus | P_Plus then
+         Sign := (if Peek = P_Minus then "-" else " ");
+         Advance;
+      end if;
+      if Peek /= T_Int then
+         Fail ("expected integer literal");
+      end if;
+      N.Text := Ada.Strings.Unbounded.To_Unbounded_String
+        ((if Sign = "-" then "-" else "") & Current_Text);
+      Advance;
+      if Peek = P_Tilde then
+         Unimplemented ("type suffixes on discriminant values (§4.8)");
+      end if;
+      return Add (N);
+   end Parse_Discrim_Value;
+
+   --  variant (§4.8)
+   function Parse_Variant return Node_Id is
+      V : Node := Fresh (N_Variant);
+   begin
+      V.Name := Take_Ident;
+      if Peek = P_LBrace then
+         declare
+            Named : Boolean;
+         begin
+            Parse_Composite_Form (V.List, Named);
+            V.Flags (F_Named) := Named;
+         end;
+      else
+         V.Flags (F_Unit) := True;
+      end if;
+      if Skip (P_Eq) then
+         if Skip (K_Wild) then
+            V.Flags (F_Wild) := True;
+            if Skip (P_LParen) then
+               V.A := Parse_Discrim_Value;
+               Expect (P_RParen);
+            end if;
+         else
+            V.A := Parse_Discrim_Value;
+         end if;
+      end if;
+      return Add (V);
+   end Parse_Variant;
+
+   --  enum_decl (§4.8), contract_decl (§7.2)
+   function Parse_Variant_Type (Pub : Boolean) return Node_Id is
+      Is_Contract : constant Boolean := Peek = K_Contract;
+      N : Node := Fresh (if Is_Contract then N_Contract else N_Enum);
+      Variants : Id_Vectors.Vector;
+   begin
+      N.Flags (F_Pub) := Pub;
+      Advance;
+      if Is_Contract then
+         N.Flags (F_Inverted) := Skip (P_Bang);
+      end if;
+      N.Name := Take_Ident;
+      if Peek = P_LBracket then
+         Unimplemented ("generic declarations (§4.10)");
+      end if;
+      Expect (P_LBrace);
+      while Peek /= P_RBrace loop
+         Variants.Append (Parse_Variant);
+         exit when not Skip (P_Comma);
+      end loop;
+      Expect (P_RBrace);
+      N.List := Make_List (Variants);
+      Parse_Trailing_With (N, Required_Semi => False);
+      return Add (N);
+   end Parse_Variant_Type;
+
    function Parse_Item return Node_Id is
    begin
       case Peek is
@@ -279,11 +521,9 @@ package body Declarations is
             when K_Static =>
                Unimplemented ("static declarations (§4.5)");
             when K_Struct =>
-               Unimplemented ("struct declarations (§4.7)");
-            when K_Enum =>
-               Unimplemented ("enum declarations (§4.8)");
-            when K_Contract =>
-               Unimplemented ("contract declarations (§7.2)");
+               return Parse_Struct (Pub);
+            when K_Enum | K_Contract =>
+               return Parse_Variant_Type (Pub);
             when K_Type =>
                Unimplemented ("type aliases (§4.9)");
             when K_Use =>

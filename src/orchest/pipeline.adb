@@ -1,14 +1,14 @@
 with AArch64;
 with AST;
-with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.Text_IO;
 with Apple_Arm64;
 with Check;
 with Diagnostics;
 with Emit;
-with GNAT.OS_Lib;
+with MachO;
 with Parser;
+with Sections;
 with Source_Map;
 with Strip;
 with Targets;
@@ -31,42 +31,27 @@ package body Pipeline is
          return False;
    end Write_File;
 
-   --  자체 어셈블러·링커가 생기기 전까지 시스템 cc에 맡긴다
-   function Link (Assembly, Output : String) return Boolean is
-      use GNAT.OS_Lib;
-      Tmp_Dir : constant String :=
-        (if Ada.Environment_Variables.Exists ("TMPDIR")
-         then Ada.Environment_Variables.Value ("TMPDIR") else "/tmp");
-      Pid  : constant String :=
-        Integer'Image (Pid_To_Integer (Current_Process_Id));
-      Tmp  : constant String := Ada.Directories.Compose
-        (Tmp_Dir, "kadayif-" & Pid (Pid'First + 1 .. Pid'Last) & ".s");
-      CC   : String_Access := Locate_Exec_On_Path ("cc");
-      Args : Argument_List_Access;
-      OK, Deleted : Boolean;
+   function Link
+     (Obj : Sections.Object; Output : String; Opts : Linker.Options)
+      return Boolean
+   is
    begin
-      if CC = null then
-         Diagnostics.Report
-           (Diagnostics.Halt, "cannot find 'cc' to assemble and link");
-         return False;
+      --  디버깅용: KURT_KEEP_OBJECT가 가리키는 경로에 오브젝트를 남긴다
+      if Ada.Environment_Variables.Exists ("KURT_KEEP_OBJECT")
+        and then not MachO.Write_Object
+          (Obj, Ada.Environment_Variables.Value ("KURT_KEEP_OBJECT"))
+      then
+         Diagnostics.Report (Diagnostics.Warning,
+                             "cannot write KURT_KEEP_OBJECT");
       end if;
-      if not Write_File (Tmp, Assembly) then
-         Free (CC);
-         return False;
-      end if;
-      Args := Argument_String_To_List ("-arch arm64 -o " & Output & " " & Tmp);
-      Spawn (CC.all, Args.all, OK);
-      Free (Args);
-      Free (CC);
-      Delete_File (Tmp, Success => Deleted);
-      if not OK then
-         Diagnostics.Report (Diagnostics.Error, "link edit failed");
-      end if;
-      return OK;
+      return Linker.Link (Obj, Output, Targets.AArch64_Apple, Opts);
    end Link;
 
    function Translate
-     (Input : String; Output : String; Stop : Stop_After) return Boolean
+     (Input  : String;
+      Output : String;
+      Stop   : Stop_After;
+      Link   : Linker.Options) return Boolean
    is
       Id   : constant Source_Map.Source_Id := Source_Map.Load (Input);
       Unit : AST.Node_Id;
@@ -93,16 +78,19 @@ package body Pipeline is
 
       --  5단계
       declare
-         M    : AArch64.Machine := AArch64.Create (Targets.Format_MachO);
-         ABI  : Apple_Arm64.Convention;
-         Text : constant String := Emit.Generate (Unit, M, ABI);
+         M   : AArch64.Machine := AArch64.Create (Targets.Format_MachO);
+         ABI : Apple_Arm64.Convention;
+         Obj : Sections.Object;
+         OK  : Boolean;
       begin
-         if Diagnostics.Failures > 0 then
+         Emit.Generate (Unit, M, ABI, Obj, OK);
+         if not OK or else Diagnostics.Failures > 0 then
             return False;
          elsif Stop = Instructions then
-            return Write_File (Output, Text);
+            return Write_File (Output, Emit.Text (M, Obj));
          end if;
-         return Link (Text, Output);
+         M.Write_Code (Obj);
+         return Pipeline.Link (Obj, Output, Link);
       end;
    end Translate;
 

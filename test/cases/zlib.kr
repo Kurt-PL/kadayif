@@ -1,0 +1,12 @@
+// SDK의 텍스트 스텁(libz.tbd)으로 찾는 라이브러리
+#dyn io {
+    variadic fn printf(%ui1) -> si4;
+}
+#dyn z {
+    fn compressBound(uaddr) -> uaddr;
+}
+
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    airside { io::printf("%lu\n\0".ptr, z::compressBound(1000~uaddr)); }
+    return 0;
+}

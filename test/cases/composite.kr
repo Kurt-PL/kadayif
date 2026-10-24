@@ -1,0 +1,70 @@
+#dyn io {
+    variadic fn printf(%ui1) -> si4;
+}
+
+fn show(v: saddr) {
+    airside { io::printf("%ld\n\0".ptr, v); }
+}
+
+struct point { x: si4, y: si4 = 10~si4 }
+struct triple { si1, si8, ui2 }            // 패딩이 낀 24바이트
+struct big { a: saddr, b: saddr, c: saddr } // 16바이트 초과: 주소로 전달
+struct odd { a: ui1, b: ui2 } with copyable; // 4바이트, 크기 3+패딩
+struct empty_t;
+
+enum colour { red, green = 5, blue } with copyable;
+enum shape { circle { si4 }, rect { si4, si4 }, other = wild(9) }
+contract toggle { on { void }, off { void } = wild } with copyable;
+contract res { ok { si4 }, err { ui1 } = wild } with inv -> res_inv;
+contract res_inv { ok { si4 } = wild, err { ui1 } } with inv -> res;
+
+fn sum(p: point) -> si4 { return p.x + p.y; }
+fn make(x: si4) -> point { return point.{ .x = x, .y = x * 2~si4 }; }
+fn bigsum(b: big) -> saddr { return b.a + b.b + b.c; }
+fn mkbig(n: saddr) -> big { return big.{ .a = n, .b = n * 2, .c = n * 3 }; }
+fn first(t: triple) -> si8 { return t.1; }
+fn ten(a: si4, b: si4, c: si4, d: si4, e: si4, f: si4, g: si4, p: point) -> si4 {
+    return a + b + c + d + e + f + g + p.x + p.y;   // p는 레지스터가 모자라 스택으로
+}
+
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    show(sum(point.{ .x = 1~si4 }) as saddr);        // 1 + 10 = 11
+    let p = make(4~si4);
+    show(p.y as saddr);                              // 8
+    let mut q = point.{ .x = 7~si4, .y = 3~si4 };
+    q.x = q.x + 100~si4;
+    show(sum(q) as saddr);                           // 110
+    let t = triple.{ -3~si1, 1234567890123~si8, 65535~ui2 };
+    show(first(t) as saddr);                         // 1234567890123
+    show(bigsum(mkbig(5)));                          // 30
+    let b = mkbig(7);
+    show(b.c);                                       // 21
+    let o = odd.{ .a = 200~ui1, .b = 513~ui2 };
+    let o2 = o;
+    show((o.a as saddr) + (o2.b as saddr));          // 713
+    show(ten(1~si4, 2~si4, 3~si4, 4~si4, 5~si4, 6~si4, 7~si4,
+             point.{ .x = 100~si4, .y = 200~si4 }) as saddr);   // 328
+    let a = .{ 5~si4, 6~ui1 };
+    show((a.0 as saddr) + (a.1 as saddr));           // 11
+    let e = empty_t;
+
+    let c = colour::blue;
+    show((c as ?) as saddr);                         // 1: 5와 앞선 0을 피한 값
+    show((colour::wild as ui4) as saddr);            // 2: 0, 1, 5를 피한 값
+    let s = shape::other;
+    show((s as ?) as saddr);                         // 9
+    let r = shape::rect.{ 1~si4, 2~si4 };
+    show((r as ui1) as saddr);                       // 1
+
+    let on = toggle::on.{ void };
+    if on { show(1); } else { show(0); }             // 1
+    let good = res::ok.{ 42~si4 };
+    let bad = res::err.{ 3~ui1 };
+    if good { show(1); } else { show(0); }           // 1
+    if bad { show(1); } else { show(0); }            // 0
+    let flipped = !good;                             // res_inv: ok가 실패 쪽
+    if flipped { show(1); } else { show(0); }        // 0
+    let v: verdict[si4, void] = verdict::Pass.{ 9~si4 };
+    if v and good { show(1); }                       // 1
+    return 0;
+}

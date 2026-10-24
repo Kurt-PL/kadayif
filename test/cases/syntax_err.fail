@@ -1,2 +1,1 @@
 error - operator '<' is not associative, found '<' at test/cases/syntax_err.kr on 2:20
-error - unimplemented: struct declarations (§4.7) at test/cases/syntax_err.kr on 6:1

@@ -19,7 +19,9 @@ package Types is
       Ty_Slice,    --  slice 참조 (넓은 참조)
       Ty_Array,
       Ty_Verdict,
-      Ty_Fn);
+      Ty_Fn,
+      Ty_Composite, --  선언된 struct, enum, contract
+      Ty_Anon);     --  익명 구조체: 필드 타입은 Params
 
    type Tribe is (Shared, Exclusive, Unmanaged);
 
@@ -46,13 +48,92 @@ package Types is
       --  Ty_Verdict
       Pass, Fail : Type_Id := No_Type;
 
-      --  Ty_Fn
+      --  Ty_Composite: Composites의 색인
+      Composite : Natural := 0;
+
+      --  Ty_Fn, Ty_Anon
       Params    : Type_Vectors.Vector;
       Ret       : Type_Id := No_Type;
       Variadic  : Boolean := False;
       Airside   : Boolean := False;
       Invocation : Idents.Ident := Idents.No_Ident;  --  호출 인터페이스
    end record;
+
+   ---------------------------------------------------------------------
+   --  선언된 복합 타입 (§4.6–§4.8, §7.2)
+
+   type Composite_Kind is (Struct_Type, Enum_Type, Contract_Type);
+   type Form_Kind is (Unit_Form, Unnamed_Form, Named_Form);
+
+   type Field_Info is record
+      Name    : Idents.Ident := Idents.No_Ident;
+      Ty      : Type_Id := No_Type;
+      Pub     : Boolean := False;
+      Airside : Boolean := False;
+      Mut     : Boolean := False;
+      Pad     : Boolean := False;   --  ? 필드
+      Default : Natural := 0;       --  기본값 식 (AST.Node_Id)
+      Offset  : Natural := 0;       --  KSA가 채운다: 구조체 안의 오프셋
+   end record;
+   package Field_Vectors is new Ada.Containers.Vectors (Positive, Field_Info);
+
+   type Variant_Info is record
+      Name      : Idents.Ident := Idents.No_Ident;
+      Form      : Form_Kind := Unit_Form;
+      Fields    : Field_Vectors.Vector;
+      Value     : Long_Long_Integer := 0;  --  판별자 값
+      Wild      : Boolean := False;
+      Canonical : Boolean := False;        --  wild(V)
+      Size      : Natural := 0;            --  KSA가 채운다
+      Align     : Natural := 0;
+   end record;
+   package Variant_Vectors is new Ada.Containers.Vectors
+     (Positive, Variant_Info);
+
+   type Layout_State is (Not_Laid_Out, Laying_Out, Laid_Out);
+
+   type Composite_Info is record
+      Name      : Idents.Ident := Idents.No_Ident;
+      Kind      : Composite_Kind := Struct_Type;
+      Form      : Form_Kind := Unit_Form;     --  구조체의 형태
+      Fields    : Field_Vectors.Vector;       --  구조체의 필드
+      Variants  : Variant_Vectors.Vector;
+      Disc      : Type_Id := No_Type;         --  판별자 타입 (void일 수 있다)
+      Copyable  : Boolean := False;           --  with copyable
+      Inverted  : Boolean := False;           --  contract!
+      Inv       : Type_Id := No_Type;         --  with inv -> T
+      Pack      : Natural := 0;               --  repr(pack(N)), 0이면 없음
+      Min_Align : Natural := 0;               --  align(N), 0이면 없음
+      Decl      : Natural := 0;               --  AST.Node_Id
+      State     : Layout_State := Not_Laid_Out;
+      Size      : Natural := 0;
+      Align     : Natural := 0;
+      Payload_Offset : Natural := 0;          --  변형 필드들이 시작하는 곳
+   end record;
+   package Composite_Vectors is new Ada.Containers.Vectors
+     (Positive, Composite_Info);
+
+   Composites : Composite_Vectors.Vector;
+
+   --  새 복합 타입을 등록하고 그 타입을 돌려준다
+   function New_Composite (Info : Composite_Info) return Type_Id;
+   function Info (T : Type_Id) return Composite_Info;
+
+   --  Info (T).Fields (I)처럼 임시값 안을 바로 색인하면 임시값이 참조보다
+   --  먼저 정리되므로, 이 함수들로 복사해 꺼낸다
+   function Field (T : Type_Id; Index : Positive) return Field_Info;
+   function Variant (T : Type_Id; Index : Positive) return Variant_Info;
+   procedure Set_Info (T : Type_Id; Info : Composite_Info);
+
+   function Anon (Fields : Type_Vectors.Vector) return Type_Id;
+
+   --  contract 타입인가: verdict, 또는 contract 선언이 들인 타입
+   function Is_Contract (T : Type_Id) return Boolean;
+   --  variant 타입인가: contract 타입이거나 enum
+   function Is_Variant (T : Type_Id) return Boolean;
+
+   --  §8.7 copyable
+   function Is_Copyable (T : Type_Id) return Boolean;
 
    function Make (R : Type_Rec) return Type_Id;
    function Get (T : Type_Id) return Type_Rec;
