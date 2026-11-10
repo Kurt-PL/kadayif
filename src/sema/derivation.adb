@@ -465,7 +465,7 @@ package body Derivation is
       T : constant Type_Id := Type_Of (N);
    begin
       case R.Kind is
-         when N_Int_Lit | N_Char_Lit | N_Wild_Construct =>
+         when N_Int_Lit | N_Char_Lit | N_Wild_Construct | N_Unwritten =>
             return 0;
 
          when N_String_Lit =>
@@ -658,6 +658,10 @@ package body Derivation is
                Saved : constant Natural := Let_Object;
                V     : Natural;
             begin
+               if R.B = No_Node then
+                  --  지연 초기화: 아직 아무것도 담지 않는다
+                  return;
+               end if;
                Let_Object := Obj;
                V := Lower (R.B);
                Let_Object := Saved;

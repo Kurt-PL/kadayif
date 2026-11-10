@@ -52,7 +52,9 @@ package body Statements is
             begin
                Advance;
                L.Flags (F_Mut) := Skip (K_Mut);
-               if Peek /= T_Ident or else Peek (1) not in P_Colon | P_Eq then
+               if Peek /= T_Ident
+                 or else Peek (1) not in P_Colon | P_Eq | P_Semi
+               then
                   Unimplemented ("let patterns other than an identifier"
                                  & " (§4.11)");
                end if;

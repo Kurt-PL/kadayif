@@ -951,9 +951,8 @@ package body Check is
       elsif Is_Int (Expected) then
          T := Expected;
       elsif Expected = No_Type then
+         --  합성이 정해지지 않으면 기본 타입 (§3.5.2)
          T := Saddr;
-         Diagnostics.Warn (R.Pos, "default type 'saddr' applied to integer"
-                           & " literal");
       elsif Kind (Expected) = Ty_Error then
          return Expected;
       else
@@ -1145,7 +1144,9 @@ package body Check is
                   if S.Kind not in Sym_Local | Sym_Param then
                      Error (N, "'" & Idents.Image (S.Name)
                             & "' is not an object");
-                  elsif not S.Mutable then
+                  elsif not S.Mutable and then not S.Deferred then
+                     --  지연 초기화한 바인딩은 흐름 분석이 경로마다 한
+                     --  번인지 본다
                      Error (N, "'" & Idents.Image (S.Name)
                             & "' is a single-assignment binding");
                   end if;
@@ -1547,11 +1548,215 @@ package body Check is
       end case;
    end Check_Binary;
 
+   ---------------------------------------------------------------------
+   --  초기식도 타입 표기도 없는 let의 타입 (§5.12)
+   --
+   --  바인딩의 타입은 그 바인딩을 앞 피연산자로 하는 단순 대입들의 뒤
+   --  피연산자들(그런 바인딩을 언급하는 것은 빼고)의 공통 타입이다.
+   --  선언 뒤의 스코프를 훑어 그런 피연산자를 센다. 모두 합성으로
+   --  타입이 정해지지 않는 리터럴이면 기본 타입 saddr, 하나도 없으면
+   --  void다. 합성되는 피연산자가 있으면 바인딩은 보류 상태(타입 0)로
+   --  두고, 검사 순서에서 처음 만나는 그것의 타입으로 정한다. 그 전의
+   --  리터럴 피연산자는 그때 검사한다. 보류 중인 바인딩을 쓰는 것은
+   --  이 구현이 아직 다루지 못한다.
+
+   type Pending_Assign is record
+      Sym     : Symbol_Id;
+      Assign  : Node_Id;
+      Checked : Boolean;  --  뒤 피연산자를 이미 검사했다(발산식)
+   end record;
+   package Pending_Vectors is new Ada.Containers.Vectors
+     (Positive, Pending_Assign);
+
+   Pending  : Pending_Vectors.Vector;
+   Inferred : Id_Vectors.Vector;  --  이렇게 타입을 얻는 바인딩의 let
+
+   --  경로 하나짜리 이름 식이 Name을 가리키는가
+   function Is_Name_Of (N : Node_Id; Name : Idents.Ident) return Boolean is
+   begin
+      if Kind (N) /= N_Name or else Get (N).A = No_Node then
+         return False;
+      end if;
+      declare
+         P : constant Node := Get (Get (N).A);
+      begin
+         return P.List.Count = 1
+           and then Get (Item (P.List, 1)).Name = Name
+           and then Get (Item (P.List, 1)).List.Count = 0;
+      end;
+   end Is_Name_Of;
+
+   function Mentions (N : Node_Id; Name : Idents.Ident) return Boolean is
+   begin
+      if N = No_Node then
+         return False;
+      elsif Is_Name_Of (N, Name) then
+         return True;
+      elsif Kind (N) in Type_Node | N_Fn then
+         return False;
+      end if;
+      declare
+         R : constant Node := Get (N);
+      begin
+         return Mentions (R.A, Name) or else Mentions (R.B, Name)
+           or else Mentions (R.C, Name)
+           or else (for some I in 1 .. R.List.Count =>
+                      Mentions (Item (R.List, I), Name));
+      end;
+   end Mentions;
+
+   --  타입을 정하는 데서 빠지는 피연산자: 그런 바인딩을 언급한다
+   function Excluded (Op : Node_Id; Own : Idents.Ident) return Boolean is
+   begin
+      if Mentions (Op, Own) then
+         return True;
+      end if;
+      for L of Inferred loop
+         if Mentions (Op, Get (L).Name) then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Excluded;
+
+   procedure Scan_Assigns
+     (N : Node_Id; Name : Idents.Ident; Literals, Synthesized : in out Natural)
+   is
+   begin
+      if N = No_Node or else Kind (N) in Type_Node | N_Fn then
+         return;
+      end if;
+      declare
+         R : constant Node := Get (N);
+      begin
+         if R.Kind = N_Assign and then R.Op = P_Eq
+           and then Is_Name_Of (R.A, Name)
+           and then not Excluded (R.B, Name)
+         then
+            if Undetermined (R.B) then
+               Literals := Literals + 1;
+            elsif Kind (R.B) in N_Return | N_Break | N_Continue then
+               null;  --  발산식은 공통 타입에서 빠진다
+            else
+               Synthesized := Synthesized + 1;
+            end if;
+         end if;
+         Scan_Assigns (R.A, Name, Literals, Synthesized);
+         Scan_Assigns (R.B, Name, Literals, Synthesized);
+         Scan_Assigns (R.C, Name, Literals, Synthesized);
+         for I in 1 .. R.List.Count loop
+            Scan_Assigns (Item (R.List, I), Name, Literals, Synthesized);
+         end loop;
+      end;
+   end Scan_Assigns;
+
+   function Is_Pending (S : Symbol_Id) return Boolean is
+     (S /= No_Symbol and then Symbols.Get (S).Kind = Sym_Local
+      and then Symbols.Get (S).Ty = 0);
+
+   --  보류한 바인딩의 타입을 T로 정하고 미뤄 둔 대입을 검사한다
+   procedure Resolve_Pending (S : Symbol_Id; T : Type_Id) is
+      I : Positive := 1;
+   begin
+      Symbols.Table (Positive (S)).Ty := Natural (T);
+      Set_Type (Node_Id (Symbols.Get (S).Decl), T);
+      while I <= Pending.Last_Index loop
+         if Pending (I).Sym = S then
+            declare
+               P : constant Pending_Assign := Pending (I);
+            begin
+               Set_Type (Get (P.Assign).A, T);
+               if not P.Checked then
+                  Check_Against (Get (P.Assign).B, T);
+               end if;
+               Pending.Delete (I);
+            end;
+         else
+            I := I + 1;
+         end if;
+      end loop;
+   end Resolve_Pending;
+
+   --  스코프가 끝날 때까지 보류된 바인딩: 리터럴만 남았으면 saddr
+   procedure Settle_Pending (S : Symbol_Id) is
+   begin
+      if Is_Pending (S) then
+         Resolve_Pending
+           (S, (if (for some P of Pending =>
+                      P.Sym = S and then not P.Checked)
+                then Saddr else Void));
+      end if;
+   end Settle_Pending;
+
+   --  보류 중인 바인딩으로의 단순 대입
+   procedure Check_Pending_Assign (N : Node_Id; S : Symbol_Id) is
+      R : constant Node := Get (N);
+   begin
+      Nodes (Positive (R.A)).Sym := Natural (S);
+      if Excluded (R.B, Symbols.Get (S).Name) then
+         Unimplemented (N, "an assignment that mentions a binding whose"
+                        & " type is not yet determined (§5.12)");
+      elsif Undetermined (R.B) then
+         Pending.Append (Pending_Assign'(S, N, False));
+      else
+         declare
+            T : constant Type_Id := Check_Expr (R.B, No_Type);
+         begin
+            if Kind (T) = Ty_Never then
+               --  발산식은 공통 타입에서 빠진다
+               Pending.Append (Pending_Assign'(S, N, True));
+            else
+               Resolve_Pending (S, T);
+               Set_Type (R.A, T);
+            end if;
+         end;
+      end if;
+   end Check_Pending_Assign;
+
+   procedure Check_Assign_Rest (N : Node_Id; L : Type_Id);
+
+   --  단순 대입의 앞 피연산자가 보류 중인 바인딩이면 그 심볼
+   function Pending_Target (N : Node_Id) return Symbol_Id is
+      R : constant Node := Get (N);
+   begin
+      if R.Op = P_Eq and then Kind (R.A) = N_Name
+        and then Get (R.A).A /= No_Node
+        and then Get (Get (R.A).A).List.Count = 1
+      then
+         declare
+            Seg : constant Node := Get (Item (Get (Get (R.A).A).List, 1));
+            S   : constant Symbol_Id :=
+              (if Seg.List.Count = 0 then Names.Lookup (Seg.Name)
+               else No_Symbol);
+         begin
+            if Is_Pending (S) then
+               return S;
+            end if;
+         end;
+      end if;
+      return No_Symbol;
+   end Pending_Target;
+
    function Check_Assign (N : Node_Id) return Type_Id is
       R : constant Node := Get (N);
-      L : constant Type_Id := Check_Expr (R.A, No_Type);
+      S : constant Symbol_Id := Pending_Target (N);
    begin
-      Check_Place (R.A);
+      if S /= No_Symbol then
+         Check_Pending_Assign (N, S);
+         return Void;
+      end if;
+      declare
+         L : constant Type_Id := Check_Expr (R.A, No_Type);
+      begin
+         Check_Place (R.A);
+         Check_Assign_Rest (N, L);
+      end;
+      return Void;
+   end Check_Assign;
+
+   procedure Check_Assign_Rest (N : Node_Id; L : Type_Id) is
+      R : constant Node := Get (N);
+   begin
       if R.Op = P_Eq then
          Check_Against (R.B, L);
       elsif R.Op in P_Plus_Eq | P_Minus_Eq | P_Star_Eq | P_Slash_Eq
@@ -1566,8 +1771,7 @@ package body Check is
          Unimplemented (N, "compound assignment '" & Spelling (R.Op)
                         & "' (§6.8.2)");
       end if;
-      return Void;
-   end Check_Assign;
+   end Check_Assign_Rest;
 
    --  정수·참조·uaddr 사이의 캐스트
    function Check_Plain_Cast (N : Node_Id; Source, Target : Type_Id)
@@ -1904,14 +2108,35 @@ package body Check is
       end;
    end Check_Wild;
 
-   procedure Check_Let (N : Node_Id) is
+   --  Rest의 From번째 항목이 선언 N이다. 그 뒤가 바인딩의 스코프다.
+   procedure Check_Let (N : Node_Id; Rest : List_Id; From : Positive) is
       R    : constant Node := Get (N);
       T    : Type_Id;
       Sym  : Symbol;
+      Infer : Boolean := False;
    begin
       if R.B = No_Node then
-         Unimplemented (N, "deferred initialization (§4.3)");
-         T := (if R.A = No_Node then Error_Type else Resolve_Type (R.A));
+         --  지연 초기화 (§4.3)
+         if R.A = No_Node then
+            --  타입은 뒤따르는 대입에서 정해진다 (§5.12)
+            declare
+               Literals, Synthesized : Natural := 0;
+            begin
+               for I in From + 1 .. Rest.Count loop
+                  Scan_Assigns (Item (Rest, I), R.Name, Literals, Synthesized);
+               end loop;
+               if Synthesized > 0 then
+                  T := No_Type;
+                  Infer := True;
+               elsif Literals > 0 then
+                  T := Saddr;
+               else
+                  T := Void;
+               end if;
+            end;
+         else
+            T := Resolve_Type (R.A);
+         end if;
       elsif R.A /= No_Node then
          T := Resolve_Type (R.A);
          Check_Against (R.B, T);
@@ -1930,9 +2155,13 @@ package body Check is
       Sym.Ty := Natural (T);
       Sym.Decl := Natural (N);
       Sym.Mutable := R.Flags (F_Mut);
+      Sym.Deferred := R.B = No_Node;
       Nodes (Positive (N)).Sym := Natural (Add (Sym));
       Nodes (Positive (N)).Ty := Natural (T);
       Names.Declare_Local (R.Name, Symbol_Id (Get (N).Sym));
+      if Infer then
+         Inferred.Append (N);
+      end if;
    end Check_Let;
 
    function Find_Loop (N : Node_Id) return Node_Id is
@@ -1996,6 +2225,13 @@ package body Check is
                      case Symbols.Get (V.Sym).Kind is
                         when Sym_Local | Sym_Param =>
                            T := Type_Id (Symbols.Get (V.Sym).Ty);
+                           if Is_Pending (V.Sym) then
+                              Unimplemented
+                                (N, "a use of a binding before an"
+                                 & " assignment determines its type"
+                                 & " (§5.12)");
+                              T := Error_Type;
+                           end if;
                         when Sym_Fn =>
                            Unimplemented (N, "subroutine values (§5.10)");
                            T := Error_Type;
@@ -2009,6 +2245,15 @@ package body Check is
             T := Check_Construct (N, Expected);
          when N_Wild_Construct =>
             T := Check_Wild (N);
+         when N_Unwritten =>
+            --  타입은 검사로만 정해진다 (§6.2.7)
+            Require_Airside (N, "unwritten");
+            if Expected = No_Type then
+               Error (N, "unwritten takes its type from its context alone");
+               T := Error_Type;
+            else
+               T := Expected;
+            end if;
          when N_Anon =>
             declare
                Fields : Type_Vectors.Vector;
@@ -2049,7 +2294,7 @@ package body Check is
                   Item_N : constant Node_Id := Item (R.List, I);
                begin
                   if Kind (Item_N) = N_Let then
-                     Check_Let (Item_N);
+                     Check_Let (Item_N, R.List, I);
                   else
                      declare
                         Ignored : constant Type_Id :=
@@ -2059,6 +2304,13 @@ package body Check is
                      end;
                   end if;
                end;
+            end loop;
+            for I in 1 .. R.List.Count loop
+               if Kind (Item (R.List, I)) = N_Let
+                 and then Get (Item (R.List, I)).Sym /= 0
+               then
+                  Settle_Pending (Symbol_Id (Get (Item (R.List, I)).Sym));
+               end if;
             end loop;
             Names.Pop_Scope;
 
@@ -2190,6 +2442,8 @@ package body Check is
    begin
       Fn_Ret := FT.Ret;
       Airside_Depth := (if R.Flags (F_Airside) then 1 else 0);
+      Pending.Clear;
+      Inferred.Clear;
       Names.Push_Scope;
       for I in 1 .. R.List.Count loop
          declare

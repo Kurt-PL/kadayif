@@ -158,8 +158,13 @@ package body Expressions is
             Unimplemented ("self (§9.2)");
          when K_Trap =>
             Unimplemented ("trap (§7.10)");
-         when K_Uninit =>
-            Unimplemented ("uninit (§6.2.7)");
+         when K_Unwritten =>
+            declare
+               N : constant Node := Fresh (N_Unwritten);
+            begin
+               Advance;
+               return Add (N);
+            end;
          when K_Cellbits =>
             Unimplemented ("cellbits (§5.3.1)");
          when K_Volatile | K_Guard =>

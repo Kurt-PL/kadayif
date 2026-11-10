@@ -225,6 +225,11 @@ package body Emit is
                                                       16), 8),
                            Natural'Max (8, KSA.Align (Type_Of (N)))));
                   end if;
+               when N_Unwritten =>
+                  --  한 번도 쓰지 않은 자리 (§6.2.7)
+                  if Class_Of (Type_Of (N)) /= Nothing then
+                     Node_Temps.Include (N, Object_Slot (Type_Of (N)));
+                  end if;
                when N_If =>
                   if Kind (R.B) /= N_Block and then Is_Aggregate (Type_Of (N))
                   then
@@ -309,6 +314,10 @@ package body Emit is
       is
          T : constant Type_Id := Type_Of (E);
       begin
+         if Kind (E) = N_Unwritten then
+            --  unwritten의 값은 정하지 않았다: 쓰지 않는다 (§6.2.7)
+            return;
+         end if;
          case Class_Of (T) is
             when Nothing =>
                Effect (E);
@@ -570,6 +579,75 @@ package body Emit is
          M.Data_Address (R, Name);
       end String_Literal;
 
+      --  구성식의 항목 가운데 unwritten이 있는가
+      function Has_Unwritten_Item (N : Node_Id) return Boolean is
+        (for some I in 1 .. Get (N).List.Count =>
+           Kind (Item (Get (N).List, I)) = N_Unwritten
+           or else (Kind (Item (Get (N).List, I)) = N_Field_Init
+                    and then Kind (Get (Item (Get (N).List, I)).A)
+                             = N_Unwritten));
+
+      --  필드와 판별자가 덮지 않는 셀(패딩)만 0으로 (§5.11.1). unwritten
+      --  필드의 셀은 쓰지 않는다.
+      procedure Zero_Padding
+        (N : Node_Id; R : Temp; T : Type_Id; Variant : Natural)
+      is
+         Size    : constant Natural := KSA.Size (T);
+         Covered : array (0 .. Size) of Boolean := [others => False];
+
+         procedure Cover (Offset, Length : Natural) is
+         begin
+            for K in Offset .. Offset + Length - 1 loop
+               Covered (K) := True;
+            end loop;
+         end Cover;
+
+         Start : Natural := 0;
+      begin
+         if Kind (T) = Ty_Anon then
+            for I in 1 .. Natural (Types.Get (T).Params.Length) loop
+               Cover (KSA.Field_Offset (T, I),
+                      KSA.Size (Types.Get (T).Params (I)));
+            end loop;
+         elsif Variant = 0 then
+            for I in 1 .. Natural (Info (T).Fields.Length) loop
+               if not Types.Field (T, I).Pad then
+                  Cover (KSA.Field_Offset (T, I),
+                         KSA.Size (Types.Field (T, I).Ty));
+               end if;
+            end loop;
+         else
+            Cover (0, KSA.Size (KSA.Disc_Type (T)));
+            declare
+               V : constant Variant_Info := Types.Variant (T, Variant);
+            begin
+               for I in 1 .. Natural (V.Fields.Length) loop
+                  if not V.Fields (I).Pad then
+                     Cover (KSA.Variant_Field_Offset (T, Variant, I),
+                            KSA.Size (V.Fields (I).Ty));
+                  end if;
+               end loop;
+            end;
+         end if;
+         Check_Temp (N, R + 1);
+         while Start < Size loop
+            if Covered (Start) then
+               Start := Start + 1;
+            else
+               declare
+                  Stop : Natural := Start;
+               begin
+                  while Stop < Size and then not Covered (Stop) loop
+                     Stop := Stop + 1;
+                  end loop;
+                  M.Add_Immediate (R + 1, R, Start);
+                  M.Zero_Memory (R + 1, Stop - Start);
+                  Start := Stop;
+               end;
+            end if;
+         end loop;
+      end Zero_Padding;
+
       --  composite construction (§6.2.3): 0으로 채우고, 판별자를 쓰고,
       --  식을 원문 순서로, 그다음 생략한 필드의 기본값을 선언 순서로
       procedure Construct (N : Node_Id; R : Temp) is
@@ -604,7 +682,11 @@ package body Emit is
 
          Check_Temp (N, R + 1);
          M.Frame_Address (R, Node_Temps (N));
-         M.Zero_Memory (R, KSA.Size (T));
+         if Has_Unwritten_Item (N) then
+            Zero_Padding (N, R, T, Variant);
+         else
+            M.Zero_Memory (R, KSA.Size (T));
+         end if;
          if Variant /= 0 and then KSA.Disc_Type (T) /= Void then
             M.Load_Immediate (R + 1, Bits (Variant_Value (T, Variant)));
             M.Store_Field (R + 1, R, 0, Shape (N, KSA.Disc_Type (T)));
@@ -637,7 +719,11 @@ package body Emit is
       begin
          Check_Temp (N, R + 1);
          M.Frame_Address (R, Node_Temps (N));
-         M.Zero_Memory (R, KSA.Size (T));
+         if Has_Unwritten_Item (N) then
+            Zero_Padding (N, R, T, 0);
+         else
+            M.Zero_Memory (R, KSA.Size (T));
+         end if;
          for I in 1 .. Rec.List.Count loop
             Store_Value (Item (Rec.List, I), R, KSA.Field_Offset (T, I),
                          R + 1);
@@ -763,6 +849,13 @@ package body Emit is
 
             when N_Anon =>
                Construct_Anon (N, R);
+
+            when N_Unwritten =>
+               if Is_Aggregate (T) then
+                  M.Frame_Address (R, Node_Temps (N));
+               elsif Class_Of (T) = Scalar_Class then
+                  M.Load_Frame (R, Node_Temps (N), Shape (N, T));
+               end if;
 
             when N_Wild_Construct =>
                declare
@@ -966,7 +1059,12 @@ package body Emit is
          Place : constant Node := Get (Rec.A);
          T     : constant Type_Id := Type_Of (Rec.A);
       begin
-         if Is_Aggregate (T) then
+         if Kind (Rec.B) = N_Unwritten then
+            --  객체는 정하되 쓰지 않는다 (§6.2.7)
+            if Place.Kind /= N_Name and then Class_Of (T) /= Nothing then
+               Address (Rec.A, 0);
+            end if;
+         elsif Is_Aggregate (T) then
             --  객체를 정하고, 오른쪽을 평가하고, 복사한다 (§6.8.1)
             Address (Rec.A, 0);
             Value (Rec.B, 1);
@@ -1024,6 +1122,11 @@ package body Emit is
                   begin
                      if Kind (Item_N) /= N_Let then
                         Effect (Item_N);
+                     elsif Get (Item_N).B = No_Node
+                       or else Kind (Get (Item_N).B) = N_Unwritten
+                     then
+                        --  지연 초기화, 또는 쓰지 않는 unwritten
+                        null;
                      elsif Is_Aggregate (T) then
                         Value (Get (Item_N).B, 0);
                         M.Frame_Address (1, Slot_Of (Item_N));

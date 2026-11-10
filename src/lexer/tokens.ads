@@ -15,7 +15,7 @@ package Tokens is
       K_Module, K_Mut, K_Numeric, K_Or, K_Primitive,
       K_Protocol, K_Pub, K_Return, K_Routes, K_Self,
       K_Selftype, K_Srcroot, K_Static, K_Struct, K_Super,
-      K_Then, K_Transact, K_Trap, K_Type, K_Uninit,
+      K_Then, K_Transact, K_Trap, K_Type, K_Unwritten,
       K_Use, K_Variadic, K_Volatile, K_While, K_Wild,
       K_With, K_Xlat, K_Xor,
 

@@ -1,0 +1,69 @@
+#dyn io {
+    variadic fn printf(%ui1) -> si4;
+}
+#dyn c {
+    fn memset(%mut big, si4, uaddr) -> %mut big;
+}
+
+struct big { a: saddr, b: saddr, c: saddr } with copyable;
+
+fn show(v: saddr) {
+    airside { io::printf("%ld\n\0".ptr, v); }
+}
+
+// 모든 trace가 저장한다
+fn pick(flag: verdict[void, void]) -> si4 {
+    let result: si4;
+    if flag { result = 1~si4; } else { result = 2~si4; }
+    return result;
+}
+
+// 저장하지 않는 갈래는 이 지점에 이르지 않는다
+fn early(flag: verdict[void, void]) -> si4 {
+    let z: si4;
+    if flag { z = 7~si4; } else { return 0~si4; }
+    return z;
+}
+
+// 타입 표기도 초기식도 없으면 뒤따르는 대입이 타입을 정한다 (§5.12)
+fn literals(flag: verdict[void, void]) -> saddr {
+    let x;                                     // 리터럴뿐: saddr
+    if flag { x = 10; } else { x = 20; }
+    return x;
+}
+
+fn suffixed() -> saddr {
+    let mut z;
+    z = 1;                                     // 아직 타입이 정해지지 않았다
+    z = 300~si2;                               // 공통 타입 si2
+    return z as saddr;
+}
+
+fn nothing() {
+    let v;                                     // 대입이 없다: void
+}
+
+extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
+    show(pick(1 < 2) as saddr);                // 1
+    show(pick(2 < 1) as saddr);                // 2
+    show(early(1 < 2) as saddr);               // 7
+    show(literals(2 < 1));                     // 20
+    show(suffixed());                          // 300
+    nothing();
+    let mut buf: si4;
+    let raw = %mut buf;                        // 비관리 참조는 초기화 전에도
+    buf = 5~si4;
+    buf += 1~si4;
+    show(buf as saddr);                        // 6
+    airside {
+        let mut b: big = unwritten;            // 쓰지 않는다
+        c::memset(%mut b, 0~si4, 24~uaddr);
+        show(b.a + b.b + b.c);                 // 0
+        let mut w: si4 = unwritten;
+        w = 3~si4;
+        show(w as saddr);                      // 3
+        let p = big.{ .a = 1, .b = unwritten, .c = 3 };
+        show(p.a + p.c);                       // 4
+    }
+    return 0;
+}

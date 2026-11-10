@@ -26,6 +26,7 @@ package Symbols is
       Ty       : Natural := 0;   --  Types.Type_Id
       Decl     : Natural := 0;   --  AST.Node_Id
       Mutable  : Boolean := False;
+      Deferred : Boolean := False;  --  초기식 없이 선언한 let (§4.3)
       Dyn      : Boolean := False;  --  #dyn 블록의 선언
       Pub      : Boolean := False;
       Index    : Natural := 0;   --  매개변수 위치(1부터)

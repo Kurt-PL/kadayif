@@ -1,0 +1,54 @@
+// §4.3 예: else trace가 아무것도 저장하지 않는다
+fn missing(flag: verdict[void, void]) -> si4 {
+    let x: si4;
+    if flag { x = 1~si4; }
+    return x;
+}
+
+// §4.3 예: 확실히 초기화되지 않은 바인딩으로 관리 참조
+fn early_ref() {
+    let a: si4;
+    let r = &a;
+}
+
+// 단일 대입 바인딩에 두 번
+fn twice() {
+    let x: si4;
+    x = 1~si4;
+    x = 2~si4;
+}
+
+// 루프의 두 번째 반복이 다시 저장한다
+fn in_loop() {
+    let mut i: si4 = 0~si4;
+    let x: si4;
+    while i < 2~si4 {
+        x = 1~si4;
+        i += 1~si4;
+    }
+}
+
+// 확실히 초기화되기 전의 복합 대입과 필드 저장
+struct pt { x: si4 }
+fn compound() {
+    let mut n: si4;
+    n += 1~si4;
+    let mut p: pt;
+    p.x = 1~si4;
+}
+
+// 타입 표기도 초기식도 없는데 대입들에 공통 타입이 없다 (§5.12)
+fn no_common() {
+    let mut z;
+    z = 1~si4;
+    z = 2~ui1;
+}
+
+// unwritten은 airside를 요구하고, 타입은 문맥에서만 온다
+fn landside() -> si4 {
+    let v: si4 = unwritten;
+    return v;
+}
+fn untyped() {
+    airside { let mut z = unwritten; }
+}

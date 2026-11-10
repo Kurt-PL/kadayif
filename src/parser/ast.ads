@@ -79,6 +79,7 @@ package AST is
       N_Field_Init,  --  Name, A: 식
       N_Anon,        --  List: 식 (익명 구조체 구성)
       N_Wild_Construct, --  A: N_Path
+      N_Unwritten,   --  unwritten (§6.2.7)
       N_Block,       --  List: 블록 항목, Name: 레이블
       N_Airside,     --  A: N_Block
       N_If,          --  A: 조건, B: 참 갈래, C: 거짓 갈래

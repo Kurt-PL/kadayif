@@ -11,21 +11,26 @@ package body Flow is
    use AST;
    use Tokens;
    use Types;
+   use type Symbols.Symbol_Kind;
 
    package Symbol_Sets is new Ada.Containers.Ordered_Sets (Natural);
    use type Symbol_Sets.Set;
 
-   --  Dead: 이 지점에 이르는 trace가 없다
+   --  어떤 trace에서 그럴 수 있는 바인딩들. Dead면 이 지점에 이르는
+   --  trace가 없다.
    type State is record
-      Invalid : Symbol_Sets.Set;
-      Dead    : Boolean := False;
+      Invalid   : Symbol_Sets.Set;  --  값을 옮겼다 (§8.7)
+      Uninit    : Symbol_Sets.Set;  --  아직 초기화되지 않았다 (§4.3)
+      Assigned  : Symbol_Sets.Set;  --  이미 저장했다 (단일 대입, §4.3)
+      Dead      : Boolean := False;
    end record;
 
    function Merge (A, B : State) return State is
      (if A.Dead then B elsif B.Dead then A
-      else (A.Invalid or B.Invalid, False));
+      else (A.Invalid or B.Invalid, A.Uninit or B.Uninit,
+            A.Assigned or B.Assigned, False));
 
-   Dead_State : constant State := (Symbol_Sets.Empty_Set, True);
+   Dead_State : constant State := (Dead => True, others => <>);
 
    type Loop_Context is record
       Node      : Node_Id;
@@ -63,17 +68,47 @@ package body Flow is
       return Binding (N);
    end Root;
 
+   function Name (Sym : Natural) return String is
+     ("'" & Idents.Image (Symbols.Get (Symbols.Symbol_Id (Sym)).Name) & "'");
+
+   --  바인딩의 객체를 읽거나, 관리 참조를 만들거나, 구성 객체에
+   --  저장한다: 옮기지 않았고 확실히 초기화되어 있어야 한다
    procedure Require_Valid (S : State; Sym : Natural; At_Node : Node_Id) is
    begin
-      if Sym /= 0 and then not S.Dead and then not Silent
-        and then S.Invalid.Contains (Sym)
+      if Sym = 0 or else S.Dead or else Silent then
+         return;
+      elsif S.Invalid.Contains (Sym) then
+         Diagnostics.Error
+           (Get (At_Node).Pos,
+            Name (Sym) & " is used after its value was transferred");
+      elsif S.Uninit.Contains (Sym) then
+         Diagnostics.Error
+           (Get (At_Node).Pos,
+            Name (Sym) & " is used before it is definitely initialized");
+      end if;
+   end Require_Valid;
+
+   --  바인딩 Sym에 값을 통째로 저장한다
+   procedure Store_Whole
+     (S : in out State; Sym : Natural; At_Node : Node_Id) is
+   begin
+      if S.Dead then
+         return;
+      end if;
+      --  초기식이 있는 단일 대입 바인딩은 의미 분석이 이미 거절한다
+      if not Symbols.Get (Symbols.Symbol_Id (Sym)).Mutable
+        and then Symbols.Get (Symbols.Symbol_Id (Sym)).Deferred
+        and then S.Assigned.Contains (Sym) and then not Silent
       then
          Diagnostics.Error
            (Get (At_Node).Pos,
-            "'" & Idents.Image (Symbols.Get (Symbols.Symbol_Id (Sym)).Name)
-            & "' is used after its value was transferred");
+            Name (Sym) & " is a single-assignment binding stored into more"
+            & " than once on some trace");
       end if;
-   end Require_Valid;
+      S.Assigned.Include (Sym);
+      S.Uninit.Exclude (Sym);
+      S.Invalid.Exclude (Sym);
+   end Store_Whole;
 
    procedure Walk (N : Node_Id; S : in out State);
 
@@ -171,8 +206,7 @@ package body Flow is
             Before : constant State := Head;
          begin
             Once (Report => False);
-            exit when Head.Invalid = Before.Invalid
-              and then Head.Dead = Before.Dead;
+            exit when Head = Before;
          end;
       end loop;
       Once (Report => True);
@@ -207,8 +241,16 @@ package body Flow is
 
             when N_Let =>
                Walk (R.B, S);
-               if R.Sym /= 0 then
-                  S.Invalid.Exclude (R.Sym);
+               if R.Sym /= 0 and then not S.Dead then
+                  if R.B = No_Node then
+                     --  지연 초기화: 아직 아무것도 저장하지 않았다
+                     S.Uninit.Include (R.Sym);
+                     S.Assigned.Exclude (R.Sym);
+                     S.Invalid.Exclude (R.Sym);
+                  else
+                     S.Assigned.Exclude (R.Sym);
+                     Store_Whole (S, R.Sym, N);
+                  end if;
                end if;
 
             when N_Assign =>
@@ -218,9 +260,12 @@ package body Flow is
                   if Target /= 0 and then R.Op = P_Eq then
                      --  바인딩에 직접 저장하면 다시 유효해진다
                      Walk (R.B, S);
-                     if not S.Dead then
-                        S.Invalid.Exclude (Target);
-                     end if;
+                     Store_Whole (S, Target, N);
+                  elsif Target /= 0 then
+                     --  복합 대입: 읽고 나서 저장한다
+                     Require_Valid (S, Target, R.A);
+                     Walk (R.B, S);
+                     Store_Whole (S, Target, N);
                   else
                      --  구성 객체에 저장하거나 복합 대입: 바깥 객체가
                      --  유효해야 한다

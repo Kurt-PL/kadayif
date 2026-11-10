@@ -1,0 +1,9 @@
+error - 'x' is used before it is definitely initialized at test/cases/deferred_err.kr on 5:12
+error - 'a' is used before it is definitely initialized at test/cases/deferred_err.kr on 11:14
+error - 'x' is a single-assignment binding stored into more than once on some trace at test/cases/deferred_err.kr on 18:7
+error - 'x' is a single-assignment binding stored into more than once on some trace at test/cases/deferred_err.kr on 26:11
+error - 'n' is used before it is definitely initialized at test/cases/deferred_err.kr on 35:5
+error - 'p' is used before it is definitely initialized at test/cases/deferred_err.kr on 37:6
+error - expected 'si4', found 'ui1' at test/cases/deferred_err.kr on 44:9
+error - unwritten requires airside at test/cases/deferred_err.kr on 49:18
+error - unwritten takes its type from its context alone at test/cases/deferred_err.kr on 53:27
