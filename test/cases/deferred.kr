@@ -39,6 +39,41 @@ fn suffixed() -> saddr {
     return z as saddr;
 }
 
+// 순환에 걸리는 피연산자만 빠진다
+fn chained() -> uaddr {
+    let k;
+    k = 4~uaddr;
+    let m;
+    m = k;                                     // k는 m에 draws on하지 않는다
+    return m;
+}
+
+fn self_ref() -> si4 {
+    let mut x;
+    x = 1~si4;
+    x = x + 1;                                 // x를 가리킨다: 빠진다
+    return x;
+}
+
+// 서로 draws on하는 바인딩은 group 하나로 타입을 얻는다
+fn grouped() -> ui1 {
+    let mut x;
+    let mut y;
+    y = 5~ui1;                                 // group {x, y}의 타입 ui1
+    x = y;
+    y = x;
+    return x;
+}
+
+fn grouped_literal() -> saddr {
+    let mut a;
+    let mut b;
+    a = 7;                                     // 리터럴뿐: group의 타입 saddr
+    b = a;
+    a = b;
+    return a;
+}
+
 fn nothing() {
     let v;                                     // 대입이 없다: void
 }
@@ -49,6 +84,10 @@ extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
     show(early(1 < 2) as saddr);               // 7
     show(literals(2 < 1));                     // 20
     show(suffixed());                          // 300
+    show(chained() as saddr);                  // 4
+    show(self_ref() as saddr);                 // 2
+    show(grouped() as saddr);                  // 5
+    show(grouped_literal());                   // 7
     nothing();
     let mut buf: si4;
     let raw = %mut buf;                        // 비관리 참조는 초기화 전에도

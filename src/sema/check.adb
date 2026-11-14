@@ -1568,100 +1568,226 @@ package body Check is
    package Pending_Vectors is new Ada.Containers.Vectors
      (Positive, Pending_Assign);
 
-   Pending  : Pending_Vectors.Vector;
-   Inferred : Id_Vectors.Vector;  --  이렇게 타입을 얻는 바인딩의 let
+   Pending : Pending_Vectors.Vector;
 
-   --  경로 하나짜리 이름 식이 Name을 가리키는가
-   function Is_Name_Of (N : Node_Id; Name : Idents.Ident) return Boolean is
+   --  본문을 미리 훑어 얻는 것: 그런 바인딩(타입 표기도 초기식도 없는
+   --  let)으로의 단순 대입과, 그 뒤 피연산자가 가리키는 그런 바인딩.
+   --  바인딩은 let 노드로 나타낸다.
+   type Assign_Info is record
+      Assign   : Node_Id;
+      Target   : Node_Id;
+      Excluded : Boolean := False;  --  Target에 draws on하는 바인딩을 가리킨다
+   end record;
+   package Assign_Vectors is new Ada.Containers.Vectors
+     (Positive, Assign_Info);
+
+   type Edge is record
+      From, To : Node_Id;  --  From의 대입 Via가 To를 가리킨다
+      Via      : Node_Id;
+   end record;
+   package Edge_Vectors is new Ada.Containers.Vectors (Positive, Edge);
+
+   Assigns : Assign_Vectors.Vector;
+   Edges   : Edge_Vectors.Vector;
+   Untyped : Id_Vectors.Vector;  --  그런 바인딩의 let 전부
+
+   --  group의 대표(가장 작은 let 노드)와 group이 얻은 타입
+   package Node_Maps is new Ada.Containers.Ordered_Maps (Node_Id, Node_Id);
+   package Group_Type_Maps is new Ada.Containers.Ordered_Maps
+     (Node_Id, Type_Id);
+   Group_Of    : Node_Maps.Map;
+   Group_Types : Group_Type_Maps.Map;
+
+   --  경로 하나짜리 이름 식의 이름, 아니면 No_Ident
+   function Simple_Name (N : Node_Id) return Idents.Ident is
    begin
-      if Kind (N) /= N_Name or else Get (N).A = No_Node then
-         return False;
+      if Kind (N) /= N_Name or else Get (N).A = No_Node
+        or else Get (Get (N).A).List.Count /= 1
+        or else Get (Item (Get (Get (N).A).List, 1)).List.Count /= 0
+      then
+         return Idents.No_Ident;
       end if;
-      declare
-         P : constant Node := Get (Get (N).A);
+      return Get (Item (Get (Get (N).A).List, 1)).Name;
+   end Simple_Name;
+
+   procedure Collect_Untyped (Body_N : Node_Id) is
+      Visible : Id_Vectors.Vector;  --  보이는 그런 바인딩의 let
+
+      function Resolve (N : Node_Id) return Node_Id is
+         Name : constant Idents.Ident := Simple_Name (N);
       begin
-         return P.List.Count = 1
-           and then Get (Item (P.List, 1)).Name = Name
-           and then Get (Item (P.List, 1)).List.Count = 0;
-      end;
-   end Is_Name_Of;
+         if Name /= Idents.No_Ident then
+            for I in reverse 1 .. Natural (Visible.Length) loop
+               if Get (Visible (I)).Name = Name then
+                  return Visible (I);
+               end if;
+            end loop;
+         end if;
+         return No_Node;
+      end Resolve;
 
-   function Mentions (N : Node_Id; Name : Idents.Ident) return Boolean is
-   begin
-      if N = No_Node then
-         return False;
-      elsif Is_Name_Of (N, Name) then
-         return True;
-      elsif Kind (N) in Type_Node | N_Fn then
-         return False;
-      end if;
-      declare
-         R : constant Node := Get (N);
+      procedure Names_In (N : Node_Id; From, Via : Node_Id) is
       begin
-         return Mentions (R.A, Name) or else Mentions (R.B, Name)
-           or else Mentions (R.C, Name)
-           or else (for some I in 1 .. R.List.Count =>
-                      Mentions (Item (R.List, I), Name));
-      end;
-   end Mentions;
+         if N = No_Node or else Kind (N) in Type_Node | N_Fn then
+            return;
+         end if;
+         declare
+            R : constant Node := Get (N);
+            Z : constant Node_Id := Resolve (N);
+         begin
+            if Z /= No_Node then
+               Edges.Append (Edge'(From, Z, Via));
+               return;
+            end if;
+            Names_In (R.A, From, Via);
+            Names_In (R.B, From, Via);
+            Names_In (R.C, From, Via);
+            for I in 1 .. R.List.Count loop
+               Names_In (Item (R.List, I), From, Via);
+            end loop;
+         end;
+      end Names_In;
 
-   --  타입을 정하는 데서 빠지는 피연산자: 그런 바인딩을 언급한다
-   function Excluded (Op : Node_Id; Own : Idents.Ident) return Boolean is
+      procedure Walk (N : Node_Id) is
+      begin
+         if N = No_Node or else Kind (N) in Type_Node | N_Fn then
+            return;
+         end if;
+         declare
+            R : constant Node := Get (N);
+         begin
+            if R.Kind = N_Block then
+               declare
+                  Mark : constant Ada.Containers.Count_Type := Visible.Length;
+               begin
+                  for I in 1 .. R.List.Count loop
+                     declare
+                        It : constant Node_Id := Item (R.List, I);
+                     begin
+                        Walk (It);
+                        if Kind (It) = N_Let and then Get (It).A = No_Node
+                          and then Get (It).B = No_Node
+                        then
+                           Visible.Append (It);
+                           Untyped.Append (It);
+                        end if;
+                     end;
+                  end loop;
+                  Visible.Set_Length (Mark);
+               end;
+               return;
+            end if;
+            if R.Kind = N_Assign and then R.Op = P_Eq then
+               declare
+                  L : constant Node_Id := Resolve (R.A);
+               begin
+                  if L /= No_Node then
+                     Assigns.Append (Assign_Info'(N, L, False));
+                     Names_In (R.B, L, N);
+                  end if;
+               end;
+            end if;
+            Walk (R.A);
+            Walk (R.B);
+            Walk (R.C);
+            for I in 1 .. R.List.Count loop
+               Walk (Item (R.List, I));
+            end loop;
+         end;
+      end Walk;
+
+      --  From이 To에 draws on하는가 (From = To 포함)
+      function Reaches (From, To : Node_Id) return Boolean is
+         Seen  : Id_Vectors.Vector;
+         Stack : Id_Vectors.Vector;
+      begin
+         Stack.Append (From);
+         while not Stack.Is_Empty loop
+            declare
+               X : constant Node_Id := Stack.Last_Element;
+            begin
+               Stack.Delete_Last;
+               if X = To then
+                  return True;
+               elsif not Seen.Contains (X) then
+                  Seen.Append (X);
+                  for E of Edges loop
+                     if E.From = X then
+                        Stack.Append (E.To);
+                     end if;
+                  end loop;
+               end if;
+            end;
+         end loop;
+         return False;
+      end Reaches;
    begin
-      if Mentions (Op, Own) then
-         return True;
-      end if;
-      for L of Inferred loop
-         if Mentions (Op, Get (L).Name) then
-            return True;
+      Assigns.Clear;
+      Edges.Clear;
+      Untyped.Clear;
+      Group_Of.Clear;
+      Group_Types.Clear;
+      Walk (Body_N);
+      --  서로 draws on하는 바인딩들이 group을 이룬다
+      for L of Untyped loop
+         declare
+            Rep : Node_Id := L;
+         begin
+            for M of Untyped loop
+               if M < Rep and then Reaches (L, M) and then Reaches (M, L)
+               then
+                  Rep := M;
+               end if;
+            end loop;
+            Group_Of.Insert (L, Rep);
+         end;
+      end loop;
+      --  group의 바인딩을 가리키는 피연산자는 공통 타입에서 빠진다
+      for A of Assigns loop
+         for E of Edges loop
+            if E.Via = A.Assign
+              and then Group_Of (E.To) = Group_Of (A.Target)
+            then
+               A.Excluded := True;
+            end if;
+         end loop;
+      end loop;
+   end Collect_Untyped;
+
+   function Info_Of (Assign : Node_Id) return Assign_Info is
+   begin
+      for A of Assigns loop
+         if A.Assign = Assign then
+            return A;
          end if;
       end loop;
-      return False;
-   end Excluded;
-
-   procedure Scan_Assigns
-     (N : Node_Id; Name : Idents.Ident; Literals, Synthesized : in out Natural)
-   is
-   begin
-      if N = No_Node or else Kind (N) in Type_Node | N_Fn then
-         return;
-      end if;
-      declare
-         R : constant Node := Get (N);
-      begin
-         if R.Kind = N_Assign and then R.Op = P_Eq
-           and then Is_Name_Of (R.A, Name)
-           and then not Excluded (R.B, Name)
-         then
-            if Undetermined (R.B) then
-               Literals := Literals + 1;
-            elsif Kind (R.B) in N_Return | N_Break | N_Continue then
-               null;  --  발산식은 공통 타입에서 빠진다
-            else
-               Synthesized := Synthesized + 1;
-            end if;
-         end if;
-         Scan_Assigns (R.A, Name, Literals, Synthesized);
-         Scan_Assigns (R.B, Name, Literals, Synthesized);
-         Scan_Assigns (R.C, Name, Literals, Synthesized);
-         for I in 1 .. R.List.Count loop
-            Scan_Assigns (Item (R.List, I), Name, Literals, Synthesized);
-         end loop;
-      end;
-   end Scan_Assigns;
+      return (No_Node, No_Node, False);
+   end Info_Of;
 
    function Is_Pending (S : Symbol_Id) return Boolean is
      (S /= No_Symbol and then Symbols.Get (S).Kind = Sym_Local
       and then Symbols.Get (S).Ty = 0);
 
-   --  보류한 바인딩의 타입을 T로 정하고 미뤄 둔 대입을 검사한다
+   function Group_Of_Symbol (S : Symbol_Id) return Node_Id is
+     (Group_Of (Node_Id (Symbols.Get (S).Decl)));
+
+   --  보류한 바인딩의 group 전체의 타입을 T로 정하고 미뤄 둔 대입을
+   --  검사한다. 아직 선언하지 않은 구성원은 선언할 때 이 타입을 얻는다.
    procedure Resolve_Pending (S : Symbol_Id; T : Type_Id) is
-      I : Positive := 1;
+      Rep : constant Node_Id := Group_Of_Symbol (S);
+      I   : Positive := 1;
    begin
-      Symbols.Table (Positive (S)).Ty := Natural (T);
-      Set_Type (Node_Id (Symbols.Get (S).Decl), T);
+      Group_Types.Include (Rep, T);
+      for L of Untyped loop
+         if Group_Of (L) = Rep and then Get (L).Sym /= 0
+           and then Is_Pending (Symbol_Id (Get (L).Sym))
+         then
+            Symbols.Table (Get (L).Sym).Ty := Natural (T);
+            Set_Type (L, T);
+         end if;
+      end loop;
       while I <= Pending.Last_Index loop
-         if Pending (I).Sym = S then
+         if Group_Of_Symbol (Pending (I).Sym) = Rep then
             declare
                P : constant Pending_Assign := Pending (I);
             begin
@@ -1683,7 +1809,8 @@ package body Check is
       if Is_Pending (S) then
          Resolve_Pending
            (S, (if (for some P of Pending =>
-                      P.Sym = S and then not P.Checked)
+                      Group_Of_Symbol (P.Sym) = Group_Of_Symbol (S)
+                      and then not P.Checked)
                 then Saddr else Void));
       end if;
    end Settle_Pending;
@@ -1693,9 +1820,12 @@ package body Check is
       R : constant Node := Get (N);
    begin
       Nodes (Positive (R.A)).Sym := Natural (S);
-      if Excluded (R.B, Symbols.Get (S).Name) then
-         Unimplemented (N, "an assignment that mentions a binding whose"
-                        & " type is not yet determined (§5.12)");
+      if Info_Of (N).Excluded then
+         --  공통 타입에서 빠진다. 타입이 정해진 뒤 검사한다.
+         Unimplemented (N, "an assignment whose operand names a binding"
+                        & " of the group of the binding it stores into,"
+                        & " before the type of that group is determined"
+                        & " (§5.12)");
       elsif Undetermined (R.B) then
          Pending.Append (Pending_Assign'(S, N, False));
       else
@@ -1717,24 +1847,13 @@ package body Check is
 
    --  단순 대입의 앞 피연산자가 보류 중인 바인딩이면 그 심볼
    function Pending_Target (N : Node_Id) return Symbol_Id is
-      R : constant Node := Get (N);
+      R    : constant Node := Get (N);
+      Name : constant Idents.Ident :=
+        (if R.Op = P_Eq then Simple_Name (R.A) else Idents.No_Ident);
+      S    : constant Symbol_Id :=
+        (if Name = Idents.No_Ident then No_Symbol else Names.Lookup (Name));
    begin
-      if R.Op = P_Eq and then Kind (R.A) = N_Name
-        and then Get (R.A).A /= No_Node
-        and then Get (Get (R.A).A).List.Count = 1
-      then
-         declare
-            Seg : constant Node := Get (Item (Get (Get (R.A).A).List, 1));
-            S   : constant Symbol_Id :=
-              (if Seg.List.Count = 0 then Names.Lookup (Seg.Name)
-               else No_Symbol);
-         begin
-            if Is_Pending (S) then
-               return S;
-            end if;
-         end;
-      end if;
-      return No_Symbol;
+      return (if Is_Pending (S) then S else No_Symbol);
    end Pending_Target;
 
    function Check_Assign (N : Node_Id) return Type_Id is
@@ -2108,30 +2227,42 @@ package body Check is
       end;
    end Check_Wild;
 
-   --  Rest의 From번째 항목이 선언 N이다. 그 뒤가 바인딩의 스코프다.
-   procedure Check_Let (N : Node_Id; Rest : List_Id; From : Positive) is
+   procedure Check_Let (N : Node_Id) is
       R    : constant Node := Get (N);
       T    : Type_Id;
       Sym  : Symbol;
-      Infer : Boolean := False;
    begin
       if R.B = No_Node then
          --  지연 초기화 (§4.3)
          if R.A = No_Node then
             --  타입은 뒤따르는 대입에서 정해진다 (§5.12)
             declare
+               Rep : constant Node_Id := Group_Of (N);
                Literals, Synthesized : Natural := 0;
             begin
-               for I in From + 1 .. Rest.Count loop
-                  Scan_Assigns (Item (Rest, I), R.Name, Literals, Synthesized);
+               for A of Assigns loop
+                  if Group_Of (A.Target) = Rep and then not A.Excluded then
+                     if Undetermined (Get (A.Assign).B) then
+                        Literals := Literals + 1;
+                     elsif Kind (Get (A.Assign).B)
+                           not in N_Return | N_Break | N_Continue
+                     then
+                        --  발산식은 공통 타입에서 빠진다
+                        Synthesized := Synthesized + 1;
+                     end if;
+                  end if;
                end loop;
-               if Synthesized > 0 then
+               if Group_Types.Contains (Rep) then
+                  T := Group_Types (Rep);  --  group이 이미 타입을 얻었다
+               elsif Synthesized > 0 then
                   T := No_Type;
-                  Infer := True;
                elsif Literals > 0 then
                   T := Saddr;
                else
                   T := Void;
+               end if;
+               if T /= No_Type then
+                  Group_Types.Include (Rep, T);
                end if;
             end;
          else
@@ -2159,9 +2290,6 @@ package body Check is
       Nodes (Positive (N)).Sym := Natural (Add (Sym));
       Nodes (Positive (N)).Ty := Natural (T);
       Names.Declare_Local (R.Name, Symbol_Id (Get (N).Sym));
-      if Infer then
-         Inferred.Append (N);
-      end if;
    end Check_Let;
 
    function Find_Loop (N : Node_Id) return Node_Id is
@@ -2294,7 +2422,7 @@ package body Check is
                   Item_N : constant Node_Id := Item (R.List, I);
                begin
                   if Kind (Item_N) = N_Let then
-                     Check_Let (Item_N, R.List, I);
+                     Check_Let (Item_N);
                   else
                      declare
                         Ignored : constant Type_Id :=
@@ -2443,7 +2571,7 @@ package body Check is
       Fn_Ret := FT.Ret;
       Airside_Depth := (if R.Flags (F_Airside) then 1 else 0);
       Pending.Clear;
-      Inferred.Clear;
+      Collect_Untyped (R.B);
       Names.Push_Scope;
       for I in 1 .. R.List.Count loop
          declare
