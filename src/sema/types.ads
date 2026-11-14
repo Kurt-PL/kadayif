@@ -26,7 +26,7 @@ package Types is
    type Tribe is (Shared, Exclusive, Unmanaged);
 
    type Modifiers is record
-      Volatile, Mut, Atomic, Guard : Boolean := False;
+      Volatile, Mut, Atomic : Boolean := False;
    end record;
 
    package Type_Vectors is new Ada.Containers.Vectors (Positive, Type_Id);

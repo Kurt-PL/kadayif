@@ -34,6 +34,11 @@ package body Check is
    package Loop_Vectors is new Ada.Containers.Vectors (Positive, Loop_Entry);
 
    Fn_Ret        : Type_Id := No_Type;
+
+   --  접근 없이 객체만 가리키는 객체 식: 참조 만들기의 피연산자와 그
+   --  receiver 열 (§6.3.5, §6.4.4). 이들을 거치는 접근의 airside 요구는
+   --  실제로 접근하는 구성에서 따진다.
+   No_Access : AST.Id_Vectors.Vector;
    Airside_Depth : Natural := 0;
    Loops         : Loop_Vectors.Vector;
 
@@ -172,27 +177,67 @@ package body Check is
 
    function Mods_Of (N : Node) return Modifiers is
      ((Volatile => N.Flags (F_Volatile), Mut => N.Flags (F_Mut),
-       Atomic => N.Flags (F_Atomic), Guard => N.Flags (F_Guard)));
+       Atomic => N.Flags (F_Atomic)));
 
-   --  §8.2.1: atomic과 guard는 함께 오지 못하고, $에는 mut, atomic,
-   --  guard가 오지 못한다.
+   --  §8.2.1의 형태는 모든 조합을 허용한다. atomic은 아직 다루지 않는다.
    function Valid_Mods (N : Node_Id; T : Tribe; M : Modifiers)
                         return Boolean is
+      pragma Unreferenced (T);
    begin
-      if M.Atomic and then M.Guard then
-         Error (N, "a reference shall not carry both atomic and guard");
-         return False;
-      elsif T = Exclusive and then (M.Mut or else M.Atomic or else M.Guard)
-      then
-         Error (N, "an exclusive reference shall not carry mut, atomic,"
-                & " or guard");
-         return False;
-      elsif M.Atomic or else M.Guard then
+      if M.Atomic then
          Unimplemented (N, "atomic references (§8.4)");
          return False;
       end if;
       return True;
    end Valid_Mods;
+
+   --  §8.1: exclusive 참조 타입이거나 그것을 구성으로 가진 타입
+   function Has_Exclusive (T : Type_Id) return Boolean is
+   begin
+      case Kind (T) is
+         when Ty_Ref | Ty_Slice =>
+            return Get (T).Ref_Tribe = Exclusive;
+         when Ty_Array =>
+            return Has_Exclusive (Get (T).Target);
+         when Ty_Verdict =>
+            return Has_Exclusive (Get (T).Pass)
+              or else Has_Exclusive (Get (T).Fail);
+         when Ty_Anon =>
+            return (for some P of Get (T).Params => Has_Exclusive (P));
+         when Ty_Composite =>
+            declare
+               C : constant Composite_Info := Info (T);
+            begin
+               return (for some F of C.Fields => Has_Exclusive (F.Ty))
+                 or else (for some V of C.Variants =>
+                            (for some F of V.Fields =>
+                               Has_Exclusive (F.Ty)));
+            end;
+         when others =>
+            return False;
+      end case;
+   end Has_Exclusive;
+
+   --  shared 참조의 referent 타입 검사. 복합 타입의 내용이 다 들어온
+   --  뒤에야 볼 수 있으므로 그 전에는 미뤄 둔다.
+   type Referent_Check is record
+      Node   : Node_Id;
+      Target : Type_Id;
+   end record;
+   package Referent_Vectors is new Ada.Containers.Vectors
+     (Positive, Referent_Check);
+   Deferred_Referents : Referent_Vectors.Vector;
+   Composites_Ready   : Boolean := False;
+
+   procedure Check_Shared_Referent (N : Node_Id; Target : Type_Id) is
+   begin
+      if not Composites_Ready then
+         Deferred_Referents.Append (Referent_Check'(N, Target));
+      elsif Has_Exclusive (Target) then
+         Error (N, "the referent type of a shared reference shall not be"
+                & " or have an exclusive reference type");
+      end if;
+   end Check_Shared_Referent;
 
    function Resolve_Type (N : Node_Id) return Type_Id is
       R : constant Node := Get (N);
@@ -213,6 +258,9 @@ package body Check is
             begin
                if not Valid_Mods (N, T, M) then
                   return Error_Type;
+               end if;
+               if T = Shared then
+                  Check_Shared_Referent (N, Target);
                end if;
                Rec.Kind := (if R.Kind = N_Slice_Type then Ty_Slice
                             else Ty_Ref);
@@ -769,6 +817,12 @@ package body Check is
          end if;
       end loop;
 
+      Composites_Ready := True;
+      for D of Deferred_Referents loop
+         Check_Shared_Referent (D.Node, D.Target);
+      end loop;
+      Deferred_Referents.Clear;
+
       --  3단계: 서브루틴과 #dyn
       for I in 1 .. U.List.Count loop
          declare
@@ -841,11 +895,10 @@ package body Check is
       T      : constant Type_Rec := Get (To);
       Result : Conversion := Landside;
 
-      --  배타 참조는 mut을 가진 것으로 친다
-      F_Mut : constant Boolean := F.Mods.Mut or else F.Ref_Tribe = Exclusive;
-      T_Mut : constant Boolean := T.Mods.Mut or else T.Ref_Tribe = Exclusive;
-      F_Atom : constant Boolean := F.Mods.Atomic or else F.Mods.Guard;
-      T_Atom : constant Boolean := T.Mods.Atomic or else T.Mods.Guard;
+      F_Mut  : constant Boolean := F.Mods.Mut;
+      T_Mut  : constant Boolean := T.Mods.Mut;
+      F_Atom : constant Boolean := F.Mods.Atomic;
+      T_Atom : constant Boolean := T.Mods.Atomic;
 
       procedure Note (C : Conversion; Modifier : Boolean := True) is
          --  비관리 원천에서는 수식자 변환의 실패가 airside 요구가 된다
@@ -880,7 +933,7 @@ package body Check is
          Note (Forbidden);
       end if;
       if F_Atom and then not T_Atom then
-         Note (Forbidden);
+         Note (Needs_Airside);
       end if;
       return Result;
    end Ref_Conversion;
@@ -1093,8 +1146,22 @@ package body Check is
       return No_Symbol;
    end Resolve_Name;
 
-   --  receiver가 저장을 허락하는가 (§6.3.2): 다중 대입 바인딩, mut이나
-   --  배타 참조를 거친 역참조, 또는 그런 것의 필드
+   function Field_Of (T : Type_Id; Index : Positive) return Field_Info;
+
+   --  필드 식의 receiver 타입 (참조 투명성 뒤)
+   function Receiver_Base (N : Node_Id) return Type_Id is
+     (if Kind (Type_Of (Get (N).A)) = Ty_Ref
+      then Get (Type_Of (Get (N).A)).Target else Type_Of (Get (N).A));
+
+   --  field mutability를 가진 필드를 가리키는 필드 식 (§4.6.1)
+   function Names_Mut_Field (N : Node_Id) return Boolean is
+     (Kind (N) = N_Field and then Get (N).Sym /= 0
+      and then Kind (Receiver_Base (N)) in Ty_Composite | Ty_Anon
+      and then Field_Of (Receiver_Base (N), Get (N).Sym).Mut);
+
+   --  저장을 허락하는가 (§6.3.2, §8.1): 다중 대입 바인딩, mut을 가진
+   --  참조를 거친 역참조, 다중 대입 필드(airside 안의 field mutability),
+   --  또는 그런 객체 안을 참조 없이 고르는 필드 식
    function Storable (N : Node_Id) return Boolean is
       R : constant Node := Get (N);
    begin
@@ -1106,18 +1173,26 @@ package body Check is
               and then Symbols.Get (Symbol_Id (R.Sym)).Mutable;
          when N_Unary =>
             return R.Op = P_Star and then Kind (Type_Of (R.A)) = Ty_Ref
-              and then (Get (Type_Of (R.A)).Mods.Mut
-                        or else Get (Type_Of (R.A)).Ref_Tribe = Exclusive);
+              and then Get (Type_Of (R.A)).Mods.Mut;
          when N_Field =>
-            if Kind (Type_Of (R.A)) = Ty_Ref then
-               return Get (Type_Of (R.A)).Mods.Mut
-                 or else Get (Type_Of (R.A)).Ref_Tribe = Exclusive;
+            if Airside_Depth > 0 and then Names_Mut_Field (N) then
+               return True;
+            elsif Kind (Type_Of (R.A)) = Ty_Ref then
+               return Get (Type_Of (R.A)).Mods.Mut;
             end if;
             return Storable (R.A);
          when others =>
             return False;
       end case;
    end Storable;
+
+   --  airside였다면 저장할 수 있었는가: 참조를 거치지 않는 필드 선택
+   --  경로에 field mutability를 가진 필드가 있다
+   function Through_Mut_Field (N : Node_Id) return Boolean is
+     (Kind (N) = N_Field
+      and then (Names_Mut_Field (N)
+                or else (Kind (Type_Of (Get (N).A)) /= Ty_Ref
+                         and then Through_Mut_Field (Get (N).A))));
 
    --  구조체·익명 구조체의 receiver 타입에서 필드 정보 (Index는 1부터)
    function Field_Of (T : Type_Id; Index : Positive) return Field_Info is
@@ -1155,33 +1230,20 @@ package body Check is
          when N_Field =>
             if Kind (Type_Of (R.A)) in Ty_Array then
                Error (N, "a projection is a value");
-            elsif R.Sym /= 0 then
-               declare
-                  Base : constant Type_Id :=
-                    (if Kind (Type_Of (R.A)) = Ty_Ref
-                     then Get (Type_Of (R.A)).Target else Type_Of (R.A));
-                  F    : constant Field_Info := Field_Of (Base, R.Sym);
-               begin
-                  if not Storable (N) then
-                     if F.Mut then
-                        --  field mutability (§4.6.1)
-                        Require_Airside (N, "a store through field"
-                                         & " mutability");
-                     else
-                        Error (N, "a store to this field is not permitted");
-                     end if;
-                  end if;
-               end;
+            elsif R.Sym /= 0 and then not Storable (N) then
+               if Through_Mut_Field (N) then
+                  --  airside에서만 다중 대입 필드다 (§4.6.1, §6.3.2)
+                  Require_Airside (N, "a store through field mutability");
+               else
+                  Error (N, "a store to this field is not permitted");
+               end if;
             end if;
          when N_Unary =>
             if R.Op = P_Star then
                declare
                   RT : constant Type_Id := Type_Of (R.A);
                begin
-                  if Kind (RT) = Ty_Ref
-                    and then not Get (RT).Mods.Mut
-                    and then Get (RT).Ref_Tribe /= Exclusive
-                  then
+                  if Kind (RT) = Ty_Ref and then not Get (RT).Mods.Mut then
                      Error (N, "a store through " & Quote (RT)
                             & " is not permitted");
                   end if;
@@ -1292,7 +1354,7 @@ package body Check is
       R      : constant Node := Get (N);
       T      : constant Tribe := Ref_Tribe (R.Op);
       M      : Modifiers := Mods_Of (R);
-      Stores : constant Boolean := T = Exclusive or else M.Mut;
+      Stores : constant Boolean := M.Mut;
    begin
       if not Valid_Mods (N, T, M) then
          return Error_Type;
@@ -1322,11 +1384,25 @@ package body Check is
                   when Same | Landside =>
                      null;
                end case;
+               if T = Shared then
+                  Check_Shared_Referent (N, Get (Src).Target);
+               end if;
                return Target;
             end;
          end;
       end if;
 
+      --  피연산자와 참조를 거치지 않는 receiver 열은 접근하지 않는다
+      declare
+         X : Node_Id := R.A;
+      begin
+         while Kind (X) in N_Field | N_Unary loop
+            exit when Kind (X) = N_Unary and then Get (X).Op /= P_Star;
+            No_Access.Append (X);
+            exit when Kind (X) = N_Unary;
+            X := Get (X).A;
+         end loop;
+      end;
       declare
          Operand : constant Type_Id := Check_Expr (R.A, No_Type);
       begin
@@ -1347,13 +1423,15 @@ package body Check is
                                    & " reached through an unmanaged"
                                    & " reference");
                end if;
+               if T = Exclusive and then Near /= No_Type
+                 and then Get (Near).Ref_Tribe = Shared
+               then
+                  --  §6.4.4: shared 참조를 거쳐 exclusive를 만들 수 없다
+                  Error (N, "an exclusive reference to an object reached"
+                         & " through " & Quote (Near));
+               end if;
                if Stores and then not Storable (R.A) then
-                  if Kind (R.A) = N_Field
-                    and then Field_Of
-                      ((if Kind (Type_Of (Get (R.A).A)) = Ty_Ref
-                        then Get (Type_Of (Get (R.A).A)).Target
-                        else Type_Of (Get (R.A).A)), Get (R.A).Sym).Mut
-                  then
+                  if Through_Mut_Field (R.A) then
                      Require_Airside (N, "a store-permitting reference"
                                       & " through field mutability");
                   else
@@ -1369,6 +1447,9 @@ package body Check is
             --  값 식은 임시 객체를 가리킨다: 저장 가능한 객체가 아니다
             Error (N, "a store-permitting managed reference needs a storable"
                    & " object");
+         end if;
+         if T = Shared then
+            Check_Shared_Referent (N, Operand);
          end if;
          return Ref (Operand, T, M);
       end;
@@ -1455,7 +1536,9 @@ package body Check is
                if Get (T).Ref_Tribe = Unmanaged then
                   Require_Airside
                     (N, "dereferencing an unmanaged reference");
-               elsif Get (T).Ref_Tribe = Shared and then Get (T).Mods.Mut then
+               elsif Get (T).Ref_Tribe = Shared and then Get (T).Mods.Mut
+                 and then not No_Access.Contains (N)
+               then
                   --  §8.1: 공유 mut 참조를 거친 접근
                   Require_Airside (N, "an access through a shared mut"
                                    & " reference");
@@ -1971,7 +2054,9 @@ package body Check is
       end if;
       --  참조 투명성: 참조를 한 번 거쳐 가리키는 객체에 적용 (§6.3.5)
       if Kind (Base) = Ty_Ref then
-         if Get (Base).Ref_Tribe = Unmanaged then
+         if No_Access.Contains (N) then
+            null;  --  참조를 만들 뿐 접근하지 않는다
+         elsif Get (Base).Ref_Tribe = Unmanaged then
             Require_Airside (N, "an access through an unmanaged reference");
          elsif Get (Base).Ref_Tribe = Shared and then Get (Base).Mods.Mut then
             Require_Airside (N, "an access through a shared mut reference");

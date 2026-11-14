@@ -168,7 +168,7 @@ package body Expressions is
          when K_Cellbits =>
             Unimplemented ("cellbits (§5.3.1)");
          when K_Volatile | K_Guard =>
-            Unimplemented ("ordering fences (§8.4.3)");
+            Unimplemented ("ordering fences (§8.4.2)");
 
          when others =>
             if Statements.Starts_Control then
@@ -257,7 +257,6 @@ package body Expressions is
                      when K_Volatile => N.Flags (F_Volatile) := True;
                      when K_Mut      => N.Flags (F_Mut) := True;
                      when K_Atomic   => N.Flags (F_Atomic) := True;
-                     when K_Guard    => N.Flags (F_Guard) := True;
                      when others     => exit;
                   end case;
                   Advance;

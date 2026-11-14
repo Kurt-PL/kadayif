@@ -157,7 +157,7 @@ package body Derivation is
 
    function Mut_Type (T : Type_Id) return Boolean is
      (Kind (T) in Ty_Ref | Ty_Slice
-      and then (Get (T).Mods.Mut or else Get (T).Ref_Tribe = Exclusive));
+      and then Get (T).Mods.Mut);
 
    function New_Reg return Natural is
    begin

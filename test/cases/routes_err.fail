@@ -1,5 +1,5 @@
 error - no parameter 'z' at test/cases/routes_err.kr on 47:25
-error - the target of a route is return, static, or a path that carries '*' at test/cases/routes_err.kr on 48:40
+error - the target of a route is return, static, or a path that carries '*' at test/cases/routes_err.kr on 48:44
 error - no route takes layer 0 of 'b' to return at test/cases/routes_err.kr on 9:5
 error - no route takes layer 0 of 'y' to layer 1 of 's' at test/cases/routes_err.kr on 14:9
 error - no route takes static to return at test/cases/routes_err.kr on 19:58

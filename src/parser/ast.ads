@@ -93,7 +93,7 @@ package AST is
 
    type Flag is
      (F_Pub, F_Extern, F_Airside, F_Variadic, F_Mut,
-      F_Volatile, F_Atomic, F_Guard, F_Xlat, F_Reinterpret,
+      F_Volatile, F_Atomic, F_Xlat, F_Reinterpret,
       F_Unit, F_Named, F_Pad, F_Wild, F_Inverted, F_Braces,
       F_Static, F_Return, F_Self, F_Ellipsis);
    type Flag_Set is array (Flag) of Boolean with Pack;

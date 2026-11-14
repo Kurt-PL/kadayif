@@ -10,11 +10,23 @@ struct pair { a: si4, b: si4 }
 struct holder { val: &si4 }
 
 fn id(r: &si4) -> &si4 { return r; }
-fn bump(e: $si4) { *e = *e + 1~si4; }
+fn bump(e: $mut si4) { *e = *e + 1~si4; }
 fn first(h: &holder) -> &si4 { return h.val; }
 fn get(p: &pair) -> si4 { return p.a + p.b; }
 fn pick(flag: verdict[void, void], x: &si4, y: &si4) -> &si4 {
     return if flag then x else y;
+}
+
+// §6.4.4: 참조를 만드는 것은 접근이 아니다
+fn field_ref(r: &mut pair) -> &si4 { return &r.a; }
+
+// §6.3.2: airside에서 다중 대입 필드 안을 고르는 필드 식은 저장을 허락한다
+struct inner { g: si4 }
+struct outer { mut m: inner }
+fn mut_field() -> si4 {
+    let o = outer.{ .m = inner.{ .g = 1~si4 } };
+    airside { o.m.g = 7~si4; }
+    return o.m.g;
 }
 
 extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
@@ -23,20 +35,20 @@ extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
     let s = &x;                         // 공유 참조는 함께 있을 수 있다
     show((*r + *s) as saddr);           // 2
 
-    let e = $x;
+    let e = $mut x;
     *e = 10~si4;
     bump(e);                            // e는 옮겨진다
     show(x as saddr);                   // 11
 
     let mut p = pair.{ .a = 1~si4, .b = 2~si4 };
-    let pa = $p.a;                      // 서로 겹치지 않는 필드
-    let pb = $p.b;
+    let pa = $mut p.a;                      // 서로 겹치지 않는 필드
+    let pb = $mut p.b;
     *pa = 30~si4;
     *pb = 40~si4;
     show(get(&p) as saddr);             // 70
 
-    let e2 = $x;
-    let f = $*e2;                       // 재참조: e2의 자손
+    let e2 = $mut x;
+    let f = $mut *e2;                       // 재참조: e2의 자손
     *f = 5~si4;
     *e2 = *e2 + 1~si4;                  // f는 더 쓰이지 않는다
     show(x as saddr);                   // 6
@@ -46,10 +58,12 @@ extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
     show(*first(&h) as saddr);          // 100
     show(*id(&x) as saddr);             // 6
     show(*pick(1 < 2, &x, &y) as saddr);  // 6
+    show(*field_ref(&mut p) as saddr);  // 30
+    show(mut_field() as saddr);         // 7
 
     let t = &(x + 7~si4);               // 임시 객체를 let이 붙잡는다
     show(*t as saddr);                  // 13
-    let shared: &si4 = $x;              // $ → & decay
+    let shared: &si4 = $mut x;              // $ → & decay
     show(*shared as saddr);             // 6
     return 0;
 }
@@ -57,7 +71,7 @@ fn fine() -> si4 {
     let mut x: si4 = 0~si4;
     let mut i: si4 = 0~si4;
     while i < 3~si4 {
-        let e = $x;
+        let e = $mut x;
         *e = *e + i;
         i += 1~si4;
     }
@@ -67,10 +81,10 @@ fn fine() -> si4 {
 fn kept() {
     let mut x: si4 = 0~si4;
     let mut y: si4 = 0~si4;
-    let mut keep = $y;
+    let mut keep = $mut y;
     let mut i: si4 = 0~si4;
     while i < 2~si4 {
-        let e = $x;
+        let e = $mut x;
         keep = e;
         i += 1~si4;
     }

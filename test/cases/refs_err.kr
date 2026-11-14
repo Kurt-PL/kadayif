@@ -3,12 +3,12 @@ struct holder { val: &si4 }
 struct slot { h: &si4 }
 
 fn id(r: &si4) -> &si4 { return r; }
-fn both(a: $si4, b: &si4) { }
+fn both(a: $mut si4, b: &si4) { }
 
 // §8.1.1 예: id의 결과는 인자에 연결된다
 fn chained() -> si4 {
     let mut x: si4 = 1~si4;
-    let e: $si4 = $x;
+    let e: $mut si4 = $mut x;
     let r = id(&*e);
     *e = 2~si4;                         // r이 pending
     return *r;
@@ -25,7 +25,7 @@ fn direct_store() -> si4 {
 // 배타 참조가 pending인데 바인딩을 직접 읽기
 fn direct_load() -> si4 {
     let mut x: si4 = 1~si4;
-    let e = $x;
+    let e = $mut x;
     let v = x;
     *e = v;
     return x;
@@ -34,18 +34,18 @@ fn direct_load() -> si4 {
 // 겹치는 필드에 배타 참조 둘
 fn overlap() -> si4 {
     let mut p = pair.{ .a = 1~si4, .b = 2~si4 };
-    let whole = $p;
-    let part = $p.a;
+    let whole = $mut p;
+    let part = $mut p.a;
     *part = 3~si4;
     let q = whole;
     return 0;
 }
 
 // 재참조한 자손이 pending인데 부모로 접근
-fn reborrow() -> si4 {
+fn re_reference() -> si4 {
     let mut x: si4 = 1~si4;
-    let e = $x;
-    let f = $*e;
+    let e = $mut x;
+    let f = $mut *e;
     *e = 2~si4;
     *f = 3~si4;
     return x;
@@ -54,7 +54,7 @@ fn reborrow() -> si4 {
 // 한 호출에 같은 객체를 배타로 빌려주면서 함께 빌려주기
 fn lend_twice() {
     let mut x: si4 = 1~si4;
-    both($x, &x);
+    both($mut x, &x);
 }
 
 // 지역 객체로 가는 참조를 반환
@@ -83,7 +83,7 @@ fn temporary() -> si4 {
 }
 
 // §8.1.2 예: routes 없이 다른 매개변수의 참조를 저장
-fn put(s: $slot, x: &si4) {
+fn put(s: $mut slot, x: &si4) {
     s.h = x;
 }
 
@@ -104,24 +104,44 @@ fn shared_mut() -> si4 {
 // 단일 대입 바인딩에 저장 권한 있는 참조
 fn single() {
     let x: si4 = 1~si4;
-    let e = $x;
+    let e = $mut x;
 }
 
 // 공유 참조에서 배타 참조로는 캐스트할 수 없다
-fn up_cast(r: &si4) -> $si4 {
-    return r as $si4;
+fn up_cast(r: &si4) -> $mut si4 {
+    return r as $mut si4;
 }
 
 // 이전 반복이 만든 배타 참조를 다시 쓰는데 또 만든다
 fn kept_used() {
     let mut x: si4 = 0~si4;
     let mut y: si4 = 0~si4;
-    let mut keep = $y;
+    let mut keep = $mut y;
     let mut i: si4 = 0~si4;
     while i < 2~si4 {
-        let e = $x;
+        let e = $mut x;
         *keep = 1~si4;     // 두 번째 반복: 이전 반복의 e를 거친 접근
         keep = e;
         i += 1~si4;
     }
+}
+
+// §8.1: $도 mut이 있어야 저장을 허락한다
+fn no_mut(e: $si4) { *e = 1~si4; }
+
+// §8.1: shared 참조의 referent 타입은 exclusive 참조를 담을 수 없다
+struct owner { e: $mut si4 }
+fn shared_to_exclusive(r: &$mut si4, o: &owner) { }
+
+// §6.4.4: shared 참조를 거쳐 exclusive 참조를 만들 수 없다
+fn via_shared(r: &mut pair) {
+    let e = $mut r.a;
+}
+
+// §6.3.2: field mutability는 airside에서만 다중 대입 필드다
+struct inner { g: si4 }
+struct outer { mut m: inner }
+fn landside_mut_field() {
+    let o = outer.{ .m = inner.{ .g = 1~si4 } };
+    o.m.g = 2~si4;
 }

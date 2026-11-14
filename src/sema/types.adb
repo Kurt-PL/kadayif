@@ -272,9 +272,8 @@ package body Types is
 
    function Mods_Image (M : Modifiers) return String is
      ((if M.Volatile then "volatile " else "")
-      & (if M.Mut then "mut " else "")
       & (if M.Atomic then "atomic " else "")
-      & (if M.Guard then "guard " else ""));
+      & (if M.Mut then "mut " else ""));
 
    function Trim (N : Integer) return String is
      (Ada.Strings.Fixed.Trim (N'Image, Ada.Strings.Left));
