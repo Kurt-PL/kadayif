@@ -183,7 +183,7 @@ package body MachO.Executable is
             if R.Kind /= Branch26 then
                Diagnostics.Report
                  (Diagnostics.Error,
-                  "unimplemented: data imported through #dyn (§10.5)");
+                  "unimplemented: data imported through #extern (§10.5)");
                return False;
             elsif not Imports.Contains (R.Target) then
                Imports.Append (R.Target);

@@ -35,7 +35,7 @@ package AST is
                      --  F_Self(self), Text(위치)로 매개변수, Sym: '*' 수,
                      --  F_Ellipsis면 더 깊은 층도
       N_Param,       --  Name(익명 원형 매개변수면 없음), A: 타입
-      N_Dyn,         --  Name, List: 항목
+      N_Extern,         --  Name, List: 항목
       N_Struct,      --  Name, List: N_Field_Decl, C: N_With,
                      --  F_Unit / F_Named로 형태
       N_Enum,        --  Name, List: N_Variant, C: N_With

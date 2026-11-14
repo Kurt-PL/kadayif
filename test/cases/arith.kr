@@ -1,4 +1,4 @@
-#dyn io {
+#extern io {
     variadic fn printf(%ui1) -> si4;
 }
 

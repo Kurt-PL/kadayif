@@ -15,7 +15,7 @@ package body Declarations is
      (case Peek is
         when K_Pub | K_Extern | K_Fn | K_Const | K_Static | K_Struct
            | K_Enum | K_Type | K_Use | K_Module | K_Impl | K_Protocol
-           | D_Add | D_Dyn | D_Path | D_Symbol | D_Inline | D_No_Inline
+           | D_Add | D_Extern | D_Path | D_Symbol | D_Inline | D_No_Inline
            | T_Annotation =>
            True,
         when K_Variadic | K_Airside =>
@@ -304,12 +304,17 @@ package body Declarations is
    end Parse_Subroutine;
 
    --  dyn_decl (§10.5)
-   function Parse_Dyn return Node_Id is
-      N     : Node := Fresh (N_Dyn);
+   function Parse_Extern return Node_Id is
+      N     : Node := Fresh (N_Extern);
       Items : Id_Vectors.Vector;
    begin
       Advance;
-      N.Flags (F_Xlat) := Skip (K_Xlat);
+      --  extern_decl: '#extern', [ '(', "xlat", ')' ] (§10.5)
+      if Skip (P_LParen) then
+         Expect (K_Xlat);
+         Expect (P_RParen);
+         N.Flags (F_Xlat) := True;
+      end if;
       N.Flags (F_Pub) := Skip (K_Pub);
       N.Name := Take_Ident;
       Expect (P_LBrace);
@@ -321,7 +326,7 @@ package body Declarations is
             Pub : constant Boolean := Skip (K_Pub);
          begin
             if Peek = K_Static then
-               Unimplemented ("#dyn static declarations (§10.5)");
+               Unimplemented ("#extern static declarations (§10.5)");
             end if;
             Items.Append (Parse_Subroutine (Is_Proto => True, Pub => Pub));
          end;
@@ -329,7 +334,7 @@ package body Declarations is
       Expect (P_RBrace);
       N.List := Make_List (Items);
       return Add (N);
-   end Parse_Dyn;
+   end Parse_Extern;
 
    function Is_Context_Word (Word : String) return Boolean is
      (Peek = T_Ident and then Current_Text = Word);
@@ -562,8 +567,8 @@ package body Declarations is
       case Peek is
          when D_Symbol | D_Inline | D_No_Inline | T_Annotation =>
             Unimplemented ("item decorations (§4.15, §4.16, §4.17)");
-         when D_Dyn =>
-            return Parse_Dyn;
+         when D_Extern =>
+            return Parse_Extern;
          when D_Add =>
             Unimplemented ("#add declarations (§10.4)");
          when D_Path =>

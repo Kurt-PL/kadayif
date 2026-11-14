@@ -1,5 +1,5 @@
 // libz를 링크하지 않았으니 compressBound는 어디에도 없다
-#dyn z {
+#extern z {
     fn compressBound(uaddr) -> uaddr;
 }
 

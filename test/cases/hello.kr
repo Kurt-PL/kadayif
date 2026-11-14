@@ -1,5 +1,5 @@
 // 이건 #include <stdio.h> 내지는 int printf(const char*, ...);
-#dyn io {
+#extern io {
     variadic fn printf(%ui1) -> si4;
 }
 

@@ -1,5 +1,5 @@
 // 가져오는 심볼 셋: fixup 체인이 GOT 칸을 차례로 잇는다
-#dyn io {
+#extern io {
     variadic fn printf(%ui1) -> si4;
     fn puts(%ui1) -> si4;
     fn putchar(si4) -> si4;

@@ -16,7 +16,7 @@ package Symbols is
      (Sym_Fn,         --  서브루틴
       Sym_Param,      --  매개변수 바인딩
       Sym_Local,      --  let 바인딩
-      Sym_Namespace,  --  #dyn 네임스페이스
+      Sym_Namespace,  --  #extern 네임스페이스
       Sym_Type);      --  struct, enum, contract 선언
 
    type Symbol is record
@@ -27,7 +27,7 @@ package Symbols is
       Decl     : Natural := 0;   --  AST.Node_Id
       Mutable  : Boolean := False;
       Deferred : Boolean := False;  --  초기식 없이 선언한 let (§4.3)
-      Dyn      : Boolean := False;  --  #dyn 블록의 선언
+      Imported : Boolean := False;  --  #extern 블록의 선언
       Pub      : Boolean := False;
       Index    : Natural := 0;   --  매개변수 위치(1부터)
       Slot     : Natural := 0;   --  자동 객체의 프레임 오프셋(코드 생성)

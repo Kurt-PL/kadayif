@@ -20,7 +20,7 @@ package Tokens is
       K_With, K_Xlat, K_Xor,
 
       --  지시어 (§3.3). flag 지시어는 strip 단계에서 처리된다.
-      D_Add, D_Dyn, D_Path, D_Symbol, D_Inline, D_No_Inline,
+      D_Add, D_Extern, D_Path, D_Symbol, D_Inline, D_No_Inline,
 
       --  구두점과 연산자 (§3.7)
       P_Bang, P_Dollar, P_Percent, P_Amp, P_Apos, P_LParen, P_RParen,

@@ -2,7 +2,7 @@
 
 뇌 스로틀링하면서 만드는 쿠어트 프로그래밍 언어의 컴파일러
 
-`.kr` 소스 파일을 읽어들이고 `aarch64+Apple` 타깃으로 바이너리를 뱉습니다. 나중에 다른 타깃이나 라이브러리로 확장해야 해요
+`.kr` 소스 파일을 읽어들이고 `aarch64+Apple` 타깃으로 바이너리를 뱉습니다. 어셈블러랑 링커도 직접 해서 `as`나 `ld` 없이 실행 파일까지 나와요. 나중에 다른 타깃이나 라이브러리로 확장해야 해요
 
 > **DISCLOSURE**: Kadayif는 컴파일러 이론이고 SSA고 뭐고 아무것도 모르는 놈이 Claude Code로 바이브코딩하는 겁니다. 기여하고 싶다고요? 좋습니다. 컴파일러 이론 교재 추천하겠다고요? 너무 좋습니다. 직접 가르쳐드린다고요? 사랑합니다.
 
@@ -28,7 +28,7 @@ alr build # 이러면 `./bin/kadayif` 실행 파일이 생성돼요
 
 ```kurt
 // 이건 #include <stdio.h> 내지는 int printf(const char*, ...);
-#dyn io {
+#extern io {
     variadic fn printf(%ui1) -> si4;
 }
 
@@ -45,12 +45,11 @@ extern fn main(argc: uaddr, argv: %%ui1) -> ui1 {
 이딴 식으로 만든 뒤
 
 ```sh
-./bin/kadayif -S file.kr
-clang -arch arm64 file.s -o a.out
+./bin/kadayif -l System file.kr -o a.out
 ./a.out # Hello, world!
 ```
 
-이러면 됩니다.
+이러면 됩니다. 쿠어트는 freestanding 전용이라 `printf`가 들어 있는 libSystem도 `-l System`으로 직접 달라고 해야 해요. 어셈블리만 보고 싶으면 `-S`를 붙이면 됩니다.
 
 왜 Ada냐고요? 묻지 마세요. 궁금하다고요? 아니요, 궁금하지 않을 거에요.
 

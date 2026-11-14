@@ -388,7 +388,7 @@ package body Check is
       return Make (Rec);
    end Fn_Type;
 
-   function New_Fn_Symbol (N : Node_Id; Dyn : Boolean) return Symbol_Id is
+   function New_Fn_Symbol (N : Node_Id; Imported : Boolean) return Symbol_Id is
       R : constant Node := Get (N);
       S : Symbol;
    begin
@@ -402,11 +402,11 @@ package body Check is
       S.Name := R.Name;
       S.Pos := R.Pos;
       S.Decl := Natural (N);
-      S.Dyn := Dyn;
+      S.Imported := Imported;
       S.Pub := R.Flags (F_Pub);
-      --  #dyn 블록의 서브루틴은 airside fn이다 (§10.5)
-      S.Ty := Natural (Fn_Type (N, R.Flags (F_Airside) or else Dyn));
-      if Dyn or else R.Flags (F_Extern) then
+      --  #extern 블록의 서브루틴은 airside fn이다 (§10.5)
+      S.Ty := Natural (Fn_Type (N, R.Flags (F_Airside) or else Imported));
+      if Imported or else R.Flags (F_Extern) then
          S.Link_Name := To_Unbounded_String (Idents.Image (R.Name));
       end if;
       return Add (S);
@@ -823,7 +823,7 @@ package body Check is
       end loop;
       Deferred_Referents.Clear;
 
-      --  3단계: 서브루틴과 #dyn
+      --  3단계: 서브루틴과 #extern
       for I in 1 .. U.List.Count loop
          declare
             N : constant Node_Id := Item (U.List, I);
@@ -837,9 +837,9 @@ package body Check is
                      Nodes (Positive (N)).Sym := Natural (S);
                      Names.Declare_Global (R.Name, S);
                   end;
-               when N_Dyn =>
+               when N_Extern =>
                   if R.Flags (F_Xlat) then
-                     Unimplemented (N, "#dyn xlat (§10.5)");
+                     Unimplemented (N, "#extern(xlat) (§10.5)");
                   end if;
                   declare
                      NS_Rec : Symbol;

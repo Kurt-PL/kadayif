@@ -45,7 +45,7 @@ KPLSS 0.1이 구현 정의(implementation defined)로 남겨 문서화를 요구
 | KCSS §4.9의 "libname.so" | macOS 관례대로 `libname.dylib`(Mach-O), 그다음 `libname.tbd`(텍스트 스텁)로 읽는다 |
 | 링크할 수 있는 라이브러리 | 동적 라이브러리만. `name.dl`, `name.sl`, `libname.a`를 먼저 찾으면 미구현 오류로 멈춘다 |
 | libSystem | 다른 라이브러리와 같다. `-l System`으로 요청해야 싣는다. 아무 라이브러리도 싣지 않은 실행 파일도 dyld가 실행하고 종료한다 |
-| 외부 심볼 해석 | `#dyn` 서브루틴은 실을 라이브러리를 순서대로 보아 처음 내보내는 것에 바인딩한다(2단계 네임스페이스, chained fixups). 어디에도 없으면 링크가 실패한다. 다른 라이브러리를 다시 내보내는 dylib처럼 내보내기를 다 알 수 없는 라이브러리는 다른 데서 찾지 못한 심볼의 마지막 후보가 된다 |
+| 외부 심볼 해석 | `#extern` 서브루틴은 실을 라이브러리를 순서대로 보아 처음 내보내는 것에 바인딩한다(2단계 네임스페이스, chained fixups). 어디에도 없으면 링크가 실패한다. 다른 라이브러리를 다시 내보내는 dylib처럼 내보내기를 다 알 수 없는 라이브러리는 다른 데서 찾지 못한 심볼의 마지막 후보가 된다 |
 | opaque code의 배치 | arm64 Mach-O `MH_EXECUTE`, PIE. 세그먼트는 `__PAGEZERO`, `__TEXT`(`__text`, `__stubs`, `__const`), `__DATA_CONST`(`__got`), `__LINKEDIT` |
 | 진입점 | `extern fn main`(`LC_MAIN`) |
 | 코드 서명 | ad-hoc, linker-signed, SHA-256, 4KiB 페이지 |
